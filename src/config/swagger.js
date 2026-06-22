@@ -11,16 +11,24 @@ const options = {
         email: 'dev@ssklogistics.in',
       },
     },
-    servers: [
-      {
-        url: 'http://localhost:5000',
-        description: 'Development Server',
-      },
-      {
-        url: 'https://gadidosti-backend.onrender.com',
-        description: 'Production Server',
-      },
-    ],
+    servers:
+      process.env.NODE_ENV === 'production'
+        ? [
+            {
+              url: 'https://gadidosti-backend.onrender.com',
+              description: 'Production Server',
+            },
+          ]
+        : [
+            {
+              url: 'http://localhost:5000',
+              description: 'Development Server',
+            },
+            {
+              url: 'https://gadidosti-backend.onrender.com',
+              description: 'Production Server',
+            },
+          ],
     components: {
       securitySchemes: {
         BearerAuth: {

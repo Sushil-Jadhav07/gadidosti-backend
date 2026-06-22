@@ -304,7 +304,7 @@ router.post('/refresh-token', refreshTokenValidation, validate, refreshToken);
  *   post:
  *     tags: [Auth]
  *     summary: Logout user
- *     description: Revokes the refresh token. Pass `all_devices: true` to logout from all devices.
+ *     description: "Revokes the refresh token. Pass `all_devices: true` to logout from all devices."
  *     security:
  *       - BearerAuth: []
  *     requestBody:
