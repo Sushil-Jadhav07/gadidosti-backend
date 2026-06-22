@@ -17,7 +17,7 @@ const options = {
         description: 'Development Server',
       },
       {
-        url: 'https://api.ssklogistics.in',
+        url: 'https://gadidosti-backend.onrender.com',
         description: 'Production Server',
       },
     ],
