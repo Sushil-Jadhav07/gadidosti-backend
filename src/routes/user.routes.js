@@ -152,7 +152,7 @@ router.put('/change-password', authenticate, changePasswordValidation, validate,
  * @swagger
  * /api/admin/users:
  *   get:
- *     tags: [Admin Users]
+ *     tags: [Admin Management]
  *     summary: List all users
  *     description: Admin-only. Returns paginated list of all users with optional filters.
  *     security:
@@ -209,7 +209,7 @@ router.get('/admin/users', authenticate, authorize('admin'), getAllUsers);
  * @swagger
  * /api/admin/users/{id}:
  *   get:
- *     tags: [Admin Users]
+ *     tags: [Admin Management]
  *     summary: Get user by ID
  *     description: Admin-only. Fetch full details of any user by their UUID.
  *     security:
@@ -251,7 +251,7 @@ router.get('/admin/users/:id', authenticate, authorize('admin'), getUserById);
  * @swagger
  * /api/admin/users/{id}/status:
  *   patch:
- *     tags: [Admin Users]
+ *     tags: [Admin Management]
  *     summary: Block or unblock a user
  *     description: Admin-only. Changes user status to active, inactive, or blocked. Cannot modify other admin accounts.
  *     security:
@@ -310,7 +310,7 @@ router.patch('/admin/users/:id/status', authenticate, authorize('admin'), update
  * @swagger
  * /api/admin/users/{id}:
  *   delete:
- *     tags: [Admin Users]
+ *     tags: [Admin Management]
  *     summary: Delete a user
  *     description: Admin-only. Soft-deletes a user (sets status to inactive). Cannot delete own account or other admins.
  *     security:

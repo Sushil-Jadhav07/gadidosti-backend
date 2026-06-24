@@ -33,6 +33,16 @@ const loginValidation = [
     .notEmpty().withMessage('Password is required'),
 ];
 
+const adminLoginValidation = [
+  body('email')
+    .trim().notEmpty().withMessage('Email is required')
+    .isEmail().withMessage('Enter a valid email address')
+    .normalizeEmail(),
+
+  body('password')
+    .notEmpty().withMessage('Password is required'),
+];
+
 const sendOtpValidation = [
   body('phone')
     .trim().notEmpty().withMessage('Phone number is required')
@@ -56,6 +66,28 @@ const verifyOtpValidation = [
   body('purpose')
     .optional()
     .isIn(['registration', 'login', 'password_reset', 'phone_verify']).withMessage('Invalid OTP purpose'),
+];
+
+const forgotPasswordValidation = [
+  body('phone')
+    .trim().notEmpty().withMessage('Phone number is required')
+    .matches(/^[6-9]\d{9}$/).withMessage('Enter a valid 10-digit Indian mobile number'),
+];
+
+const resetPasswordValidation = [
+  body('phone')
+    .trim().notEmpty().withMessage('Phone number is required')
+    .matches(/^[6-9]\d{9}$/).withMessage('Enter a valid 10-digit Indian mobile number'),
+
+  body('otp')
+    .trim().notEmpty().withMessage('OTP is required')
+    .isLength({ min: 6, max: 6 }).withMessage('OTP must be 6 digits')
+    .isNumeric().withMessage('OTP must be numeric'),
+
+  body('new_password')
+    .notEmpty().withMessage('New password is required')
+    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage('Password must contain uppercase, lowercase and a number'),
 ];
 
 const refreshTokenValidation = [
@@ -93,8 +125,11 @@ const updateUserStatusValidation = [
 module.exports = {
   registerValidation,
   loginValidation,
+  adminLoginValidation,
   sendOtpValidation,
   verifyOtpValidation,
+  forgotPasswordValidation,
+  resetPasswordValidation,
   refreshTokenValidation,
   updateProfileValidation,
   changePasswordValidation,

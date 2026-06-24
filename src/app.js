@@ -49,7 +49,8 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
     .swagger-ui .topbar { background-color: #041E42; }
     .swagger-ui .topbar .download-url-wrapper { display: none; }
     .swagger-ui .info .title { color: #041E42; }
-    .swagger-ui .btn.authorize { background-color: #1976FF; border-color: #1976FF; color: #fff; }
+    .swagger-ui .btn.authorize { background-color: #1976FF; border-color: #1976FF; color: #fff !important; }
+    .swagger-ui .btn.authorize span { color: #fff !important; }
   `,
   swaggerOptions: {
     persistAuthorization: true,

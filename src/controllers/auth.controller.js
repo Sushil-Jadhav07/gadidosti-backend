@@ -12,11 +12,9 @@ const register = async (req, res, next) => {
   try {
     const { name, phone, email, password, role = 'client' } = req.body;
 
-    // Check phone exists
     const existingPhone = await UserModel.findByPhone(phone);
     if (existingPhone) return errorResponse(res, 409, 'Phone number already registered');
 
-    // Check email exists
     if (email) {
       const existingEmail = await UserModel.findByEmail(email);
       if (existingEmail) return errorResponse(res, 409, 'Email address already registered');
@@ -99,18 +97,71 @@ const login = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/auth/admin/login ───────────────────────────────────────────────
+const adminLogin = async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+
+    const user = await UserModel.findByEmail(email);
+    if (!user) return errorResponse(res, 401, 'Invalid email or password');
+
+    if (user.role !== 'admin') return errorResponse(res, 403, 'Access denied. Admin accounts only.');
+    if (user.status === 'blocked')  return errorResponse(res, 403, 'Your account has been blocked. Contact support.');
+    if (user.status === 'inactive') return errorResponse(res, 403, 'Account is inactive');
+
+    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+    if (!isPasswordValid) return errorResponse(res, 401, 'Invalid email or password');
+
+    const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
+    const accessToken  = generateAccessToken(tokenPayload);
+    const refreshToken = generateRefreshToken(tokenPayload);
+    const tokenHash    = hashToken(refreshToken);
+
+    await RefreshTokenModel.create({
+      userId: user.id,
+      tokenHash,
+      userAgent: req.headers['user-agent'],
+      ipAddress: req.ip,
+    });
+
+    await UserModel.updateLastLogin(user.id);
+
+    await AuditLogModel.log({
+      userId: user.id,
+      action: 'ADMIN_LOGIN',
+      entity: 'users',
+      entityId: user.id,
+      meta: { email },
+      ipAddress: req.ip,
+    });
+
+    const { password_hash, ...safeUser } = user;
+    logger.info(`Admin login: ${email}`);
+
+    return successResponse(res, 200, 'Login successful', {
+      user: safeUser,
+      tokens: {
+        access_token:  accessToken,
+        refresh_token: refreshToken,
+        token_type:    'Bearer',
+        expires_in:    process.env.JWT_EXPIRES_IN || '7d',
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── POST /api/auth/otp/send ─────────────────────────────────────────────────
 const sendOtp = async (req, res, next) => {
   try {
     const { phone, purpose = 'login' } = req.body;
 
-    // Rate limit: max 3 OTPs per 10 minutes
     const recentCount = await OtpModel.countRecent(phone, purpose, 10);
     if (recentCount >= 3) {
       return errorResponse(res, 429, 'Too many OTP requests. Please wait 10 minutes before trying again.');
     }
 
-    // For login purpose, user must exist
     if (purpose === 'login' || purpose === 'password_reset') {
       const user = await UserModel.findByPhone(phone);
       if (!user) return errorResponse(res, 404, 'No account found with this phone number');
@@ -122,14 +173,12 @@ const sendOtp = async (req, res, next) => {
     await OtpModel.create({ phone, otpCode, purpose, expiryMinutes });
 
     // TODO: Integrate SMS provider (Twilio / MSG91 / Fast2SMS)
-    // In dev mode, we log the OTP
     logger.info(`OTP for ${phone} [${purpose}]: ${otpCode}`);
 
     return successResponse(res, 200, `OTP sent to ${phone}. Valid for ${expiryMinutes} minutes.`, {
       phone,
       purpose,
       expires_in_minutes: expiryMinutes,
-      // Remove in production:
       ...(process.env.NODE_ENV !== 'production' && { dev_otp: otpCode }),
     });
   } catch (err) {
@@ -150,11 +199,9 @@ const verifyOtp = async (req, res, next) => {
 
     await OtpModel.markUsed(otpRecord.id);
 
-    // Mark phone as verified
     const user = await UserModel.verifyPhone(phone);
     if (!user) return errorResponse(res, 404, 'User not found');
 
-    // For login via OTP, also generate tokens
     if (purpose === 'login') {
       const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
       const accessToken  = generateAccessToken(tokenPayload);
@@ -189,6 +236,74 @@ const verifyOtp = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/auth/forgot-password ──────────────────────────────────────────
+const forgotPassword = async (req, res, next) => {
+  try {
+    const { phone } = req.body;
+
+    const user = await UserModel.findByPhone(phone);
+    if (!user) return errorResponse(res, 404, 'No account found with this phone number');
+    if (user.status === 'blocked') return errorResponse(res, 403, 'Account is blocked. Contact support.');
+
+    const recentCount = await OtpModel.countRecent(phone, 'password_reset', 10);
+    if (recentCount >= 3) {
+      return errorResponse(res, 429, 'Too many OTP requests. Please wait 10 minutes before trying again.');
+    }
+
+    const otpCode = generateOTP();
+    const expiryMinutes = parseInt(process.env.OTP_EXPIRY_MINUTES) || 10;
+    await OtpModel.create({ phone, otpCode, purpose: 'password_reset', expiryMinutes });
+
+    // TODO: Integrate SMS provider (Twilio / MSG91 / Fast2SMS)
+    logger.info(`Password reset OTP for ${phone}: ${otpCode}`);
+
+    return successResponse(res, 200, `OTP sent to ${phone}. Valid for ${expiryMinutes} minutes.`, {
+      phone,
+      expires_in_minutes: expiryMinutes,
+      ...(process.env.NODE_ENV !== 'production' && { dev_otp: otpCode }),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/auth/reset-password ───────────────────────────────────────────
+const resetPassword = async (req, res, next) => {
+  try {
+    const { phone, otp, new_password } = req.body;
+
+    const otpRecord = await OtpModel.findValid({ phone, otpCode: otp, purpose: 'password_reset' });
+    if (!otpRecord) {
+      await OtpModel.incrementAttempt(phone, 'password_reset');
+      return errorResponse(res, 400, 'Invalid or expired OTP');
+    }
+
+    const user = await UserModel.findByPhone(phone);
+    if (!user) return errorResponse(res, 404, 'No account found with this phone number');
+
+    await OtpModel.markUsed(otpRecord.id);
+
+    const passwordHash = await bcrypt.hash(new_password, 12);
+    await UserModel.updatePassword(user.id, passwordHash);
+
+    // Revoke all existing refresh tokens for security
+    await RefreshTokenModel.revokeAllForUser(user.id);
+
+    await AuditLogModel.log({
+      userId: user.id,
+      action: 'PASSWORD_RESET',
+      entity: 'users',
+      entityId: user.id,
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Password reset successful for ${phone}`);
+    return successResponse(res, 200, 'Password reset successful. Please login with your new password.');
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── POST /api/auth/refresh-token ─────────────────────────────────────────────
 const refreshToken = async (req, res, next) => {
   try {
@@ -207,7 +322,6 @@ const refreshToken = async (req, res, next) => {
 
     if (storedToken.status === 'blocked') return errorResponse(res, 403, 'Account is blocked');
 
-    // Rotate — revoke old, issue new
     await RefreshTokenModel.revoke(tokenHash);
 
     const tokenPayload = { id: decoded.id, role: decoded.role, phone: decoded.phone };
@@ -258,4 +372,4 @@ const logout = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, sendOtp, verifyOtp, refreshToken, logout };
+module.exports = { register, login, adminLogin, sendOtp, verifyOtp, refreshToken, logout, forgotPassword, resetPassword };
