@@ -141,8 +141,8 @@ const options = {
             password: {
               type: 'string',
               format: 'password',
-              example: 'Manager@123',
-              description: 'Min 8 chars with uppercase, lowercase and a number',
+              example: 'Manager123',
+              description: 'Min 6 characters (no complexity requirement for admin creation)',
             },
           },
         },
@@ -160,8 +160,8 @@ const options = {
             password: {
               type: 'string',
               format: 'password',
-              example: 'Admin@Secure123',
-              description: 'Admin password (min 8 chars, upper + lower + number)',
+              example: 'Admin@123456',
+              description: 'Admin password',
             },
           },
         },

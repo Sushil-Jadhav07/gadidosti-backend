@@ -63,7 +63,7 @@ const otpLimiter = rateLimit({
  *             $ref: '#/components/schemas/AdminLoginRequest'
  *           example:
  *             email: "admin@ssklogistics.in"
- *             password: "Admin@Secure123"
+ *             password: "Admin@123456"
  *     responses:
  *       200:
  *         description: Admin login successful
@@ -79,7 +79,7 @@ const otpLimiter = rateLimit({
  *                   id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
  *                   name: "SSK Admin"
  *                   email: "admin@ssklogistics.in"
- *                   phone: "9999999999"
+ *                   phone: "9000000001"
  *                   role: "admin"
  *                   status: "active"
  *                   is_phone_verified: true
@@ -311,20 +311,20 @@ router.post('/register', authLimiter, registerValidation, validate, register);
  *             $ref: '#/components/schemas/PhoneLoginRequest'
  *           examples:
  *             client:
- *               summary: Client login
+ *               summary: Client login (seeded demo account)
  *               value:
- *                 phone: "9876543210"
- *                 password: "Client@123"
+ *                 phone: "9000000002"
+ *                 password: "Admin@123456"
  *             broker:
- *               summary: Broker login
+ *               summary: Broker login (seeded demo account)
  *               value:
  *                 phone: "9000000003"
- *                 password: "Broker@123"
+ *                 password: "Admin@123456"
  *             driver:
- *               summary: Driver login
+ *               summary: Driver login (seeded demo account)
  *               value:
  *                 phone: "9000000004"
- *                 password: "Driver@123"
+ *                 password: "Admin@123456"
  *     responses:
  *       200:
  *         description: Login successful — use `access_token` in Authorization header for protected routes
@@ -349,7 +349,7 @@ router.post('/register', authLimiter, registerValidation, validate, register);
  *                   token_type: "Bearer"
  *                   expires_in: "7d"
  *       401:
- *         description: Invalid phone or password
+ *         description: Invalid phone or password (note: all seeded demo accounts use Admin@123456)
  *         content:
  *           application/json:
  *             schema:
