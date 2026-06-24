@@ -117,6 +117,36 @@ const options = {
         },
 
         // ── Request schemas — login ────────────────────────────────────────────
+        AdminRegisterRequest: {
+          type: 'object',
+          required: ['name', 'phone', 'email', 'password'],
+          properties: {
+            name: {
+              type: 'string',
+              example: 'Operations Manager',
+              minLength: 2,
+              maxLength: 100,
+            },
+            phone: {
+              type: 'string',
+              example: '9000000099',
+              description: '10-digit Indian mobile number',
+            },
+            email: {
+              type: 'string',
+              format: 'email',
+              example: 'manager@ssklogistics.in',
+              description: 'Email is required for admin accounts (used for login)',
+            },
+            password: {
+              type: 'string',
+              format: 'password',
+              example: 'Manager@123',
+              description: 'Min 8 chars with uppercase, lowercase and a number',
+            },
+          },
+        },
+
         AdminLoginRequest: {
           type: 'object',
           required: ['email', 'password'],

@@ -97,6 +97,40 @@ const login = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/auth/admin/register ───────────────────────────────────────────
+const registerAdmin = async (req, res, next) => {
+  try {
+    const { name, phone, email, password } = req.body;
+
+    const existingPhone = await UserModel.findByPhone(phone);
+    if (existingPhone) return errorResponse(res, 409, 'Phone number already registered');
+
+    if (email) {
+      const existingEmail = await UserModel.findByEmail(email);
+      if (existingEmail) return errorResponse(res, 409, 'Email address already registered');
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    // Admin accounts are created as active + verified immediately (no OTP needed)
+    const result = await UserModel.createAdmin({ name, phone, email, passwordHash });
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'ADMIN_CREATED',
+      entity: 'users',
+      entityId: result.id,
+      meta: { created_by: req.user.email, new_admin_email: email, new_admin_phone: phone },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`New admin created by ${req.user.email}: ${email || phone}`);
+    return successResponse(res, 201, 'Admin account created successfully', { user: result });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── POST /api/auth/admin/login ───────────────────────────────────────────────
 const adminLogin = async (req, res, next) => {
   try {
@@ -372,4 +406,4 @@ const logout = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, adminLogin, sendOtp, verifyOtp, refreshToken, logout, forgotPassword, resetPassword };
+module.exports = { register, registerAdmin, login, adminLogin, sendOtp, verifyOtp, refreshToken, logout, forgotPassword, resetPassword };

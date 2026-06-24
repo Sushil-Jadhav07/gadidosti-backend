@@ -4,6 +4,7 @@ const rateLimit = require('express-rate-limit');
 
 const {
   register,
+  registerAdmin,
   login,
   adminLogin,
   sendOtp,
@@ -13,10 +14,11 @@ const {
   forgotPassword,
   resetPassword,
 } = require('../controllers/auth.controller');
-const { authenticate } = require('../middleware/auth.middleware');
+const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const {
   registerValidation,
+  registerAdminValidation,
   loginValidation,
   adminLoginValidation,
   sendOtpValidation,
@@ -107,6 +109,79 @@ const otpLimiter = rateLimit({
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/admin/login', authLimiter, adminLoginValidation, validate, adminLogin);
+
+/**
+ * @swagger
+ * /api/auth/admin/register:
+ *   post:
+ *     tags: [Admin Portal — Auth]
+ *     summary: Create a new admin account
+ *     description: |
+ *       Creates a new **admin** account. This endpoint is protected — only an existing admin
+ *       can create another admin.
+ *
+ *       - The new admin account is immediately **active** and **verified** (no OTP required).
+ *       - Email is **required** for admin accounts (used for login).
+ *       - The action is audit-logged showing which admin performed the creation.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/AdminRegisterRequest'
+ *           example:
+ *             name: "Operations Manager"
+ *             phone: "9000000099"
+ *             email: "manager@ssklogistics.in"
+ *             password: "Manager@123"
+ *     responses:
+ *       201:
+ *         description: Admin account created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RegisterResponse'
+ *             example:
+ *               success: true
+ *               message: "Admin account created successfully"
+ *               data:
+ *                 user:
+ *                   id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+ *                   name: "Operations Manager"
+ *                   email: "manager@ssklogistics.in"
+ *                   phone: "9000000099"
+ *                   role: "admin"
+ *                   status: "active"
+ *                   is_phone_verified: true
+ *                   is_email_verified: true
+ *       401:
+ *         description: Not authenticated — provide a valid admin Bearer token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: Access denied — admin role required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       409:
+ *         description: Phone or email already registered
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Validation errors
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.post('/admin/register', authenticate, authorize('admin'), registerAdminValidation, validate, registerAdmin);
 
 // ─── BROKER / DRIVER & CLIENT PORTAL — REGISTRATION ──────────────────────────
 

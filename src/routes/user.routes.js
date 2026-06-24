@@ -51,7 +51,7 @@ const {
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/profile', authenticate, getProfile);
+router.get('/user/profile', authenticate, getProfile);
 
 /**
  * @swagger
@@ -102,7 +102,7 @@ router.get('/profile', authenticate, getProfile);
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.put('/profile', authenticate, updateProfileValidation, validate, updateProfile);
+router.put('/user/profile', authenticate, updateProfileValidation, validate, updateProfile);
 
 /**
  * @swagger
@@ -144,7 +144,7 @@ router.put('/profile', authenticate, updateProfileValidation, validate, updatePr
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.put('/change-password', authenticate, changePasswordValidation, validate, changePassword);
+router.put('/user/change-password', authenticate, changePasswordValidation, validate, changePassword);
 
 // ─── Admin — user management ──────────────────────────────────────────────────
 
@@ -157,38 +157,6 @@ router.put('/change-password', authenticate, changePasswordValidation, validate,
  *     description: Admin-only. Returns paginated list of all users with optional filters.
  *     security:
  *       - BearerAuth: []
- *     parameters:
- *       - in: query
- *         name: role
- *         schema:
- *           type: string
- *           enum: [client, broker, driver, admin]
- *         description: Filter by user role
- *       - in: query
- *         name: status
- *         schema:
- *           type: string
- *           enum: [active, inactive, blocked, pending_verification]
- *         description: Filter by user status
- *       - in: query
- *         name: search
- *         schema:
- *           type: string
- *         description: Search by name, email, or phone
- *         example: "Rajesh"
- *       - in: query
- *         name: page
- *         schema:
- *           type: integer
- *           default: 1
- *         description: Page number
- *       - in: query
- *         name: limit
- *         schema:
- *           type: integer
- *           default: 10
- *           maximum: 100
- *         description: Results per page
  *     responses:
  *       200:
  *         description: Users listed
