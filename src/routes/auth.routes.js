@@ -5,7 +5,11 @@ const rateLimit = require('express-rate-limit');
 const {
   register,
   registerAdmin,
+  registerBroker,
+  registerDriver,
   login,
+  loginBroker,
+  loginDriver,
   adminLogin,
   sendOtp,
   verifyOtp,
@@ -189,8 +193,8 @@ router.post('/admin/register', authenticate, authorize('admin'), registerAdminVa
  * @swagger
  * /api/auth/register:
  *   post:
- *     tags: [Broker/Driver Portal — Auth, Client Portal — Auth]
- *     summary: Register a new user (client, broker, or driver)
+ *     tags: [Client Portal — Auth]
+ *     summary: Register a new client account
  *     description: |
  *       Creates a new user account. After registration, verify the phone number via OTP before logging in.
  *
@@ -289,14 +293,259 @@ router.post('/admin/register', authenticate, authorize('admin'), registerAdminVa
  */
 router.post('/register', authLimiter, registerValidation, validate, register);
 
-// ─── BROKER / DRIVER & CLIENT PORTAL — LOGIN ──────────────────────────────────
+// ─── BROKER PORTAL — REGISTER & LOGIN ────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/auth/broker/register:
+ *   post:
+ *     tags: [Broker/Driver Portal — Auth]
+ *     summary: Register as Broker (fleet owner)
+ *     description: |
+ *       Creates a new **broker** account. Role is fixed to `broker` — no need to pass it in the body.
+ *
+ *       After registration, verify the phone number via OTP before logging in:
+ *       1. Call `POST /api/auth/otp/send` with `purpose: phone_verify`
+ *       2. Call `POST /api/auth/otp/verify` with the received OTP
+ *       3. Then `POST /api/auth/broker/login` will work
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/BrokerRegisterRequest'
+ *           example:
+ *             name: "Suresh Transport Co."
+ *             phone: "9876543210"
+ *             email: "suresh@transport.in"
+ *             password: "mypassword"
+ *     responses:
+ *       201:
+ *         description: Broker registration successful — verify phone OTP to activate account
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RegisterResponse'
+ *             example:
+ *               success: true
+ *               message: "Broker registration successful. Please verify your phone number."
+ *               data:
+ *                 user:
+ *                   id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+ *                   name: "Suresh Transport Co."
+ *                   phone: "9876543210"
+ *                   role: "broker"
+ *                   status: "pending_verification"
+ *                   is_phone_verified: false
+ *       409:
+ *         description: Phone or email already registered
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Validation errors
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.post('/broker/register', authLimiter, registerValidation, validate, registerBroker);
+
+/**
+ * @swagger
+ * /api/auth/broker/login:
+ *   post:
+ *     tags: [Broker/Driver Portal — Auth]
+ *     summary: Broker login (phone + password)
+ *     description: |
+ *       Authenticates a **broker** using phone number and password.
+ *
+ *       - Returns 403 if the phone belongs to a driver or client account.
+ *       - Phone must be OTP-verified before login is allowed.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/PhoneLoginRequest'
+ *           example:
+ *             phone: "9000000003"
+ *             password: "Admin@123456"
+ *     responses:
+ *       200:
+ *         description: Broker login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AuthResponse'
+ *             example:
+ *               success: true
+ *               message: "Login successful"
+ *               data:
+ *                 user:
+ *                   id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+ *                   name: "Suresh Transport Co."
+ *                   phone: "9000000003"
+ *                   role: "broker"
+ *                   status: "active"
+ *                   is_phone_verified: true
+ *                 tokens:
+ *                   access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+ *                   refresh_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+ *                   token_type: "Bearer"
+ *                   expires_in: "7d"
+ *       401:
+ *         description: Invalid phone number or password
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: Wrong role — or account blocked/phone not verified
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Validation errors
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.post('/broker/login', authLimiter, loginValidation, validate, loginBroker);
+
+// ─── DRIVER PORTAL — REGISTER & LOGIN ────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/auth/driver/register:
+ *   post:
+ *     tags: [Broker/Driver Portal — Auth]
+ *     summary: Register as Driver
+ *     description: |
+ *       Creates a new **driver** account. Role is fixed to `driver` — no need to pass it in the body.
+ *
+ *       After registration, verify the phone number via OTP before logging in:
+ *       1. Call `POST /api/auth/otp/send` with `purpose: phone_verify`
+ *       2. Call `POST /api/auth/otp/verify` with the received OTP
+ *       3. Then `POST /api/auth/driver/login` will work
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/DriverRegisterRequest'
+ *           example:
+ *             name: "Ramesh Singh"
+ *             phone: "9876543211"
+ *             password: "mypassword"
+ *     responses:
+ *       201:
+ *         description: Driver registration successful — verify phone OTP to activate account
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RegisterResponse'
+ *             example:
+ *               success: true
+ *               message: "Driver registration successful. Please verify your phone number."
+ *               data:
+ *                 user:
+ *                   id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+ *                   name: "Ramesh Singh"
+ *                   phone: "9876543211"
+ *                   role: "driver"
+ *                   status: "pending_verification"
+ *                   is_phone_verified: false
+ *       409:
+ *         description: Phone or email already registered
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Validation errors
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.post('/driver/register', authLimiter, registerValidation, validate, registerDriver);
+
+/**
+ * @swagger
+ * /api/auth/driver/login:
+ *   post:
+ *     tags: [Broker/Driver Portal — Auth]
+ *     summary: Driver login (phone + password)
+ *     description: |
+ *       Authenticates a **driver** using phone number and password.
+ *
+ *       - Returns 403 if the phone belongs to a broker or client account.
+ *       - Phone must be OTP-verified before login is allowed.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/PhoneLoginRequest'
+ *           example:
+ *             phone: "9000000004"
+ *             password: "Admin@123456"
+ *     responses:
+ *       200:
+ *         description: Driver login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AuthResponse'
+ *             example:
+ *               success: true
+ *               message: "Login successful"
+ *               data:
+ *                 user:
+ *                   id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+ *                   name: "Ramesh Singh"
+ *                   phone: "9000000004"
+ *                   role: "driver"
+ *                   status: "active"
+ *                   is_phone_verified: true
+ *                 tokens:
+ *                   access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+ *                   refresh_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+ *                   token_type: "Bearer"
+ *                   expires_in: "7d"
+ *       401:
+ *         description: Invalid phone number or password
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: Wrong role — or account blocked/phone not verified
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Validation errors
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.post('/driver/login', authLimiter, loginValidation, validate, loginDriver);
+
+// ─── CLIENT PORTAL — LOGIN ────────────────────────────────────────────────────
 
 /**
  * @swagger
  * /api/auth/login:
  *   post:
- *     tags: [Broker/Driver Portal — Auth, Client Portal — Auth]
- *     summary: Login with phone and password (broker, driver, or client)
+ *     tags: [Client Portal — Auth]
+ *     summary: Client login (phone + password)
  *     description: |
  *       Authenticates a user with phone number and password. Returns `access_token` + `refresh_token`.
  *

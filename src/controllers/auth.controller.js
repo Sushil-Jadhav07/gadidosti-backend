@@ -406,4 +406,186 @@ const logout = async (req, res, next) => {
   }
 };
 
-module.exports = { register, registerAdmin, login, adminLogin, sendOtp, verifyOtp, refreshToken, logout, forgotPassword, resetPassword };
+// ─── POST /api/auth/broker/register ──────────────────────────────────────────
+const registerBroker = async (req, res, next) => {
+  try {
+    const { name, phone, email, password } = req.body;
+
+    const existingPhone = await UserModel.findByPhone(phone);
+    if (existingPhone) return errorResponse(res, 409, 'Phone number already registered');
+
+    if (email) {
+      const existingEmail = await UserModel.findByEmail(email);
+      if (existingEmail) return errorResponse(res, 409, 'Email address already registered');
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const user = await UserModel.create({ name, phone, email, passwordHash, role: 'broker' });
+
+    await AuditLogModel.log({
+      userId: user.id,
+      action: 'USER_REGISTER',
+      entity: 'users',
+      entityId: user.id,
+      meta: { role: 'broker', phone },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`New broker registered: ${phone}`);
+    return successResponse(res, 201, 'Broker registration successful. Please verify your phone number.', { user });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/auth/driver/register ──────────────────────────────────────────
+const registerDriver = async (req, res, next) => {
+  try {
+    const { name, phone, email, password } = req.body;
+
+    const existingPhone = await UserModel.findByPhone(phone);
+    if (existingPhone) return errorResponse(res, 409, 'Phone number already registered');
+
+    if (email) {
+      const existingEmail = await UserModel.findByEmail(email);
+      if (existingEmail) return errorResponse(res, 409, 'Email address already registered');
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const user = await UserModel.create({ name, phone, email, passwordHash, role: 'driver' });
+
+    await AuditLogModel.log({
+      userId: user.id,
+      action: 'USER_REGISTER',
+      entity: 'users',
+      entityId: user.id,
+      meta: { role: 'driver', phone },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`New driver registered: ${phone}`);
+    return successResponse(res, 201, 'Driver registration successful. Please verify your phone number.', { user });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/auth/broker/login ─────────────────────────────────────────────
+const loginBroker = async (req, res, next) => {
+  try {
+    const { phone, password } = req.body;
+
+    const user = await UserModel.findByPhone(phone);
+    if (!user) return errorResponse(res, 401, 'Invalid phone number or password');
+
+    if (user.role !== 'broker') return errorResponse(res, 403, 'This login is for brokers only. Please use the correct portal.');
+    if (user.status === 'blocked')  return errorResponse(res, 403, 'Your account has been blocked. Contact support.');
+    if (user.status === 'inactive') return errorResponse(res, 403, 'Account is inactive');
+
+    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+    if (!isPasswordValid) return errorResponse(res, 401, 'Invalid phone number or password');
+
+    if (!user.is_phone_verified) {
+      return errorResponse(res, 403, 'Phone not verified. Please verify your phone number to login.');
+    }
+
+    const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
+    const accessToken  = generateAccessToken(tokenPayload);
+    const refreshToken = generateRefreshToken(tokenPayload);
+    const tokenHash    = hashToken(refreshToken);
+
+    await RefreshTokenModel.create({
+      userId: user.id,
+      tokenHash,
+      userAgent: req.headers['user-agent'],
+      ipAddress: req.ip,
+    });
+
+    await UserModel.updateLastLogin(user.id);
+
+    await AuditLogModel.log({
+      userId: user.id,
+      action: 'USER_LOGIN',
+      entity: 'users',
+      entityId: user.id,
+      meta: { role: 'broker' },
+      ipAddress: req.ip,
+    });
+
+    const { password_hash, ...safeUser } = user;
+    logger.info(`Broker login: ${phone}`);
+
+    return successResponse(res, 200, 'Login successful', {
+      user: safeUser,
+      tokens: {
+        access_token:  accessToken,
+        refresh_token: refreshToken,
+        token_type:    'Bearer',
+        expires_in:    process.env.JWT_EXPIRES_IN || '7d',
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/auth/driver/login ──────────────────────────────────────────────
+const loginDriver = async (req, res, next) => {
+  try {
+    const { phone, password } = req.body;
+
+    const user = await UserModel.findByPhone(phone);
+    if (!user) return errorResponse(res, 401, 'Invalid phone number or password');
+
+    if (user.role !== 'driver') return errorResponse(res, 403, 'This login is for drivers only. Please use the correct portal.');
+    if (user.status === 'blocked')  return errorResponse(res, 403, 'Your account has been blocked. Contact support.');
+    if (user.status === 'inactive') return errorResponse(res, 403, 'Account is inactive');
+
+    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+    if (!isPasswordValid) return errorResponse(res, 401, 'Invalid phone number or password');
+
+    if (!user.is_phone_verified) {
+      return errorResponse(res, 403, 'Phone not verified. Please verify your phone number to login.');
+    }
+
+    const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
+    const accessToken  = generateAccessToken(tokenPayload);
+    const refreshToken = generateRefreshToken(tokenPayload);
+    const tokenHash    = hashToken(refreshToken);
+
+    await RefreshTokenModel.create({
+      userId: user.id,
+      tokenHash,
+      userAgent: req.headers['user-agent'],
+      ipAddress: req.ip,
+    });
+
+    await UserModel.updateLastLogin(user.id);
+
+    await AuditLogModel.log({
+      userId: user.id,
+      action: 'USER_LOGIN',
+      entity: 'users',
+      entityId: user.id,
+      meta: { role: 'driver' },
+      ipAddress: req.ip,
+    });
+
+    const { password_hash, ...safeUser } = user;
+    logger.info(`Driver login: ${phone}`);
+
+    return successResponse(res, 200, 'Login successful', {
+      user: safeUser,
+      tokens: {
+        access_token:  accessToken,
+        refresh_token: refreshToken,
+        token_type:    'Bearer',
+        expires_in:    process.env.JWT_EXPIRES_IN || '7d',
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { register, registerAdmin, registerBroker, registerDriver, login, loginBroker, loginDriver, adminLogin, sendOtp, verifyOtp, refreshToken, logout, forgotPassword, resetPassword };

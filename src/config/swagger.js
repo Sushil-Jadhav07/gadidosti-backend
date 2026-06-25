@@ -290,7 +290,7 @@ const options = {
       },
       {
         name: 'Broker/Driver Portal — Auth',
-        description: '**Broker & Driver Portal** — registration (role: broker or driver), phone OTP verification, and phone-based login.',
+        description: '**Broker & Driver Portal** — separate registration and login for brokers (fleet owners) and drivers. Each role has its own endpoint that enforces the correct role.',
       },
       {
         name: 'Client Portal — Auth',
