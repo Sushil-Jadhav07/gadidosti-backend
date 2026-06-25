@@ -16,8 +16,7 @@ const registerValidation = [
 
   body('password')
     .notEmpty().withMessage('Password is required')
-    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage('Password must contain uppercase, lowercase and a number'),
+    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
 
   body('role')
     .optional()
@@ -105,8 +104,7 @@ const resetPasswordValidation = [
 
   body('new_password')
     .notEmpty().withMessage('New password is required')
-    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage('Password must contain uppercase, lowercase and a number'),
+    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
 ];
 
 const refreshTokenValidation = [
@@ -131,8 +129,7 @@ const changePasswordValidation = [
 
   body('new_password')
     .notEmpty().withMessage('New password is required')
-    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage('Password must contain uppercase, lowercase and a number'),
+    .isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
 ];
 
 const updateUserStatusValidation = [

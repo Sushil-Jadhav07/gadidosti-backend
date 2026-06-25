@@ -349,7 +349,7 @@ router.post('/register', authLimiter, registerValidation, validate, register);
  *                   token_type: "Bearer"
  *                   expires_in: "7d"
  *       401:
- *         description: Invalid phone or password (note: all seeded demo accounts use Admin@123456)
+ *         description: Invalid phone or password — all seeded demo accounts use Admin@123456
  *         content:
  *           application/json:
  *             schema:

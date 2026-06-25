@@ -129,7 +129,7 @@ router.put('/user/profile', authenticate, updateProfileValidation, validate, upd
  *                 type: string
  *                 format: password
  *                 example: "NewPass@456"
- *                 description: Min 8 chars with uppercase, lowercase and number
+ *                 description: Min 6 characters
  *     responses:
  *       200:
  *         description: Password changed successfully
