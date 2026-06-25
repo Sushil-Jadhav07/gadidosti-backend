@@ -5,12 +5,8 @@ const rateLimit = require('express-rate-limit');
 const {
   register,
   registerAdmin,
-  registerBroker,
-  registerDriver,
   login,
-  loginBroker,
-  loginDriver,
-  adminLogin,
+  googleSignIn,
   sendOtp,
   verifyOtp,
   refreshToken,
@@ -24,7 +20,7 @@ const {
   registerValidation,
   registerAdminValidation,
   loginValidation,
-  adminLoginValidation,
+  googleSignInValidation,
   sendOtpValidation,
   verifyOtpValidation,
   refreshTokenValidation,
@@ -44,33 +40,72 @@ const otpLimiter = rateLimit({
   message: { success: false, message: 'Too many OTP requests, please wait 10 minutes' },
 });
 
-// ─── ADMIN PORTAL ─────────────────────────────────────────────────────────────
+// ─── LOGIN (all roles) ───────────────────────────────────────────────────────
 
 /**
  * @swagger
- * /api/auth/admin/login:
+ * /api/auth/login:
  *   post:
- *     tags: [Admin Portal — Auth]
- *     summary: Admin login (email + password)
+ *     tags: [Auth]
+ *     summary: Login (all roles)
  *     description: |
- *       Authenticates an **admin** using email address and password.
+ *       Unified login for **all roles** — admin, broker, driver, client.
  *
- *       - Only accounts with `role: admin` can use this endpoint.
- *       - Admin accounts are pre-seeded — self-registration is not available.
- *       - On success, admin has access to all `Admin Management` endpoints.
- *       - Regular users (client, broker, driver) must use `POST /api/auth/login`.
+ *       - **Admin** — pass `email` + `password` (admin accounts use email login)
+ *       - **Broker / Driver / Client** — pass `phone` + `password`
+ *       - At least one of `email` or `phone` is required.
+ *       - Non-admin accounts must have a verified phone before login works.
+ *       - The `role` field in the response tells the frontend which portal to load.
+ *
+ *       **Seeded demo accounts** (password for all is `Admin@123456`):
+ *       | Role   | Identifier                |
+ *       |--------|---------------------------|
+ *       | admin  | admin@ssklogistics.in      |
+ *       | client | 9000000002                 |
+ *       | broker | 9000000003                 |
+ *       | driver | 9000000004                 |
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/AdminLoginRequest'
- *           example:
- *             email: "admin@ssklogistics.in"
- *             password: "Admin@123456"
+ *             type: object
+ *             required: [password]
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: Use for admin login
+ *               phone:
+ *                 type: string
+ *                 description: 10-digit Indian mobile number (broker/driver/client)
+ *               password:
+ *                 type: string
+ *                 format: password
+ *           examples:
+ *             admin:
+ *               summary: Admin login (email)
+ *               value:
+ *                 email: "admin@ssklogistics.in"
+ *                 password: "Admin@123456"
+ *             client:
+ *               summary: Client login (phone)
+ *               value:
+ *                 phone: "9000000002"
+ *                 password: "Admin@123456"
+ *             broker:
+ *               summary: Broker login (phone)
+ *               value:
+ *                 phone: "9000000003"
+ *                 password: "Admin@123456"
+ *             driver:
+ *               summary: Driver login (phone)
+ *               value:
+ *                 phone: "9000000004"
+ *                 password: "Admin@123456"
  *     responses:
  *       200:
- *         description: Admin login successful
+ *         description: Login successful
  *         content:
  *           application/json:
  *             schema:
@@ -87,20 +122,19 @@ const otpLimiter = rateLimit({
  *                   role: "admin"
  *                   status: "active"
  *                   is_phone_verified: true
- *                   is_email_verified: true
  *                 tokens:
  *                   access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
  *                   refresh_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
  *                   token_type: "Bearer"
  *                   expires_in: "7d"
  *       401:
- *         description: Invalid email or password
+ *         description: Invalid credentials
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *       403:
- *         description: Account is blocked or not an admin account
+ *         description: Account blocked, inactive, or phone not verified
  *         content:
  *           application/json:
  *             schema:
@@ -112,102 +146,29 @@ const otpLimiter = rateLimit({
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post('/admin/login', authLimiter, adminLoginValidation, validate, adminLogin);
+router.post('/login', authLimiter, loginValidation, validate, login);
 
-/**
- * @swagger
- * /api/auth/admin/register:
- *   post:
- *     tags: [Admin Portal — Auth]
- *     summary: Create a new admin account
- *     description: |
- *       Creates a new **admin** account. This endpoint is protected — only an existing admin
- *       can create another admin.
- *
- *       - The new admin account is immediately **active** and **verified** (no OTP required).
- *       - Email is **required** for admin accounts (used for login).
- *       - The action is audit-logged showing which admin performed the creation.
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/AdminRegisterRequest'
- *           example:
- *             name: "Operations Manager"
- *             phone: "9000000099"
- *             email: "manager@ssklogistics.in"
- *             password: "Manager@123"
- *     responses:
- *       201:
- *         description: Admin account created successfully
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/RegisterResponse'
- *             example:
- *               success: true
- *               message: "Admin account created successfully"
- *               data:
- *                 user:
- *                   id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
- *                   name: "Operations Manager"
- *                   email: "manager@ssklogistics.in"
- *                   phone: "9000000099"
- *                   role: "admin"
- *                   status: "active"
- *                   is_phone_verified: true
- *                   is_email_verified: true
- *       401:
- *         description: Not authenticated — provide a valid admin Bearer token
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       403:
- *         description: Access denied — admin role required
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       409:
- *         description: Phone or email already registered
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       422:
- *         description: Validation errors
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
-router.post('/admin/register', authenticate, authorize('admin'), registerAdminValidation, validate, registerAdmin);
-
-// ─── BROKER / DRIVER & CLIENT PORTAL — REGISTRATION ──────────────────────────
+// ─── REGISTER (client / broker / driver) ─────────────────────────────────────
 
 /**
  * @swagger
  * /api/auth/register:
  *   post:
- *     tags: [Client Portal — Auth]
- *     summary: Register a new client account
+ *     tags: [Auth]
+ *     summary: Register (client, broker, or driver)
  *     description: |
- *       Creates a new user account. After registration, verify the phone number via OTP before logging in.
+ *       Creates a new user account with the specified role.
  *
- *       **Admin accounts cannot be created through this endpoint.** They are pre-seeded.
+ *       **Roles:**
+ *       - `client` (default) — Client Portal user
+ *       - `broker` — Broker/Driver Portal fleet owner
+ *       - `driver` — Broker/Driver Portal truck driver
  *
- *       **Role behaviour:**
- *       - `client` — registers in the Client Portal (default)
- *       - `broker` — registers in the Broker/Driver Portal as a fleet owner
- *       - `driver` — registers in the Broker/Driver Portal as a truck driver
+ *       Admin accounts **cannot** be created here — use `POST /api/auth/admin/register` (requires admin token).
  *
  *       **After registration:**
- *       1. Call `POST /api/auth/otp/send` with `purpose: phone_verify`
- *       2. Call `POST /api/auth/otp/verify` with the received OTP
+ *       1. `POST /api/auth/otp/send` with `purpose: phone_verify`
+ *       2. `POST /api/auth/otp/verify` with the OTP
  *       3. Then `POST /api/auth/login` will work
  *     requestBody:
  *       required: true
@@ -231,7 +192,7 @@ router.post('/admin/register', authenticate, authorize('admin'), registerAdminVa
  *               password:
  *                 type: string
  *                 format: password
- *                 description: Min 8 chars with uppercase, lowercase and a number
+ *                 description: Min 6 characters
  *               role:
  *                 type: string
  *                 enum: [client, broker, driver]
@@ -243,26 +204,26 @@ router.post('/admin/register', authenticate, authorize('admin'), registerAdminVa
  *                 name: "Rajesh Kumar"
  *                 phone: "9876543210"
  *                 email: "rajesh@example.com"
- *                 password: "Client@123"
+ *                 password: "mypassword"
  *                 role: "client"
  *             broker:
  *               summary: Register as Broker
  *               value:
  *                 name: "Suresh Transport Co."
- *                 phone: "9000000003"
+ *                 phone: "9876543211"
  *                 email: "suresh@transport.in"
- *                 password: "Broker@123"
+ *                 password: "mypassword"
  *                 role: "broker"
  *             driver:
  *               summary: Register as Driver
  *               value:
  *                 name: "Ramesh Singh"
- *                 phone: "9000000004"
- *                 password: "Driver@123"
+ *                 phone: "9876543212"
+ *                 password: "mypassword"
  *                 role: "driver"
  *     responses:
  *       201:
- *         description: Registration successful — verify phone OTP to activate account
+ *         description: Registration successful — verify phone OTP to activate
  *         content:
  *           application/json:
  *             schema:
@@ -293,50 +254,51 @@ router.post('/admin/register', authenticate, authorize('admin'), registerAdminVa
  */
 router.post('/register', authLimiter, registerValidation, validate, register);
 
-// ─── BROKER PORTAL — REGISTER & LOGIN ────────────────────────────────────────
+// ─── ADMIN REGISTER (protected) ──────────────────────────────────────────────
 
 /**
  * @swagger
- * /api/auth/broker/register:
+ * /api/auth/admin/register:
  *   post:
- *     tags: [Broker/Driver Portal — Auth]
- *     summary: Register as Broker (fleet owner)
+ *     tags: [Auth]
+ *     summary: Create admin account (admin only)
  *     description: |
- *       Creates a new **broker** account. Role is fixed to `broker` — no need to pass it in the body.
+ *       Creates a new **admin** account. Requires an existing admin's Bearer token.
  *
- *       After registration, verify the phone number via OTP before logging in:
- *       1. Call `POST /api/auth/otp/send` with `purpose: phone_verify`
- *       2. Call `POST /api/auth/otp/verify` with the received OTP
- *       3. Then `POST /api/auth/broker/login` will work
+ *       - Admin accounts are immediately **active** and **verified** (no OTP needed).
+ *       - Email is **required** for admin accounts.
+ *     security:
+ *       - BearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/BrokerRegisterRequest'
+ *             $ref: '#/components/schemas/AdminRegisterRequest'
  *           example:
- *             name: "Suresh Transport Co."
- *             phone: "9876543210"
- *             email: "suresh@transport.in"
- *             password: "mypassword"
+ *             name: "Operations Manager"
+ *             phone: "9000000099"
+ *             email: "manager@ssklogistics.in"
+ *             password: "Manager123"
  *     responses:
  *       201:
- *         description: Broker registration successful — verify phone OTP to activate account
+ *         description: Admin account created
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RegisterResponse'
- *             example:
- *               success: true
- *               message: "Broker registration successful. Please verify your phone number."
- *               data:
- *                 user:
- *                   id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
- *                   name: "Suresh Transport Co."
- *                   phone: "9876543210"
- *                   role: "broker"
- *                   status: "pending_verification"
- *                   is_phone_verified: false
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       403:
+ *         description: Admin role required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  *       409:
  *         description: Phone or email already registered
  *         content:
@@ -350,261 +312,67 @@ router.post('/register', authLimiter, registerValidation, validate, register);
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post('/broker/register', authLimiter, registerValidation, validate, registerBroker);
+router.post('/admin/register', authenticate, authorize('admin'), registerAdminValidation, validate, registerAdmin);
+
+// ─── GOOGLE SIGN-IN ──────────────────────────────────────────────────────────
 
 /**
  * @swagger
- * /api/auth/broker/login:
+ * /api/auth/google:
  *   post:
- *     tags: [Broker/Driver Portal — Auth]
- *     summary: Broker login (phone + password)
+ *     tags: [Auth]
+ *     summary: Sign in / Sign up with Google
  *     description: |
- *       Authenticates a **broker** using phone number and password.
+ *       Authenticates a user using a Google ID token (credential) from the frontend.
  *
- *       - Returns 403 if the phone belongs to a driver or client account.
- *       - Phone must be OTP-verified before login is allowed.
+ *       **Behaviour:**
+ *       - If the Google account is already linked → login
+ *       - If the email matches an existing phone account → link Google + login
+ *       - If no account exists → create a new account with the given role
+ *
+ *       Admin accounts **cannot** use Google Sign-In.
+ *
+ *       **Response flags:**
+ *       - `is_new_user` — true if the account was just created
+ *       - `needs_phone` — true if the user has no phone number yet (prompt them to add one)
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/PhoneLoginRequest'
- *           example:
- *             phone: "9000000003"
- *             password: "Admin@123456"
- *     responses:
- *       200:
- *         description: Broker login successful
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/AuthResponse'
- *             example:
- *               success: true
- *               message: "Login successful"
- *               data:
- *                 user:
- *                   id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
- *                   name: "Suresh Transport Co."
- *                   phone: "9000000003"
- *                   role: "broker"
- *                   status: "active"
- *                   is_phone_verified: true
- *                 tokens:
- *                   access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
- *                   refresh_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
- *                   token_type: "Bearer"
- *                   expires_in: "7d"
- *       401:
- *         description: Invalid phone number or password
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       403:
- *         description: Wrong role — or account blocked/phone not verified
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       422:
- *         description: Validation errors
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
-router.post('/broker/login', authLimiter, loginValidation, validate, loginBroker);
-
-// ─── DRIVER PORTAL — REGISTER & LOGIN ────────────────────────────────────────
-
-/**
- * @swagger
- * /api/auth/driver/register:
- *   post:
- *     tags: [Broker/Driver Portal — Auth]
- *     summary: Register as Driver
- *     description: |
- *       Creates a new **driver** account. Role is fixed to `driver` — no need to pass it in the body.
- *
- *       After registration, verify the phone number via OTP before logging in:
- *       1. Call `POST /api/auth/otp/send` with `purpose: phone_verify`
- *       2. Call `POST /api/auth/otp/verify` with the received OTP
- *       3. Then `POST /api/auth/driver/login` will work
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/DriverRegisterRequest'
- *           example:
- *             name: "Ramesh Singh"
- *             phone: "9876543211"
- *             password: "mypassword"
- *     responses:
- *       201:
- *         description: Driver registration successful — verify phone OTP to activate account
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/RegisterResponse'
- *             example:
- *               success: true
- *               message: "Driver registration successful. Please verify your phone number."
- *               data:
- *                 user:
- *                   id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
- *                   name: "Ramesh Singh"
- *                   phone: "9876543211"
- *                   role: "driver"
- *                   status: "pending_verification"
- *                   is_phone_verified: false
- *       409:
- *         description: Phone or email already registered
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       422:
- *         description: Validation errors
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
-router.post('/driver/register', authLimiter, registerValidation, validate, registerDriver);
-
-/**
- * @swagger
- * /api/auth/driver/login:
- *   post:
- *     tags: [Broker/Driver Portal — Auth]
- *     summary: Driver login (phone + password)
- *     description: |
- *       Authenticates a **driver** using phone number and password.
- *
- *       - Returns 403 if the phone belongs to a broker or client account.
- *       - Phone must be OTP-verified before login is allowed.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/PhoneLoginRequest'
- *           example:
- *             phone: "9000000004"
- *             password: "Admin@123456"
- *     responses:
- *       200:
- *         description: Driver login successful
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/AuthResponse'
- *             example:
- *               success: true
- *               message: "Login successful"
- *               data:
- *                 user:
- *                   id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
- *                   name: "Ramesh Singh"
- *                   phone: "9000000004"
- *                   role: "driver"
- *                   status: "active"
- *                   is_phone_verified: true
- *                 tokens:
- *                   access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
- *                   refresh_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
- *                   token_type: "Bearer"
- *                   expires_in: "7d"
- *       401:
- *         description: Invalid phone number or password
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       403:
- *         description: Wrong role — or account blocked/phone not verified
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       422:
- *         description: Validation errors
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
-router.post('/driver/login', authLimiter, loginValidation, validate, loginDriver);
-
-// ─── CLIENT PORTAL — LOGIN ────────────────────────────────────────────────────
-
-/**
- * @swagger
- * /api/auth/login:
- *   post:
- *     tags: [Client Portal — Auth]
- *     summary: Client login (phone + password)
- *     description: |
- *       Authenticates a user with phone number and password. Returns `access_token` + `refresh_token`.
- *
- *       - **Phone must be OTP-verified** before login is allowed (status: active).
- *       - For Admin login, use `POST /api/auth/admin/login` (email-based).
- *       - The `role` field in the response determines which portal the user belongs to.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/PhoneLoginRequest'
+ *             $ref: '#/components/schemas/GoogleSignInRequest'
  *           examples:
  *             client:
- *               summary: Client login (seeded demo account)
+ *               summary: Google sign-in as client
  *               value:
- *                 phone: "9000000002"
- *                 password: "Admin@123456"
+ *                 id_token: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+ *                 role: "client"
  *             broker:
- *               summary: Broker login (seeded demo account)
+ *               summary: Google sign-in as broker
  *               value:
- *                 phone: "9000000003"
- *                 password: "Admin@123456"
- *             driver:
- *               summary: Driver login (seeded demo account)
- *               value:
- *                 phone: "9000000004"
- *                 password: "Admin@123456"
+ *                 id_token: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+ *                 role: "broker"
  *     responses:
  *       200:
- *         description: Login successful — use `access_token` in Authorization header for protected routes
+ *         description: Returning user logged in
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/AuthResponse'
- *             example:
- *               success: true
- *               message: "Login successful"
- *               data:
- *                 user:
- *                   id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
- *                   name: "Rajesh Kumar"
- *                   phone: "9876543210"
- *                   role: "client"
- *                   status: "active"
- *                   is_phone_verified: true
- *                 tokens:
- *                   access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
- *                   refresh_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
- *                   token_type: "Bearer"
- *                   expires_in: "7d"
+ *       201:
+ *         description: New account created via Google
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AuthResponse'
  *       401:
- *         description: Invalid phone or password — all seeded demo accounts use Admin@123456
+ *         description: Invalid or expired Google token
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *       403:
- *         description: Account blocked, inactive, or phone not yet verified
+ *         description: Email not verified, account blocked, or admin role attempted
  *         content:
  *           application/json:
  *             schema:
@@ -616,26 +384,25 @@ router.post('/driver/login', authLimiter, loginValidation, validate, loginDriver
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post('/login', authLimiter, loginValidation, validate, login);
+router.post('/google', authLimiter, googleSignInValidation, validate, googleSignIn);
 
-// ─── COMMON AUTH — OTP ────────────────────────────────────────────────────────
+// ─── OTP ─────────────────────────────────────────────────────────────────────
 
 /**
  * @swagger
  * /api/auth/otp/send:
  *   post:
- *     tags: [Common Auth]
- *     summary: Send OTP to a phone number
+ *     tags: [Auth]
+ *     summary: Send OTP
  *     description: |
- *       Sends a 6-digit OTP to the provided phone number.
- *       Rate limited to **3 OTPs per 10 minutes** per phone number.
+ *       Sends a 6-digit OTP to the phone number. Rate limited to 3 per 10 minutes.
  *
  *       **Purpose values:**
- *       - `phone_verify` — after registration to verify phone and activate account
- *       - `login` — OTP-based login (skips password)
- *       - `password_reset` — used by `POST /api/auth/forgot-password`
+ *       - `phone_verify` — verify phone after registration
+ *       - `login` — OTP-based login
+ *       - `password_reset` — for forgot-password flow
  *
- *       In **development mode**, the OTP is returned in the response as `dev_otp`.
+ *       In development mode the OTP is returned as `dev_otp`.
  *     requestBody:
  *       required: true
  *       content:
@@ -651,26 +418,20 @@ router.post('/login', authLimiter, loginValidation, validate, login);
  *                 type: string
  *                 enum: [registration, login, password_reset, phone_verify]
  *                 default: login
- *                 example: phone_verify
  *           examples:
  *             phone_verify:
  *               summary: Verify phone after registration
  *               value:
  *                 phone: "9876543210"
  *                 purpose: "phone_verify"
- *             otp_login:
- *               summary: OTP-based login
- *               value:
- *                 phone: "9876543210"
- *                 purpose: "login"
  *             password_reset:
- *               summary: Forgot password OTP
+ *               summary: Forgot password
  *               value:
  *                 phone: "9876543210"
  *                 purpose: "password_reset"
  *     responses:
  *       200:
- *         description: OTP sent successfully
+ *         description: OTP sent
  *         content:
  *           application/json:
  *             schema:
@@ -684,15 +445,9 @@ router.post('/login', authLimiter, loginValidation, validate, login);
  *                         phone:              { type: string }
  *                         purpose:            { type: string }
  *                         expires_in_minutes: { type: integer, example: 10 }
- *                         dev_otp:            { type: string, description: "Only in development mode" }
+ *                         dev_otp:            { type: string, description: "Dev mode only" }
  *       429:
- *         description: Too many OTP requests — wait 10 minutes
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       422:
- *         description: Validation errors
+ *         description: Too many OTP requests
  *         content:
  *           application/json:
  *             schema:
@@ -704,15 +459,14 @@ router.post('/otp/send', otpLimiter, sendOtpValidation, validate, sendOtp);
  * @swagger
  * /api/auth/otp/verify:
  *   post:
- *     tags: [Common Auth]
+ *     tags: [Auth]
  *     summary: Verify OTP
  *     description: |
  *       Verifies the OTP sent to a phone number.
  *
- *       **Behaviour by purpose:**
- *       - `phone_verify` — marks phone as verified, activates account (status: active)
- *       - `login` — marks phone as verified AND returns auth tokens (OTP login)
- *       - `password_reset` — validates OTP for password reset flow (use with `/api/auth/reset-password`)
+ *       - `phone_verify` — activates account (status: active)
+ *       - `login` — activates + returns auth tokens
+ *       - `password_reset` — validates OTP for reset flow
  *     requestBody:
  *       required: true
  *       content:
@@ -727,7 +481,6 @@ router.post('/otp/send', otpLimiter, sendOtpValidation, validate, sendOtp);
  *               otp:
  *                 type: string
  *                 example: "482619"
- *                 description: 6-digit numeric OTP
  *               purpose:
  *                 type: string
  *                 enum: [registration, login, password_reset, phone_verify]
@@ -747,7 +500,7 @@ router.post('/otp/send', otpLimiter, sendOtpValidation, validate, sendOtp);
  *                 purpose: "login"
  *     responses:
  *       200:
- *         description: OTP verified successfully
+ *         description: OTP verified
  *         content:
  *           application/json:
  *             schema:
@@ -758,30 +511,21 @@ router.post('/otp/send', otpLimiter, sendOtpValidation, validate, sendOtp);
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
- *       422:
- *         description: Validation errors
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/otp/verify', otpLimiter, verifyOtpValidation, validate, verifyOtp);
 
-// ─── COMMON AUTH — FORGOT / RESET PASSWORD ────────────────────────────────────
+// ─── FORGOT / RESET PASSWORD ─────────────────────────────────────────────────
 
 /**
  * @swagger
  * /api/auth/forgot-password:
  *   post:
- *     tags: [Common Auth]
- *     summary: Request a password reset OTP
+ *     tags: [Auth]
+ *     summary: Request password reset OTP
  *     description: |
- *       Sends a 6-digit OTP to the registered phone number to initiate password reset.
- *       Rate limited to **3 requests per 10 minutes**.
+ *       Sends OTP to the registered phone for password reset.
  *
- *       **Flow:**
- *       1. Call this endpoint → OTP sent to phone
- *       2. Call `POST /api/auth/reset-password` with the OTP + new password
+ *       **Flow:** call this → then `POST /api/auth/reset-password` with OTP + new password.
  *     requestBody:
  *       required: true
  *       content:
@@ -792,7 +536,7 @@ router.post('/otp/verify', otpLimiter, verifyOtpValidation, validate, verifyOtp)
  *             phone: "9876543210"
  *     responses:
  *       200:
- *         description: OTP sent — valid for 10 minutes
+ *         description: OTP sent
  *         content:
  *           application/json:
  *             schema:
@@ -805,21 +549,15 @@ router.post('/otp/verify', otpLimiter, verifyOtpValidation, validate, verifyOtp)
  *                       properties:
  *                         phone:              { type: string }
  *                         expires_in_minutes: { type: integer, example: 10 }
- *                         dev_otp:            { type: string, description: "Only in development mode" }
+ *                         dev_otp:            { type: string, description: "Dev mode only" }
  *       404:
- *         description: No account found with this phone number
+ *         description: No account found
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *       429:
- *         description: Too many OTP requests
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       422:
- *         description: Validation errors
+ *         description: Too many requests
  *         content:
  *           application/json:
  *             schema:
@@ -831,13 +569,11 @@ router.post('/forgot-password', otpLimiter, forgotPasswordValidation, validate, 
  * @swagger
  * /api/auth/reset-password:
  *   post:
- *     tags: [Common Auth]
- *     summary: Reset password using OTP
+ *     tags: [Auth]
+ *     summary: Reset password with OTP
  *     description: |
- *       Resets the user's password using the OTP received from `POST /api/auth/forgot-password`.
- *       The OTP is **single-use** and expires in 10 minutes.
- *
- *       After successful reset, log in using `POST /api/auth/login` with the new password.
+ *       Resets password using the OTP from `POST /api/auth/forgot-password`.
+ *       After success, login with the new password.
  *     requestBody:
  *       required: true
  *       content:
@@ -847,10 +583,10 @@ router.post('/forgot-password', otpLimiter, forgotPasswordValidation, validate, 
  *           example:
  *             phone: "9876543210"
  *             otp: "482619"
- *             new_password: "NewPass@123"
+ *             new_password: "NewPass123"
  *     responses:
  *       200:
- *         description: Password reset successful — login with new password
+ *         description: Password reset successful
  *         content:
  *           application/json:
  *             schema:
@@ -862,13 +598,7 @@ router.post('/forgot-password', otpLimiter, forgotPasswordValidation, validate, 
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *       404:
- *         description: No account found with this phone number
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       422:
- *         description: Validation errors
+ *         description: No account found
  *         content:
  *           application/json:
  *             schema:
@@ -876,19 +606,16 @@ router.post('/forgot-password', otpLimiter, forgotPasswordValidation, validate, 
  */
 router.post('/reset-password', otpLimiter, resetPasswordValidation, validate, resetPassword);
 
-// ─── COMMON AUTH — TOKEN MANAGEMENT ─────────────────────────────────────────────
+// ─── TOKEN MANAGEMENT ────────────────────────────────────────────────────────
 
 /**
  * @swagger
  * /api/auth/refresh-token:
  *   post:
- *     tags: [Common Auth]
+ *     tags: [Auth]
  *     summary: Refresh access token
  *     description: |
- *       Uses a valid refresh token to issue a new `access_token` and a rotated `refresh_token`.
- *       The **old refresh token is invalidated** after this call (token rotation for security).
- *
- *       Store the new `refresh_token` for the next rotation call.
+ *       Issues new tokens using a valid refresh token. The old refresh token is invalidated (rotation).
  *     requestBody:
  *       required: true
  *       content:
@@ -902,7 +629,7 @@ router.post('/reset-password', otpLimiter, resetPasswordValidation, validate, re
  *                 example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
  *     responses:
  *       200:
- *         description: Tokens refreshed — store the new refresh_token
+ *         description: Tokens refreshed
  *         content:
  *           application/json:
  *             schema:
@@ -928,11 +655,10 @@ router.post('/refresh-token', refreshTokenValidation, validate, refreshToken);
  * @swagger
  * /api/auth/logout:
  *   post:
- *     tags: [Common Auth]
- *     summary: Logout user
+ *     tags: [Auth]
+ *     summary: Logout
  *     description: |
- *       Revokes the refresh token so it cannot be used again.
- *       Pass `all_devices: true` to revoke **all** refresh tokens for this user (logout everywhere).
+ *       Revokes the refresh token. Pass `all_devices: true` to logout everywhere.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -944,24 +670,22 @@ router.post('/refresh-token', refreshTokenValidation, validate, refreshToken);
  *             properties:
  *               refresh_token:
  *                 type: string
- *                 example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
  *               all_devices:
  *                 type: boolean
  *                 default: false
- *                 description: If true, revokes all sessions for this user
  *           examples:
- *             single_device:
- *               summary: Logout from this device
+ *             single:
+ *               summary: Logout this device
  *               value:
  *                 refresh_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
  *                 all_devices: false
- *             all_devices:
- *               summary: Logout from all devices
+ *             all:
+ *               summary: Logout all devices
  *               value:
  *                 all_devices: true
  *     responses:
  *       200:
- *         description: Logged out successfully
+ *         description: Logged out
  *         content:
  *           application/json:
  *             schema:

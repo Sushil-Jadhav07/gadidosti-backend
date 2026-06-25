@@ -24,12 +24,25 @@ const registerValidation = [
 ];
 
 const loginValidation = [
+  body('email')
+    .optional()
+    .isEmail().withMessage('Enter a valid email address')
+    .normalizeEmail(),
+
   body('phone')
-    .trim().notEmpty().withMessage('Phone number is required')
+    .optional()
+    .trim()
     .matches(/^[6-9]\d{9}$/).withMessage('Enter a valid 10-digit Indian mobile number'),
 
   body('password')
     .notEmpty().withMessage('Password is required'),
+
+  body().custom((_, { req }) => {
+    if (!req.body.email && !req.body.phone) {
+      throw new Error('Either email or phone is required');
+    }
+    return true;
+  }),
 ];
 
 const registerAdminValidation = [
@@ -49,16 +62,6 @@ const registerAdminValidation = [
   body('password')
     .notEmpty().withMessage('Password is required')
     .isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
-];
-
-const adminLoginValidation = [
-  body('email')
-    .trim().notEmpty().withMessage('Email is required')
-    .isEmail().withMessage('Enter a valid email address')
-    .normalizeEmail(),
-
-  body('password')
-    .notEmpty().withMessage('Password is required'),
 ];
 
 const sendOtpValidation = [
@@ -132,6 +135,15 @@ const changePasswordValidation = [
     .isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
 ];
 
+const googleSignInValidation = [
+  body('id_token')
+    .notEmpty().withMessage('Google id_token is required'),
+
+  body('role')
+    .optional()
+    .isIn(['client', 'broker', 'driver']).withMessage('Role must be client, broker, or driver'),
+];
+
 const updateUserStatusValidation = [
   body('status')
     .notEmpty().withMessage('Status is required')
@@ -142,7 +154,6 @@ module.exports = {
   registerValidation,
   registerAdminValidation,
   loginValidation,
-  adminLoginValidation,
   sendOtpValidation,
   verifyOtpValidation,
   forgotPasswordValidation,
@@ -150,5 +161,6 @@ module.exports = {
   refreshTokenValidation,
   updateProfileValidation,
   changePasswordValidation,
+  googleSignInValidation,
   updateUserStatusValidation,
 };

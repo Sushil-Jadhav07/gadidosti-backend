@@ -183,6 +183,25 @@ const options = {
           },
         },
 
+        // ── Request schemas — Google Sign-In ─────────────────────────────────
+        GoogleSignInRequest: {
+          type: 'object',
+          required: ['id_token'],
+          properties: {
+            id_token: {
+              type: 'string',
+              description: 'Google ID token / credential from the frontend',
+              example: 'eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...',
+            },
+            role: {
+              type: 'string',
+              enum: ['client', 'broker', 'driver'],
+              default: 'client',
+              description: 'Role for new accounts (ignored for existing users)',
+            },
+          },
+        },
+
         // ── Request schemas — password management ─────────────────────────────
         ForgotPasswordRequest: {
           type: 'object',
@@ -285,20 +304,8 @@ const options = {
         description: 'Server and database health check',
       },
       {
-        name: 'Admin Portal — Auth',
-        description: '**Admin Dashboard login only** (email + password). Admin accounts are pre-seeded — no self-registration. Admin role has full access to all management endpoints.',
-      },
-      {
-        name: 'Broker/Driver Portal — Auth',
-        description: '**Broker & Driver Portal** — separate registration and login for brokers (fleet owners) and drivers. Each role has its own endpoint that enforces the correct role.',
-      },
-      {
-        name: 'Client Portal — Auth',
-        description: '**Client Portal** — registration (role: client), phone OTP verification, and phone-based login.',
-      },
-      {
-        name: 'Common Auth',
-        description: 'Shared across all portals: OTP management, token refresh, logout, forgot password, reset password.',
+        name: 'Auth',
+        description: 'Authentication for all roles (admin, broker, driver, client). One login, one register, OTP verification, password management, token refresh, and logout.',
       },
       {
         name: 'User Profile',

@@ -97,6 +97,14 @@ const migrate = async () => {
         FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
     `);
 
+    // ── Google Sign-In columns (idempotent) ──
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255) UNIQUE;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) NOT NULL DEFAULT 'phone';
+      ALTER TABLE users ALTER COLUMN phone DROP NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

@@ -222,6 +222,20 @@ CREATE TRIGGER trigger_users_updated_at
 
 
 -- ============================================================
+-- STEP 5b — Google Sign-In columns (idempotent)
+-- ============================================================
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255) UNIQUE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) NOT NULL DEFAULT 'phone';
+ALTER TABLE users ALTER COLUMN phone DROP NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
+
+COMMENT ON COLUMN users.google_id      IS 'Google account sub (unique ID from Google)';
+COMMENT ON COLUMN users.auth_provider  IS 'How the user signed up: phone | google | both';
+
+
+-- ============================================================
 -- STEP 6 — Sample Data (optional)
 -- Password for all seed users: Admin@123456
 -- Hash generated with bcrypt, 12 rounds

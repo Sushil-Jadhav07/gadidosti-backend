@@ -45,6 +45,46 @@ class UserModel {
     return result.rows[0] || null;
   }
 
+  // Find by Google ID (includes password_hash and status for auth)
+  static async findByGoogleId(googleId) {
+    const result = await pool.query(
+      `SELECT id, name, email, phone, password_hash, role, status,
+              is_phone_verified, is_email_verified, google_id, auth_provider, last_login_at
+       FROM users WHERE google_id = $1`,
+      [googleId]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Create a user from Google Sign-In (active immediately, no OTP needed)
+  static async createGoogleUser({ name, email, googleId, profileImage, role = 'client' }) {
+    const result = await pool.query(
+      `INSERT INTO users (name, email, google_id, profile_image, role, status, auth_provider, is_phone_verified, is_email_verified)
+       VALUES ($1, $2, $3, $4, $5, 'active', 'google', false, true)
+       RETURNING id, name, email, phone, role, status, is_phone_verified, is_email_verified,
+                 profile_image, google_id, auth_provider, created_at`,
+      [name, email, googleId, profileImage || null, role]
+    );
+    return result.rows[0];
+  }
+
+  // Link a Google account to an existing phone-registered user
+  static async linkGoogleAccount(id, { googleId, profileImage }) {
+    const result = await pool.query(
+      `UPDATE users
+       SET google_id = $1,
+           auth_provider = CASE WHEN auth_provider = 'phone' THEN 'both' ELSE auth_provider END,
+           is_email_verified = true,
+           profile_image = COALESCE(profile_image, $2),
+           updated_at = NOW()
+       WHERE id = $3
+       RETURNING id, name, email, phone, role, status, is_phone_verified, is_email_verified,
+                 profile_image, google_id, auth_provider, created_at`,
+      [googleId, profileImage || null, id]
+    );
+    return result.rows[0] || null;
+  }
+
   // Find by email
   static async findByEmail(email) {
     const result = await pool.query(
