@@ -1,12 +1,10 @@
 const { OAuth2Client } = require('google-auth-library');
 
-if (!process.env.GOOGLE_CLIENT_ID) {
-  throw new Error('GOOGLE_CLIENT_ID is not set in environment variables. Get it from Google Cloud Console → Credentials.');
-}
-
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-
 async function verifyGoogleIdToken(idToken) {
+  if (!process.env.GOOGLE_CLIENT_ID) {
+    throw new Error('Google Sign-In is not configured on this server.');
+  }
+  const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
   const ticket = await client.verifyIdToken({
     idToken,
     audience: process.env.GOOGLE_CLIENT_ID,
