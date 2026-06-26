@@ -17,7 +17,10 @@ const logger        = require('./utils/logger');
 const app = express();
 
 // ─── Security ────────────────────────────────────────────────────────────────
-app.use(helmet());
+app.use(helmet({
+  // Allow Google Sign-In popup to postMessage back to the opener
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+}));
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
