@@ -34,7 +34,7 @@ const register = async (req, res, next) => {
     });
 
     logger.info(`New user registered: ${phone} [${role}]`);
-    return successResponse(res, 201, 'Registration successful. Please verify your phone number.', { user });
+    return successResponse(res, 201, 'Registration successful. You can now log in.', { user });
   } catch (err) {
     next(err);
   }
@@ -43,14 +43,9 @@ const register = async (req, res, next) => {
 // ─── POST /api/auth/login (unified — all roles) ─────────────────────────────
 const login = async (req, res, next) => {
   try {
-    const { phone, email, password } = req.body;
+    const { email, password } = req.body;
 
-    let user;
-    if (email) {
-      user = await UserModel.findByEmail(email);
-    } else if (phone) {
-      user = await UserModel.findByPhone(phone);
-    }
+    const user = await UserModel.findByEmail(email);
 
     if (!user) return errorResponse(res, 401, 'Invalid credentials');
 
@@ -59,10 +54,6 @@ const login = async (req, res, next) => {
 
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
     if (!isPasswordValid) return errorResponse(res, 401, 'Invalid credentials');
-
-    if (user.role !== 'admin' && !user.is_phone_verified) {
-      return errorResponse(res, 403, 'Phone not verified. Please verify your phone number to login.');
-    }
 
     const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
     const accessToken  = generateAccessToken(tokenPayload);

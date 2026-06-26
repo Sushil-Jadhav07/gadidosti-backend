@@ -5,14 +5,15 @@ const registerValidation = [
     .trim().notEmpty().withMessage('Name is required')
     .isLength({ min: 2, max: 100 }).withMessage('Name must be 2–100 characters'),
 
-  body('phone')
-    .trim().notEmpty().withMessage('Phone number is required')
-    .matches(/^[6-9]\d{9}$/).withMessage('Enter a valid 10-digit Indian mobile number'),
-
   body('email')
-    .optional({ nullable: true, checkFalsy: true })
+    .trim().notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Enter a valid email address')
     .normalizeEmail(),
+
+  body('phone')
+    .optional({ nullable: true, checkFalsy: true })
+    .trim()
+    .matches(/^[6-9]\d{9}$/).withMessage('Enter a valid 10-digit Indian mobile number'),
 
   body('password')
     .notEmpty().withMessage('Password is required')
@@ -25,24 +26,12 @@ const registerValidation = [
 
 const loginValidation = [
   body('email')
-    .optional()
+    .trim().notEmpty().withMessage('Email is required')
     .isEmail().withMessage('Enter a valid email address')
     .normalizeEmail(),
 
-  body('phone')
-    .optional()
-    .trim()
-    .matches(/^[6-9]\d{9}$/).withMessage('Enter a valid 10-digit Indian mobile number'),
-
   body('password')
     .notEmpty().withMessage('Password is required'),
-
-  body().custom((_, { req }) => {
-    if (!req.body.email && !req.body.phone) {
-      throw new Error('Either email or phone is required');
-    }
-    return true;
-  }),
 ];
 
 const registerAdminValidation = [

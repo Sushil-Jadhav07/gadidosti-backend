@@ -51,57 +51,50 @@ const otpLimiter = rateLimit({
  *     description: |
  *       Unified login for **all roles** — admin, broker, driver, client.
  *
- *       - **Admin** — pass `email` + `password` (admin accounts use email login)
- *       - **Broker / Driver / Client** — pass `phone` + `password`
- *       - At least one of `email` or `phone` is required.
- *       - Non-admin accounts must have a verified phone before login works.
+ *       - All roles log in with **email + password**.
  *       - The `role` field in the response tells the frontend which portal to load.
  *
  *       **Seeded demo accounts** (password for all is `Admin@123456`):
- *       | Role   | Identifier                |
- *       |--------|---------------------------|
- *       | admin  | admin@ssklogistics.in      |
- *       | client | 9000000002                 |
- *       | broker | 9000000003                 |
- *       | driver | 9000000004                 |
+ *       | Role   | Email                      |
+ *       |--------|----------------------------|
+ *       | admin  | admin@ssklogistics.in       |
+ *       | client | client@ssklogistics.in      |
+ *       | broker | broker@ssklogistics.in      |
+ *       | driver | driver@ssklogistics.in      |
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required: [password]
+ *             required: [email, password]
  *             properties:
  *               email:
  *                 type: string
  *                 format: email
- *                 description: Use for admin login
- *               phone:
- *                 type: string
- *                 description: 10-digit Indian mobile number (broker/driver/client)
  *               password:
  *                 type: string
  *                 format: password
  *           examples:
  *             admin:
- *               summary: Admin login (email)
+ *               summary: Admin login
  *               value:
  *                 email: "admin@ssklogistics.in"
  *                 password: "Admin@123456"
  *             client:
- *               summary: Client login (phone)
+ *               summary: Client login
  *               value:
- *                 phone: "9000000002"
+ *                 email: "client@ssklogistics.in"
  *                 password: "Admin@123456"
  *             broker:
- *               summary: Broker login (phone)
+ *               summary: Broker login
  *               value:
- *                 phone: "9000000003"
+ *                 email: "broker@ssklogistics.in"
  *                 password: "Admin@123456"
  *             driver:
- *               summary: Driver login (phone)
+ *               summary: Driver login
  *               value:
- *                 phone: "9000000004"
+ *                 email: "driver@ssklogistics.in"
  *                 password: "Admin@123456"
  *     responses:
  *       200:
@@ -134,7 +127,7 @@ const otpLimiter = rateLimit({
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *       403:
- *         description: Account blocked, inactive, or phone not verified
+ *         description: Account blocked or inactive
  *         content:
  *           application/json:
  *             schema:
@@ -157,7 +150,8 @@ router.post('/login', authLimiter, loginValidation, validate, login);
  *     tags: [Auth]
  *     summary: Register (client, broker, or driver)
  *     description: |
- *       Creates a new user account with the specified role.
+ *       Creates a new user account. The account is **immediately active** — no OTP verification required.
+ *       After registration, log in directly using `POST /api/auth/login` with email + password.
  *
  *       **Roles:**
  *       - `client` (default) — Client Portal user
@@ -165,29 +159,25 @@ router.post('/login', authLimiter, loginValidation, validate, login);
  *       - `driver` — Broker/Driver Portal truck driver
  *
  *       Admin accounts **cannot** be created here — use `POST /api/auth/admin/register` (requires admin token).
- *
- *       **After registration:**
- *       1. `POST /api/auth/otp/send` with `purpose: phone_verify`
- *       2. `POST /api/auth/otp/verify` with the OTP
- *       3. Then `POST /api/auth/login` will work
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required: [name, phone, password]
+ *             required: [name, email, password]
  *             properties:
  *               name:
  *                 type: string
  *                 minLength: 2
  *                 maxLength: 100
- *               phone:
- *                 type: string
- *                 description: 10-digit Indian mobile number
  *               email:
  *                 type: string
  *                 format: email
+ *                 description: Required — used to sign in
+ *               phone:
+ *                 type: string
+ *                 description: Optional — 10-digit Indian mobile number
  *                 nullable: true
  *               password:
  *                 type: string
@@ -202,45 +192,45 @@ router.post('/login', authLimiter, loginValidation, validate, login);
  *               summary: Register as Client
  *               value:
  *                 name: "Rajesh Kumar"
- *                 phone: "9876543210"
  *                 email: "rajesh@example.com"
+ *                 phone: "9876543210"
  *                 password: "mypassword"
  *                 role: "client"
  *             broker:
  *               summary: Register as Broker
  *               value:
  *                 name: "Suresh Transport Co."
- *                 phone: "9876543211"
  *                 email: "suresh@transport.in"
+ *                 phone: "9876543211"
  *                 password: "mypassword"
  *                 role: "broker"
  *             driver:
  *               summary: Register as Driver
  *               value:
  *                 name: "Ramesh Singh"
- *                 phone: "9876543212"
+ *                 email: "ramesh@driver.com"
  *                 password: "mypassword"
  *                 role: "driver"
  *     responses:
  *       201:
- *         description: Registration successful — verify phone OTP to activate
+ *         description: Registration successful — account is active, login immediately
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/RegisterResponse'
  *             example:
  *               success: true
- *               message: "Registration successful. Please verify your phone number."
+ *               message: "Registration successful. You can now log in."
  *               data:
  *                 user:
  *                   id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
  *                   name: "Rajesh Kumar"
- *                   phone: "9876543210"
+ *                   email: "rajesh@example.com"
  *                   role: "client"
- *                   status: "pending_verification"
- *                   is_phone_verified: false
+ *                   status: "active"
+ *                   is_email_verified: true
  *       409:
- *         description: Phone or email already registered
+ *         description: Email already registered
  *         content:
  *           application/json:
  *             schema:
@@ -398,7 +388,6 @@ router.post('/google', authLimiter, googleSignInValidation, validate, googleSign
  *       Sends a 6-digit OTP to the phone number. Rate limited to 3 per 10 minutes.
  *
  *       **Purpose values:**
- *       - `phone_verify` — verify phone after registration
  *       - `login` — OTP-based login
  *       - `password_reset` — for forgot-password flow
  *
@@ -416,19 +405,19 @@ router.post('/google', authLimiter, googleSignInValidation, validate, googleSign
  *                 example: "9876543210"
  *               purpose:
  *                 type: string
- *                 enum: [registration, login, password_reset, phone_verify]
+ *                 enum: [login, password_reset]
  *                 default: login
  *           examples:
- *             phone_verify:
- *               summary: Verify phone after registration
- *               value:
- *                 phone: "9876543210"
- *                 purpose: "phone_verify"
  *             password_reset:
- *               summary: Forgot password
+ *               summary: Forgot password OTP
  *               value:
  *                 phone: "9876543210"
  *                 purpose: "password_reset"
+ *             otp_login:
+ *               summary: OTP-based login
+ *               value:
+ *                 phone: "9876543210"
+ *                 purpose: "login"
  *     responses:
  *       200:
  *         description: OTP sent
@@ -464,8 +453,7 @@ router.post('/otp/send', otpLimiter, sendOtpValidation, validate, sendOtp);
  *     description: |
  *       Verifies the OTP sent to a phone number.
  *
- *       - `phone_verify` — activates account (status: active)
- *       - `login` — activates + returns auth tokens
+ *       - `login` — returns auth tokens on success
  *       - `password_reset` — validates OTP for reset flow
  *     requestBody:
  *       required: true
@@ -483,21 +471,21 @@ router.post('/otp/send', otpLimiter, sendOtpValidation, validate, sendOtp);
  *                 example: "482619"
  *               purpose:
  *                 type: string
- *                 enum: [registration, login, password_reset, phone_verify]
+ *                 enum: [login, password_reset]
  *                 default: login
  *           examples:
- *             phone_verify:
- *               summary: Verify phone after registration
- *               value:
- *                 phone: "9876543210"
- *                 otp: "482619"
- *                 purpose: "phone_verify"
  *             otp_login:
  *               summary: OTP-based login
  *               value:
  *                 phone: "9876543210"
  *                 otp: "482619"
  *                 purpose: "login"
+ *             password_reset:
+ *               summary: Password reset OTP verify
+ *               value:
+ *                 phone: "9876543210"
+ *                 otp: "482619"
+ *                 purpose: "password_reset"
  *     responses:
  *       200:
  *         description: OTP verified

@@ -43,8 +43,12 @@ class OtpModel {
   static async incrementAttempt(phone, purpose) {
     await pool.query(
       `UPDATE otps SET attempts = attempts + 1
-       WHERE phone = $1 AND purpose = $2 AND is_used = false
-       ORDER BY created_at DESC`,
+       WHERE id = (
+         SELECT id FROM otps
+         WHERE phone = $1 AND purpose = $2 AND is_used = false
+         ORDER BY created_at DESC
+         LIMIT 1
+       )`,
       [phone, purpose]
     );
   }
