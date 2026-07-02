@@ -65,9 +65,28 @@ const options = {
             profile_image:     { type: 'string',  nullable: true,     example: null },
             address:           { type: 'string',  nullable: true,     example: '12 MG Road, Pune, Maharashtra 411001' },
             company_name:      { type: 'string',  nullable: true,     example: 'Suresh Transport Co.' },
+            kyc_status: {
+              type: 'string',
+              enum: ['not_submitted', 'pending', 'approved', 'rejected'],
+              example: 'not_submitted',
+              description: 'Broker/driver document verification status. Always not_submitted for client/admin.',
+            },
             last_login_at:     { type: 'string',  format: 'date-time', nullable: true },
             created_at:        { type: 'string',  format: 'date-time' },
             updated_at:        { type: 'string',  format: 'date-time' },
+          },
+        },
+
+        KycSubmission: {
+          type: 'object',
+          properties: {
+            id:               { type: 'string', format: 'uuid' },
+            user_id:          { type: 'string', format: 'uuid' },
+            documents:        { type: 'object', additionalProperties: { type: 'string' }, example: { license_number: 'MH-2020123456789', vehicle_registration_number: 'MH-12-CD-5678' } },
+            rejection_reason: { type: 'string', nullable: true, example: 'Aadhaar number does not match uploaded name' },
+            reviewed_at:      { type: 'string', format: 'date-time', nullable: true },
+            submitted_at:     { type: 'string', format: 'date-time' },
+            updated_at:       { type: 'string', format: 'date-time' },
           },
         },
 
@@ -329,6 +348,10 @@ const options = {
       {
         name: 'Notifications',
         description: 'Bell-icon notifications for any authenticated user: list, mark one read, mark all read.',
+      },
+      {
+        name: 'KYC',
+        description: 'Broker/driver document verification: submit documents, check own status, and an admin review queue (approve/reject).',
       },
       {
         name: 'Admin Management',

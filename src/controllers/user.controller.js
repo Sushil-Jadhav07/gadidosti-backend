@@ -86,11 +86,12 @@ const changePassword = async (req, res, next) => {
 // ─── GET /api/admin/users ─────────────────────────────────────────────────────
 const getAllUsers = async (req, res, next) => {
   try {
-    const { role, status, search, page = 1, limit = 10 } = req.query;
+    const { role, status, kyc_status, search, page = 1, limit = 10 } = req.query;
 
     const result = await UserModel.findAll({
       role,
       status,
+      kycStatus: kyc_status,
       search,
       page: parseInt(page),
       limit: Math.min(parseInt(limit), 100),

@@ -301,6 +301,26 @@ router.patch('/users/notifications/read-all', authenticate, markAllNotifications
  *     description: Admin-only. Returns paginated list of all users with optional filters.
  *     security:
  *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: role
+ *         schema: { type: string, enum: [client, broker, driver, admin] }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [active, inactive, blocked, pending_verification] }
+ *       - in: query
+ *         name: kyc_status
+ *         schema: { type: string, enum: [not_submitted, pending, approved, rejected] }
+ *         description: Filter by broker/driver KYC review status
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 10, maximum: 100 }
  *     responses:
  *       200:
  *         description: Users listed

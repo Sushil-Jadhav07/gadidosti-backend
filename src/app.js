@@ -10,6 +10,7 @@ const swaggerUi = require('swagger-ui-express');
 const swaggerSpec   = require('./config/swagger');
 const authRoutes    = require('./routes/auth.routes');
 const userRoutes    = require('./routes/user.routes');
+const kycRoutes     = require('./routes/kyc.routes');
 const healthRoutes  = require('./routes/health.routes');
 const errorHandler  = require('./middleware/errorHandler.middleware');
 const logger        = require('./utils/logger');
@@ -73,6 +74,7 @@ app.get('/api-docs.json', (req, res) => {
 app.use('/api', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api', userRoutes);
+app.use('/api', kycRoutes);
 
 // 404 handler
 app.use((req, res) => {

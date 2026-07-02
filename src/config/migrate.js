@@ -126,6 +126,29 @@ const migrate = async () => {
       CREATE INDEX IF NOT EXISTS idx_notifications_created  ON notifications(created_at DESC);
     `);
 
+    // ── KYC (broker/driver document verification) ──
+    await client.query(`
+      DO $$ BEGIN
+        CREATE TYPE kyc_status AS ENUM ('not_submitted', 'pending', 'approved', 'rejected');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_status kyc_status NOT NULL DEFAULT 'not_submitted';
+
+      CREATE TABLE IF NOT EXISTS kyc_submissions (
+        id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id           UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        documents         JSONB NOT NULL DEFAULT '{}'::jsonb,
+        rejection_reason  TEXT,
+        reviewed_by       UUID REFERENCES users(id) ON DELETE SET NULL,
+        reviewed_at       TIMESTAMPTZ,
+        submitted_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_kyc_submissions_user_id ON kyc_submissions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_users_kyc_status ON users(kyc_status);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

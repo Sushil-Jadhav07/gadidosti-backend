@@ -27,7 +27,7 @@ class UserModel {
   static async findById(id) {
     const result = await pool.query(
       `SELECT id, name, email, phone, role, status, is_phone_verified, is_email_verified,
-              profile_image, address, company_name, last_login_at, created_at, updated_at
+              profile_image, address, company_name, kyc_status, last_login_at, created_at, updated_at
        FROM users WHERE id = $1`,
       [id]
     );
@@ -49,7 +49,7 @@ class UserModel {
   static async findByGoogleId(googleId) {
     const result = await pool.query(
       `SELECT id, name, email, phone, password_hash, role, status,
-              is_phone_verified, is_email_verified, google_id, auth_provider, last_login_at
+              is_phone_verified, is_email_verified, google_id, auth_provider, kyc_status, last_login_at
        FROM users WHERE google_id = $1`,
       [googleId]
     );
@@ -89,7 +89,7 @@ class UserModel {
   static async findByEmail(email) {
     const result = await pool.query(
       `SELECT id, name, email, phone, password_hash, role, status,
-              is_phone_verified, is_email_verified, last_login_at
+              is_phone_verified, is_email_verified, kyc_status, last_login_at
        FROM users WHERE email = $1`,
       [email]
     );
@@ -161,7 +161,7 @@ class UserModel {
   }
 
   // List users with filters + pagination (admin)
-  static async findAll({ role, status, search, page = 1, limit = 10 }) {
+  static async findAll({ role, status, kycStatus, search, page = 1, limit = 10 }) {
     const offset = (page - 1) * limit;
     const conditions = [];
     const params = [];
@@ -174,6 +174,10 @@ class UserModel {
     if (status) {
       conditions.push(`status = $${idx++}`);
       params.push(status);
+    }
+    if (kycStatus) {
+      conditions.push(`kyc_status = $${idx++}`);
+      params.push(kycStatus);
     }
     if (search) {
       conditions.push(`(name ILIKE $${idx} OR email ILIKE $${idx} OR phone ILIKE $${idx})`);
@@ -191,7 +195,7 @@ class UserModel {
 
     const usersResult = await pool.query(
       `SELECT id, name, email, phone, role, status, is_phone_verified, is_email_verified,
-              profile_image, last_login_at, created_at, updated_at
+              profile_image, kyc_status, last_login_at, created_at, updated_at
        FROM users ${where}
        ORDER BY created_at DESC
        LIMIT $${idx} OFFSET $${idx + 1}`,
