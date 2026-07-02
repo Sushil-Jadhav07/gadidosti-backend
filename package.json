@@ -4,7 +4,7 @@
   "description": "SSK Logistics - Auth & User Management API",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/config/migrate.js && node src/server.js",
+    "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate": "node src/config/migrate.js",
     "seed": "node src/config/seed.js"

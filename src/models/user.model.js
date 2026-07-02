@@ -49,7 +49,7 @@ class UserModel {
   static async findByGoogleId(googleId) {
     const result = await pool.query(
       `SELECT id, name, email, phone, password_hash, role, status,
-              is_phone_verified, is_email_verified, google_id, auth_provider, kyc_status, last_login_at
+              is_phone_verified, is_email_verified, google_id, auth_provider, last_login_at
        FROM users WHERE google_id = $1`,
       [googleId]
     );
@@ -89,7 +89,7 @@ class UserModel {
   static async findByEmail(email) {
     const result = await pool.query(
       `SELECT id, name, email, phone, password_hash, role, status,
-              is_phone_verified, is_email_verified, kyc_status, last_login_at
+              is_phone_verified, is_email_verified, last_login_at
        FROM users WHERE email = $1`,
       [email]
     );
