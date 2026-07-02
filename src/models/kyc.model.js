@@ -21,7 +21,7 @@ class KycModel {
         [userId, JSON.stringify(documents)]
       );
 
-      await client.query(`UPDATE users SET kyc_status = 'pending', updated_at = NOW() WHERE id = $1`, [userId]);
+      await client.query(`UPDATE users SET kyc_status = 'submitted', updated_at = NOW() WHERE id = $1`, [userId]);
 
       await client.query('COMMIT');
       return result.rows[0];
@@ -43,8 +43,9 @@ class KycModel {
     return result.rows[0] || null;
   }
 
-  // Admin: list submissions joined with user info, filterable + paginated
-  static async findAll({ kycStatus, role, search, page = 1, limit = 10 } = {}) {
+  // Admin: list submissions joined with user info, filterable + paginated.
+  // Defaults to the 'submitted' (awaiting review) queue when no status filter is given.
+  static async findAll({ kycStatus = 'submitted', role, search, page = 1, limit = 10 } = {}) {
     const offset = (page - 1) * limit;
     const conditions = [];
     const params = [];
@@ -81,7 +82,7 @@ class KycModel {
        LEFT JOIN kyc_submissions k ON k.user_id = u.id
        ${where}
        ORDER BY
-         CASE u.kyc_status WHEN 'pending' THEN 0 WHEN 'not_submitted' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END,
+         CASE u.kyc_status WHEN 'submitted' THEN 0 WHEN 'pending' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END,
          u.created_at DESC
        LIMIT $${idx} OFFSET $${idx + 1}`,
       [...params, limit, offset]

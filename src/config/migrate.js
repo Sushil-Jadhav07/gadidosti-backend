@@ -149,6 +149,21 @@ const migrate = async () => {
       CREATE INDEX IF NOT EXISTS idx_users_kyc_status ON users(kyc_status);
     `);
 
+    // ── KYC status rename: not_submitted/pending/approved -> pending/submitted/verified ──
+    // (idempotent — only runs if the old label 'not_submitted' still exists)
+    await client.query(`
+      DO $$ BEGIN
+        IF EXISTS (
+          SELECT 1 FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+          WHERE t.typname = 'kyc_status' AND e.enumlabel = 'not_submitted'
+        ) THEN
+          ALTER TYPE kyc_status RENAME VALUE 'approved' TO 'verified';
+          ALTER TYPE kyc_status RENAME VALUE 'pending' TO 'submitted';
+          ALTER TYPE kyc_status RENAME VALUE 'not_submitted' TO 'pending';
+        END IF;
+      END $$;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

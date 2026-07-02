@@ -67,9 +67,9 @@ const options = {
             company_name:      { type: 'string',  nullable: true,     example: 'Suresh Transport Co.' },
             kyc_status: {
               type: 'string',
-              enum: ['not_submitted', 'pending', 'approved', 'rejected'],
-              example: 'not_submitted',
-              description: 'Broker/driver document verification status. Always not_submitted for client/admin.',
+              enum: ['pending', 'submitted', 'verified', 'rejected'],
+              example: 'pending',
+              description: 'Broker/driver document verification status. Always pending (unused) for client/admin.',
             },
             last_login_at:     { type: 'string',  format: 'date-time', nullable: true },
             created_at:        { type: 'string',  format: 'date-time' },

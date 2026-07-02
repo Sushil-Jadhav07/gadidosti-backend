@@ -1,26 +1,89 @@
 const express = require('express');
 const router = express.Router();
 
-const { submitKyc, getMyKyc, getUserKyc, getAllKyc, reviewKyc } = require('../controllers/kyc.controller');
+const {
+  submitKyc,
+  uploadKycDocument,
+  getMyKyc,
+  getUserKyc,
+  getAllKyc,
+  verifyKyc,
+  rejectKyc,
+} = require('../controllers/kyc.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
-const { submitKycValidation, reviewKycValidation } = require('../validations/kyc.validation');
+const {
+  submitBrokerKycValidation,
+  submitDriverKycValidation,
+  rejectKycValidation,
+} = require('../validations/kyc.validation');
 
-// ─── Broker/Driver — own KYC ──────────────────────────────────────────────────
+// ─── Broker/Driver — submit KYC ──────────────────────────────────────────────
 
 /**
  * @swagger
- * /api/kyc/submit:
+ * /api/kyc/broker:
  *   post:
  *     tags: [KYC]
- *     summary: Submit KYC documents (broker/driver)
+ *     summary: Submit broker KYC (broker only)
  *     description: |
- *       Submits document numbers for admin review. Sets `kyc_status` to `pending`.
+ *       Submits the broker's legal + financial identity documents for review. Sets `kyc_status` to `submitted`.
  *       Resubmitting (e.g. after a rejection) overwrites the previous submission and clears any rejection reason.
  *
- *       **Suggested document keys:**
- *       - Driver: `license_number`, `aadhaar_number`, `pan_number`, `vehicle_registration_number`, `vehicle_insurance_number`
- *       - Broker: `pan_number`, `aadhaar_number`, `gst_number`, `bank_account_number`, `business_registration_number`
+ *       **Required document keys:** `pan_number`, `aadhaar_number`, `gst_number`, `bank_account_number`, `business_registration_number`
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [documents]
+ *             properties:
+ *               documents:
+ *                 type: object
+ *                 additionalProperties: { type: string }
+ *           example:
+ *             documents:
+ *               pan_number: "ABCDE1234F"
+ *               aadhaar_number: "XXXX-XXXX-1234"
+ *               gst_number: "27ABCDE1234F1Z5"
+ *               bank_account_number: "1234567890123"
+ *               business_registration_number: "U12345MH2020PTC123456"
+ *     responses:
+ *       200:
+ *         description: KYC submitted for review
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponse'
+ *       403:
+ *         description: Only broker accounts may use this endpoint
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Validation errors — missing required documents
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.post('/kyc/broker', authenticate, authorize('broker'), submitBrokerKycValidation, validate, submitKyc);
+
+/**
+ * @swagger
+ * /api/kyc/driver:
+ *   post:
+ *     tags: [KYC]
+ *     summary: Submit driver KYC (driver only)
+ *     description: |
+ *       Submits the driver's license + vehicle documents for review. Sets `kyc_status` to `submitted`.
+ *       Resubmitting (e.g. after a rejection) overwrites the previous submission and clears any rejection reason.
+ *
+ *       **Required document keys:** `license_number`, `aadhaar_number`, `vehicle_registration_number`, `vehicle_insurance_number`
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -39,6 +102,7 @@ const { submitKycValidation, reviewKycValidation } = require('../validations/kyc
  *               license_number: "MH-2020123456789"
  *               aadhaar_number: "XXXX-XXXX-1234"
  *               vehicle_registration_number: "MH-12-CD-5678"
+ *               vehicle_insurance_number: "INS-2024-567890"
  *     responses:
  *       200:
  *         description: KYC submitted for review
@@ -47,23 +111,45 @@ const { submitKycValidation, reviewKycValidation } = require('../validations/kyc
  *             schema:
  *               $ref: '#/components/schemas/SuccessResponse'
  *       403:
- *         description: Client/admin accounts cannot submit KYC
+ *         description: Only driver accounts may use this endpoint
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *       422:
- *         description: Validation errors
+ *         description: Validation errors — missing required documents
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post('/kyc/submit', authenticate, authorize('broker', 'driver'), submitKycValidation, validate, submitKyc);
+router.post('/kyc/driver', authenticate, authorize('driver'), submitDriverKycValidation, validate, submitKyc);
 
 /**
  * @swagger
- * /api/kyc/me:
+ * /api/kyc/documents/upload:
+ *   post:
+ *     tags: [KYC]
+ *     summary: Upload a KYC document file (not yet configured)
+ *     description: |
+ *       Reserved for uploading document photos/PDFs to object storage (S3/Cloudinary) and returning a URL to reference
+ *       from `POST /api/kyc/broker` or `/api/kyc/driver`. No storage provider is configured yet, so this currently
+ *       always returns `501 Not Implemented`.
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       501:
+ *         description: Not configured
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.post('/kyc/documents/upload', authenticate, authorize('broker', 'driver'), uploadKycDocument);
+
+/**
+ * @swagger
+ * /api/kyc/status:
  *   get:
  *     tags: [KYC]
  *     summary: Get own KYC status + submission
@@ -82,27 +168,28 @@ router.post('/kyc/submit', authenticate, authorize('broker', 'driver'), submitKy
  *                     data:
  *                       type: object
  *                       properties:
- *                         kyc_status: { type: string, enum: [not_submitted, pending, approved, rejected] }
+ *                         kyc_status: { type: string, enum: [pending, submitted, verified, rejected] }
  *                         submission:
  *                           $ref: '#/components/schemas/KycSubmission'
  */
-router.get('/kyc/me', authenticate, authorize('broker', 'driver'), getMyKyc);
+router.get('/kyc/status', authenticate, authorize('broker', 'driver'), getMyKyc);
 
 // ─── Admin — KYC review queue ──────────────────────────────────────────────────
 
 /**
  * @swagger
- * /api/admin/kyc:
+ * /api/admin/kyc/pending:
  *   get:
  *     tags: [KYC]
- *     summary: List KYC submissions (admin only)
- *     description: Returns broker/driver users with their KYC status and submitted documents, filterable and paginated. Pending submissions are sorted first.
+ *     summary: List KYC submissions awaiting review (admin only)
+ *     description: Defaults to the `submitted` queue (awaiting review). Pass `kyc_status` to browse other states instead.
  *     security:
  *       - BearerAuth: []
  *     parameters:
  *       - in: query
  *         name: kyc_status
- *         schema: { type: string, enum: [not_submitted, pending, approved, rejected] }
+ *         schema: { type: string, enum: [pending, submitted, verified, rejected] }
+ *         description: Defaults to 'submitted' if omitted
  *       - in: query
  *         name: role
  *         schema: { type: string, enum: [broker, driver] }
@@ -129,7 +216,7 @@ router.get('/kyc/me', authenticate, authorize('broker', 'driver'), getMyKyc);
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/admin/kyc', authenticate, authorize('admin'), getAllKyc);
+router.get('/admin/kyc/pending', authenticate, authorize('admin'), getAllKyc);
 
 /**
  * @swagger
@@ -162,11 +249,47 @@ router.get('/admin/kyc/:userId', authenticate, authorize('admin'), getUserKyc);
 
 /**
  * @swagger
- * /api/admin/kyc/{userId}/review:
+ * /api/admin/kyc/{userId}/verify:
  *   patch:
  *     tags: [KYC]
- *     summary: Approve or reject a user's KYC (admin only)
- *     description: Only allowed while the user's `kyc_status` is `pending`. Approving sets `kyc_status` to `approved`; rejecting requires a reason and sets it to `rejected` (the user may resubmit).
+ *     summary: Approve a user's KYC (admin only)
+ *     description: Only allowed while `kyc_status` is `submitted`. Sets it to `verified` — the switch that unlocks earning (accepting trips/jobs) — and notifies the user.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: KYC verified
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponse'
+ *       400:
+ *         description: Not currently submitted, or invalid role
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: User not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.patch('/admin/kyc/:userId/verify', authenticate, authorize('admin'), verifyKyc);
+
+/**
+ * @swagger
+ * /api/admin/kyc/{userId}/reject:
+ *   patch:
+ *     tags: [KYC]
+ *     summary: Reject a user's KYC (admin only)
+ *     description: Only allowed while `kyc_status` is `submitted`. Requires a reason, sets `kyc_status` to `rejected`, and notifies the user so they can resubmit.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -180,19 +303,18 @@ router.get('/admin/kyc/:userId', authenticate, authorize('admin'), getUserKyc);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [status]
+ *             required: [reason]
  *             properties:
- *               status: { type: string, enum: [approved, rejected] }
- *               reason: { type: string, description: "Required when status is 'rejected'", example: "Aadhaar number does not match uploaded name" }
+ *               reason: { type: string, example: "Aadhaar number does not match uploaded name" }
  *     responses:
  *       200:
- *         description: KYC reviewed
+ *         description: KYC rejected
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/SuccessResponse'
  *       400:
- *         description: Not currently pending, or invalid role
+ *         description: Not currently submitted, or invalid role
  *         content:
  *           application/json:
  *             schema:
@@ -203,7 +325,13 @@ router.get('/admin/kyc/:userId', authenticate, authorize('admin'), getUserKyc);
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Validation errors — reason is required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.patch('/admin/kyc/:userId/review', authenticate, authorize('admin'), reviewKycValidation, validate, reviewKyc);
+router.patch('/admin/kyc/:userId/reject', authenticate, authorize('admin'), rejectKycValidation, validate, rejectKyc);
 
 module.exports = router;

@@ -310,7 +310,7 @@ router.patch('/users/notifications/read-all', authenticate, markAllNotifications
  *         schema: { type: string, enum: [active, inactive, blocked, pending_verification] }
  *       - in: query
  *         name: kyc_status
- *         schema: { type: string, enum: [not_submitted, pending, approved, rejected] }
+ *         schema: { type: string, enum: [pending, submitted, verified, rejected] }
  *         description: Filter by broker/driver KYC review status
  *       - in: query
  *         name: search
