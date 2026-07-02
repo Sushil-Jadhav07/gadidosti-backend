@@ -44,8 +44,10 @@ class KycModel {
   }
 
   // Admin: list submissions joined with user info, filterable + paginated.
-  // Defaults to the 'submitted' (awaiting review) queue when no status filter is given.
-  static async findAll({ kycStatus = 'submitted', role, search, page = 1, limit = 10 } = {}) {
+  // With no status filter, returns everyone who has ever submitted (submitted/verified/rejected) —
+  // i.e. excludes 'pending' (not-yet-submitted) accounts, since there's nothing to review for those.
+  // Pass kycStatus explicitly to narrow to just one state (e.g. the 'submitted' review queue).
+  static async findAll({ kycStatus, role, search, page = 1, limit = 10 } = {}) {
     const offset = (page - 1) * limit;
     const conditions = [];
     const params = [];
@@ -54,6 +56,8 @@ class KycModel {
     if (kycStatus) {
       conditions.push(`u.kyc_status = $${idx++}`);
       params.push(kycStatus);
+    } else {
+      conditions.push(`u.kyc_status != 'pending'`);
     }
     if (role) {
       conditions.push(`u.role = $${idx++}`);

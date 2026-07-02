@@ -181,15 +181,18 @@ router.get('/kyc/status', authenticate, authorize('broker', 'driver'), getMyKyc)
  * /api/admin/kyc/pending:
  *   get:
  *     tags: [KYC]
- *     summary: List KYC submissions awaiting review (admin only)
- *     description: Defaults to the `submitted` queue (awaiting review). Pass `kyc_status` to browse other states instead.
+ *     summary: List KYC submissions (admin only)
+ *     description: |
+ *       With no `kyc_status` filter, returns everyone who has ever submitted (`submitted`, `verified`, or `rejected`) —
+ *       i.e. excludes accounts that haven't submitted yet, since there's nothing to review for those.
+ *       Pass `kyc_status` explicitly to narrow to just one state, e.g. `submitted` for the review queue.
  *     security:
  *       - BearerAuth: []
  *     parameters:
  *       - in: query
  *         name: kyc_status
  *         schema: { type: string, enum: [pending, submitted, verified, rejected] }
- *         description: Defaults to 'submitted' if omitted
+ *         description: Omit to get all submitted/verified/rejected users; pass to narrow to one state
  *       - in: query
  *         name: role
  *         schema: { type: string, enum: [broker, driver] }
