@@ -63,9 +63,24 @@ const options = {
             is_phone_verified: { type: 'boolean', example: true },
             is_email_verified: { type: 'boolean', example: false },
             profile_image:     { type: 'string',  nullable: true,     example: null },
+            address:           { type: 'string',  nullable: true,     example: '12 MG Road, Pune, Maharashtra 411001' },
+            company_name:      { type: 'string',  nullable: true,     example: 'Suresh Transport Co.' },
             last_login_at:     { type: 'string',  format: 'date-time', nullable: true },
             created_at:        { type: 'string',  format: 'date-time' },
             updated_at:        { type: 'string',  format: 'date-time' },
+          },
+        },
+
+        Notification: {
+          type: 'object',
+          properties: {
+            id:         { type: 'string', format: 'uuid', example: 'b2c3d4e5-f6a7-8901-bcde-f12345678901' },
+            title:      { type: 'string', example: 'Booking Confirmed' },
+            message:    { type: 'string', example: 'Your booking #SSK1042 has been accepted by the driver.' },
+            type:       { type: 'string', example: 'booking', description: 'Category, e.g. booking | payment | system | general' },
+            is_read:    { type: 'boolean', example: false },
+            meta:       { type: 'object', nullable: true, example: { booking_id: 'SSK1042' } },
+            created_at: { type: 'string', format: 'date-time' },
           },
         },
 
@@ -309,7 +324,11 @@ const options = {
       },
       {
         name: 'User Profile',
-        description: 'Profile management for any authenticated user (all roles): view, update profile, change password.',
+        description: 'Profile management for any authenticated user (all roles): view/update profile (name, photo, address, company name), change password.',
+      },
+      {
+        name: 'Notifications',
+        description: 'Bell-icon notifications for any authenticated user: list, mark one read, mark all read.',
       },
       {
         name: 'Admin Management',

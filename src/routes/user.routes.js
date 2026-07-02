@@ -10,6 +10,11 @@ const {
   updateUserStatus,
   deleteUser,
 } = require('../controllers/user.controller');
+const {
+  getNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+} = require('../controllers/notification.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const {
@@ -22,7 +27,7 @@ const {
 
 /**
  * @swagger
- * /api/user/profile:
+ * /api/users/profile:
  *   get:
  *     tags: [User Profile]
  *     summary: Get own profile
@@ -51,15 +56,15 @@ const {
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/user/profile', authenticate, getProfile);
+router.get('/users/profile', authenticate, getProfile);
 
 /**
  * @swagger
- * /api/user/profile:
- *   put:
+ * /api/users/profile:
+ *   patch:
  *     tags: [User Profile]
  *     summary: Update own profile
- *     description: Updates name, email, or profile image for the authenticated user.
+ *     description: Updates name, email, profile photo, address, and/or company name for the authenticated user. All fields are optional — only send what changed.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -79,6 +84,15 @@ router.get('/user/profile', authenticate, getProfile);
  *               profile_image:
  *                 type: string
  *                 example: "https://s3.amazonaws.com/ssk/profiles/abc.jpg"
+ *                 nullable: true
+ *               address:
+ *                 type: string
+ *                 example: "12 MG Road, Pune, Maharashtra 411001"
+ *                 nullable: true
+ *               company_name:
+ *                 type: string
+ *                 example: "Suresh Transport Co."
+ *                 description: Business/company name — clients booking on behalf of a business, brokers, etc.
  *                 nullable: true
  *     responses:
  *       200:
@@ -101,16 +115,26 @@ router.get('/user/profile', authenticate, getProfile);
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: Validation errors
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.put('/user/profile', authenticate, updateProfileValidation, validate, updateProfile);
+router.patch('/users/profile', authenticate, updateProfileValidation, validate, updateProfile);
 
 /**
  * @swagger
- * /api/user/change-password:
- *   put:
+ * /api/users/change-password:
+ *   patch:
  *     tags: [User Profile]
  *     summary: Change password
- *     description: Changes the authenticated user's password. Requires current password verification.
+ *     description: |
+ *       Changes the authenticated user's password. Requires the current password.
+ *
+ *       For users who forgot their password (locked out, don't know the current one), use
+ *       `POST /api/auth/forgot-password` + `POST /api/auth/reset-password` instead.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -144,7 +168,127 @@ router.put('/user/profile', authenticate, updateProfileValidation, validate, upd
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.put('/user/change-password', authenticate, changePasswordValidation, validate, changePassword);
+router.patch('/users/change-password', authenticate, changePasswordValidation, validate, changePassword);
+
+// ─── Authenticated user — notifications ──────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/users/notifications:
+ *   get:
+ *     tags: [Notifications]
+ *     summary: List notifications
+ *     description: Returns the authenticated user's notifications (booking accepted, driver assigned, payment received, etc.), newest first, paginated.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20, maximum: 100 }
+ *     responses:
+ *       200:
+ *         description: Notifications fetched
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         notifications:
+ *                           type: array
+ *                           items:
+ *                             $ref: '#/components/schemas/Notification'
+ *                         total: { type: integer, example: 12 }
+ *                         unread_count: { type: integer, example: 3 }
+ *                         page: { type: integer, example: 1 }
+ *                         limit: { type: integer, example: 20 }
+ *                         total_pages: { type: integer, example: 1 }
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.get('/users/notifications', authenticate, getNotifications);
+
+/**
+ * @swagger
+ * /api/users/notifications/{id}/read:
+ *   patch:
+ *     tags: [Notifications]
+ *     summary: Mark one notification as read
+ *     description: Clears the unread state for a single notification belonging to the authenticated user.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *         description: Notification UUID
+ *     responses:
+ *       200:
+ *         description: Notification marked as read
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         notification:
+ *                           $ref: '#/components/schemas/Notification'
+ *       404:
+ *         description: Notification not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.patch('/users/notifications/:id/read', authenticate, markNotificationRead);
+
+/**
+ * @swagger
+ * /api/users/notifications/read-all:
+ *   patch:
+ *     tags: [Notifications]
+ *     summary: Mark all notifications as read
+ *     description: Clears the unread badge — marks every unread notification for the authenticated user as read.
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: All notifications marked as read
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         updated: { type: integer, example: 3, description: "Number of notifications marked read" }
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.patch('/users/notifications/read-all', authenticate, markAllNotificationsRead);
 
 // ─── Admin — user management ──────────────────────────────────────────────────
 

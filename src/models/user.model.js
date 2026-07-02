@@ -27,7 +27,7 @@ class UserModel {
   static async findById(id) {
     const result = await pool.query(
       `SELECT id, name, email, phone, role, status, is_phone_verified, is_email_verified,
-              profile_image, last_login_at, created_at, updated_at
+              profile_image, address, company_name, last_login_at, created_at, updated_at
        FROM users WHERE id = $1`,
       [id]
     );
@@ -116,16 +116,19 @@ class UserModel {
   }
 
   // Update profile
-  static async updateProfile(id, { name, email, profileImage }) {
+  static async updateProfile(id, { name, email, profileImage, address, companyName }) {
     const result = await pool.query(
       `UPDATE users
        SET name = COALESCE($1, name),
            email = COALESCE($2, email),
            profile_image = COALESCE($3, profile_image),
+           address = COALESCE($4, address),
+           company_name = COALESCE($5, company_name),
            updated_at = NOW()
-       WHERE id = $4
-       RETURNING id, name, email, phone, role, status, is_phone_verified, is_email_verified, profile_image, updated_at`,
-      [name, email, profileImage, id]
+       WHERE id = $6
+       RETURNING id, name, email, phone, role, status, is_phone_verified, is_email_verified,
+                 profile_image, address, company_name, updated_at`,
+      [name, email, profileImage, address, companyName, id]
     );
     return result.rows[0] || null;
   }

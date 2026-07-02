@@ -105,6 +105,27 @@ const migrate = async () => {
       CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
     `);
 
+    // ── Profile fields (address, company name) + notifications table ──
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS address TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS company_name VARCHAR(150);
+
+      CREATE TABLE IF NOT EXISTS notifications (
+        id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title       VARCHAR(150) NOT NULL,
+        message     TEXT NOT NULL,
+        type        VARCHAR(50) NOT NULL DEFAULT 'general',
+        is_read     BOOLEAN NOT NULL DEFAULT FALSE,
+        meta        JSONB,
+        created_at  TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_notifications_user_id  ON notifications(user_id);
+      CREATE INDEX IF NOT EXISTS idx_notifications_unread   ON notifications(user_id, is_read);
+      CREATE INDEX IF NOT EXISTS idx_notifications_created  ON notifications(created_at DESC);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

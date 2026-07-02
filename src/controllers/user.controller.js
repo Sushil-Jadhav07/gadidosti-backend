@@ -4,7 +4,7 @@ const AuditLogModel = require('../models/auditLog.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
-// ─── GET /api/user/profile ────────────────────────────────────────────────────
+// ─── GET /api/users/profile ───────────────────────────────────────────────────
 const getProfile = async (req, res, next) => {
   try {
     const user = await UserModel.findById(req.user.id);
@@ -15,10 +15,10 @@ const getProfile = async (req, res, next) => {
   }
 };
 
-// ─── PUT /api/user/profile ────────────────────────────────────────────────────
+// ─── PATCH /api/users/profile ─────────────────────────────────────────────────
 const updateProfile = async (req, res, next) => {
   try {
-    const { name, email, profile_image } = req.body;
+    const { name, email, profile_image, address, company_name } = req.body;
 
     if (email) {
       const existing = await UserModel.findByEmail(email);
@@ -31,6 +31,8 @@ const updateProfile = async (req, res, next) => {
       name,
       email,
       profileImage: profile_image,
+      address,
+      companyName: company_name,
     });
 
     await AuditLogModel.log({
@@ -48,7 +50,7 @@ const updateProfile = async (req, res, next) => {
   }
 };
 
-// ─── PUT /api/user/change-password ────────────────────────────────────────────
+// ─── PATCH /api/users/change-password ─────────────────────────────────────────
 const changePassword = async (req, res, next) => {
   try {
     const { current_password, new_password } = req.body;

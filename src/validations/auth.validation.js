@@ -113,6 +113,14 @@ const updateProfileValidation = [
     .optional({ nullable: true, checkFalsy: true })
     .isEmail().withMessage('Enter a valid email address')
     .normalizeEmail(),
+
+  body('address')
+    .optional({ nullable: true, checkFalsy: true })
+    .trim().isLength({ max: 500 }).withMessage('Address must be under 500 characters'),
+
+  body('company_name')
+    .optional({ nullable: true, checkFalsy: true })
+    .trim().isLength({ max: 150 }).withMessage('Company name must be under 150 characters'),
 ];
 
 const changePasswordValidation = [
