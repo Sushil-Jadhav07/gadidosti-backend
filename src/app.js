@@ -17,6 +17,11 @@ const logger        = require('./utils/logger');
 
 const app = express();
 
+// Render (and most cloud platforms) sit behind a reverse proxy.
+// This tells Express to trust the X-Forwarded-For header so rate-limiting
+// and IP detection work correctly.
+app.set('trust proxy', 1);
+
 // ─── Security ────────────────────────────────────────────────────────────────
 app.use(helmet({
   // Allow Google Sign-In popup to postMessage back to the opener
