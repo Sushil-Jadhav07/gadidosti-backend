@@ -97,8 +97,8 @@ const assertReviewable = async (userId) => {
   if (!['broker', 'driver'].includes(targetUser.role)) {
     return { error: [400, 'KYC review only applies to broker/driver accounts'] };
   }
-  if (targetUser.kyc_status !== 'submitted') {
-    return { error: [400, `Cannot review — current KYC status is '${targetUser.kyc_status}', expected 'submitted'`] };
+  if (targetUser.kyc_status === 'verified') {
+    return { error: [400, 'KYC is already verified'] };
   }
   return { targetUser };
 };
