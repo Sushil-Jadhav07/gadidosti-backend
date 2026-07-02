@@ -43,14 +43,24 @@ const register = async (req, res, next) => {
 // ─── POST /api/auth/login (unified — all roles) ─────────────────────────────
 const login = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    const { email, phone, password } = req.body;
 
-    const user = await UserModel.findByEmail(email);
+    let user;
+    if (email) {
+      user = await UserModel.findByEmail(email);
+    } else if (phone) {
+      user = await UserModel.findByPhone(phone);
+    }
 
     if (!user) return errorResponse(res, 401, 'Invalid credentials');
 
     if (user.status === 'blocked')  return errorResponse(res, 403, 'Your account has been blocked. Contact support.');
     if (user.status === 'inactive') return errorResponse(res, 403, 'Account is inactive');
+
+    // Admin accounts must use email+password (phone-only accounts skip OTP check)
+    if (user.role !== 'admin' && !user.is_phone_verified) {
+      return errorResponse(res, 403, 'Phone not verified. Please complete OTP verification first.');
+    }
 
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
     if (!isPasswordValid) return errorResponse(res, 401, 'Invalid credentials');
