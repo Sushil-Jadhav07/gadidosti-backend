@@ -57,11 +57,6 @@ const login = async (req, res, next) => {
     if (user.status === 'blocked')  return errorResponse(res, 403, 'Your account has been blocked. Contact support.');
     if (user.status === 'inactive') return errorResponse(res, 403, 'Account is inactive');
 
-    // Admin accounts must use email+password (phone-only accounts skip OTP check)
-    if (user.role !== 'admin' && !user.is_phone_verified) {
-      return errorResponse(res, 403, 'Phone not verified. Please complete OTP verification first.');
-    }
-
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
     if (!isPasswordValid) return errorResponse(res, 401, 'Invalid credentials');
 
