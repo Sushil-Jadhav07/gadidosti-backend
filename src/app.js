@@ -12,6 +12,14 @@ const authRoutes    = require('./routes/auth.routes');
 const userRoutes    = require('./routes/user.routes');
 const kycRoutes     = require('./routes/kyc.routes');
 const healthRoutes  = require('./routes/health.routes');
+const bookingRoutes = require('./routes/booking.routes');
+const pricingRoutes = require('./routes/pricing.routes');
+const vehicleRoutes = require('./routes/vehicle.routes');
+const jobRoutes     = require('./routes/job.routes');
+const tripRoutes    = require('./routes/trip.routes');
+const paymentRoutes = require('./routes/payment.routes');
+const disputeRoutes = require('./routes/dispute.routes');
+const adminRoutes   = require('./routes/admin.routes');
 const errorHandler  = require('./middleware/errorHandler.middleware');
 const logger        = require('./utils/logger');
 
@@ -80,6 +88,14 @@ app.use('/api', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api', userRoutes);
 app.use('/api', kycRoutes);
+app.use('/api', bookingRoutes);
+app.use('/api', pricingRoutes);
+app.use('/api', vehicleRoutes);
+app.use('/api', jobRoutes);
+app.use('/api', tripRoutes);
+app.use('/api', paymentRoutes);
+app.use('/api', disputeRoutes);
+app.use('/api', adminRoutes);
 
 // 404 handler
 app.use((req, res) => {

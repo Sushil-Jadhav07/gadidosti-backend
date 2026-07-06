@@ -329,6 +329,329 @@ const options = {
             },
           },
         },
+
+        // ── Bookings ────────────────────────────────────────────────────────
+        Booking: {
+          type: 'object',
+          properties: {
+            id:             { type: 'string', format: 'uuid' },
+            status:         { type: 'string', enum: ['pending', 'confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'] },
+            pickup:         { type: 'string', example: 'Pune, Maharashtra' },
+            drop:           { type: 'string', example: 'Mumbai, Maharashtra' },
+            truckType:      { type: 'string', nullable: true },
+            truckCategory:  { type: 'string', enum: ['small', 'medium', 'large', 'part'], nullable: true },
+            weight:         { type: 'number', nullable: true },
+            weightUnit:     { type: 'string', example: 'tons' },
+            quantity:       { type: 'integer', nullable: true },
+            material:       { type: 'string', nullable: true },
+            transportType:  { type: 'string', enum: ['intra', 'inter'] },
+            date:           { type: 'string', format: 'date-time', nullable: true },
+            amount:         { type: 'number', nullable: true },
+            paymentStatus:  { type: 'string', enum: ['paid', 'pending', 'refunded'] },
+            driver:         { type: 'object', properties: { name: { type: 'string', nullable: true }, phone: { type: 'string', nullable: true } } },
+            truckReg:       { type: 'string', nullable: true },
+            broker:         { type: 'string', nullable: true },
+            timeline:       { type: 'array', items: { type: 'string' }, example: ['pending', 'confirmed'] },
+            currentStep:    { type: 'integer', example: 1 },
+            pricing:        { type: 'object', nullable: true },
+            distance:       { type: 'number', nullable: true },
+            platformFee:    { type: 'number', nullable: true },
+            client:         { type: 'string', nullable: true, description: 'Admin projection only' },
+            clientPhone:    { type: 'string', nullable: true, description: 'Admin projection only' },
+            clientEmail:    { type: 'string', nullable: true, description: 'Admin projection only' },
+            driverPhone:    { type: 'string', nullable: true, description: 'Admin projection only' },
+          },
+        },
+
+        PricingBreakdown: {
+          type: 'object',
+          description: 'Shape varies — intra/inter-city client view uses baseFare/distanceFare/subtotal; inter-city admin view adds fuel/toll; part-load uses totalTruckCost/capacityUsedPct.',
+          properties: {
+            baseFare:         { type: 'number', nullable: true },
+            distance:         { type: 'number' },
+            distanceFare:     { type: 'number', nullable: true },
+            subtotal:         { type: 'number', nullable: true },
+            fuel:             { type: 'number', nullable: true },
+            toll:             { type: 'number', nullable: true },
+            totalTruckCost:   { type: 'number', nullable: true },
+            capacityUsedPct:  { type: 'number', nullable: true },
+            platformFee:      { type: 'number' },
+            total:            { type: 'number' },
+          },
+        },
+
+        PricingConfig: {
+          type: 'object',
+          properties: {
+            intraCity: {
+              type: 'object',
+              properties: {
+                small:  { $ref: '#/components/schemas/IntraCityTier' },
+                medium: { $ref: '#/components/schemas/IntraCityTier' },
+                large:  { $ref: '#/components/schemas/IntraCityTier' },
+              },
+            },
+            interCity: {
+              type: 'object',
+              properties: {
+                baseRatePerKm:   { type: 'number', example: 40 },
+                fuelSurcharge:   { type: 'number', example: 0.15 },
+                tollHandling:    { type: 'string', enum: ['fixed', 'actual'], example: 'fixed' },
+                tollFixedAmount: { type: 'number', example: 500 },
+                platformFee:     { type: 'number', example: 0.08 },
+              },
+            },
+            partTruck: {
+              type: 'object',
+              properties: { platformFee: { type: 'number', example: 0.12 } },
+            },
+          },
+        },
+
+        IntraCityTier: {
+          type: 'object',
+          properties: {
+            baseFare:         { type: 'number', example: 800 },
+            perKmRate:        { type: 'number', example: 35 },
+            platformFee:      { type: 'number', example: 0.10 },
+            waitingCharge:    { type: 'number', example: 150 },
+            demandMultiplier: { type: 'number', example: 1 },
+          },
+        },
+
+        // ── Vehicles ───────────────────────────────────────────────────────────
+        Truck: {
+          type: 'object',
+          properties: {
+            id:               { type: 'string', format: 'uuid' },
+            brokerId:         { type: 'string', format: 'uuid' },
+            driverId:         { type: 'string', format: 'uuid', nullable: true },
+            driver:           { type: 'string', nullable: true },
+            registration:     { type: 'string', example: 'MH-12-AB-1234' },
+            type:             { type: 'string', nullable: true },
+            category:         { type: 'string', enum: ['small', 'medium', 'large', 'part'], nullable: true },
+            capacity:         { type: 'string', nullable: true },
+            make:             { type: 'string', nullable: true },
+            year:             { type: 'integer', nullable: true },
+            insuranceExpiry:  { type: 'string', format: 'date', nullable: true },
+            status:           { type: 'string', enum: ['available', 'on_trip', 'maintenance'] },
+            lastTrip:         { type: 'string', nullable: true, example: 'Pune -> Mumbai' },
+          },
+        },
+
+        CreateTruckRequest: {
+          type: 'object',
+          required: ['registration'],
+          properties: {
+            registration:     { type: 'string', example: 'MH-12-AB-1234' },
+            driver_id:        { type: 'string', format: 'uuid', nullable: true },
+            type:             { type: 'string', nullable: true },
+            category:         { type: 'string', enum: ['small', 'medium', 'large', 'part'] },
+            capacity:         { type: 'string', nullable: true },
+            make:             { type: 'string', nullable: true },
+            year:             { type: 'integer', nullable: true },
+            insurance_expiry: { type: 'string', format: 'date', nullable: true },
+          },
+        },
+
+        UpdateTruckRequest: {
+          type: 'object',
+          properties: {
+            driver_id:        { type: 'string', format: 'uuid', nullable: true },
+            type:             { type: 'string', nullable: true },
+            category:         { type: 'string', enum: ['small', 'medium', 'large', 'part'] },
+            capacity:         { type: 'string', nullable: true },
+            make:             { type: 'string', nullable: true },
+            year:             { type: 'integer', nullable: true },
+            insurance_expiry: { type: 'string', format: 'date', nullable: true },
+            status:           { type: 'string', enum: ['available', 'on_trip', 'maintenance'] },
+          },
+        },
+
+        DriverProfile: {
+          type: 'object',
+          properties: {
+            id:             { type: 'string', format: 'uuid' },
+            name:           { type: 'string' },
+            phone:          { type: 'string' },
+            brokerId:       { type: 'string', format: 'uuid' },
+            licenseNo:      { type: 'string', nullable: true },
+            licenseExpiry:  { type: 'string', format: 'date', nullable: true },
+            aadhaar:        { type: 'string', nullable: true, example: 'XXXX-XXXX-1234' },
+            truckId:        { type: 'string', format: 'uuid', nullable: true },
+            truckReg:       { type: 'string', nullable: true },
+            totalTrips:     { type: 'integer' },
+            avatar:         { type: 'string', nullable: true },
+            status:         { type: 'string', enum: ['available', 'on_trip', 'offline'] },
+            kycStatus:      { type: 'string', enum: ['pending', 'submitted', 'verified', 'rejected'] },
+          },
+        },
+
+        CreateDriverRequest: {
+          type: 'object',
+          required: ['user_id'],
+          properties: {
+            user_id:        { type: 'string', format: 'uuid', description: 'Existing user with role=driver' },
+            license_no:     { type: 'string', nullable: true },
+            license_expiry: { type: 'string', format: 'date', nullable: true },
+            aadhaar:        { type: 'string', nullable: true },
+            truck_id:       { type: 'string', format: 'uuid', nullable: true },
+            avatar:         { type: 'string', nullable: true },
+          },
+        },
+
+        UpdateDriverRequest: {
+          type: 'object',
+          properties: {
+            license_no:     { type: 'string', nullable: true },
+            license_expiry: { type: 'string', format: 'date', nullable: true },
+            aadhaar:        { type: 'string', nullable: true },
+            truck_id:       { type: 'string', format: 'uuid', nullable: true },
+            avatar:         { type: 'string', nullable: true },
+            status:         { type: 'string', enum: ['available', 'on_trip', 'offline'] },
+          },
+        },
+
+        // ── Jobs / Trips ────────────────────────────────────────────────────
+        JobRequest: {
+          type: 'object',
+          properties: {
+            id:          { type: 'string', format: 'uuid' },
+            bookingId:   { type: 'string', format: 'uuid' },
+            clientName:  { type: 'string' },
+            clientPhone: { type: 'string' },
+            pickup:      { type: 'string' },
+            drop:        { type: 'string' },
+            distance:    { type: 'number', nullable: true },
+            truckType:   { type: 'string', nullable: true },
+            weight:      { type: 'string', nullable: true, example: '3.5 tons' },
+            amount:      { type: 'number', nullable: true },
+            status:      { type: 'string', enum: ['pending', 'accepted', 'expired', 'declined'] },
+            expiresIn:   { type: 'integer', example: 12, description: 'Minutes remaining, clamped at 0' },
+            timestamp:   { type: 'string', example: '2 min ago' },
+          },
+        },
+
+        Trip: {
+          type: 'object',
+          properties: {
+            id:             { type: 'string', format: 'uuid' },
+            bookingId:      { type: 'string', format: 'uuid' },
+            status:         { type: 'string' },
+            broker:         { type: 'string', nullable: true },
+            brokerPhone:    { type: 'string', nullable: true },
+            clientName:     { type: 'string' },
+            clientPhone:    { type: 'string' },
+            pickup: {
+              type: 'object',
+              properties: {
+                location: { type: 'string', nullable: true }, address: { type: 'string', nullable: true },
+                contactPerson: { type: 'string', nullable: true }, contactPhone: { type: 'string', nullable: true },
+                time: { type: 'string', format: 'date-time', nullable: true }, lat: { type: 'number', nullable: true }, lng: { type: 'number', nullable: true },
+              },
+            },
+            drop: {
+              type: 'object',
+              properties: {
+                location: { type: 'string', nullable: true }, address: { type: 'string', nullable: true },
+                contactPerson: { type: 'string', nullable: true }, contactPhone: { type: 'string', nullable: true },
+                time: { type: 'string', format: 'date-time', nullable: true }, lat: { type: 'number', nullable: true }, lng: { type: 'number', nullable: true },
+              },
+            },
+            distance:       { type: 'number', nullable: true },
+            estimatedTime:  { type: 'string', nullable: true },
+            cargo: {
+              type: 'object',
+              properties: {
+                material: { type: 'string', nullable: true }, weight: { type: 'number', nullable: true },
+                quantity: { type: 'integer', nullable: true }, specialInstructions: { type: 'string', nullable: true },
+                value: { type: 'number', nullable: true },
+              },
+            },
+            earnings:       { type: 'number', nullable: true },
+            startedAt:      { type: 'string', format: 'date-time', nullable: true },
+            currentLocation: { type: 'object', properties: { lat: { type: 'number', nullable: true }, lng: { type: 'number', nullable: true } } },
+            podUrl:         { type: 'string', nullable: true },
+            timeline: {
+              type: 'array',
+              items: { type: 'object', properties: { step: { type: 'string' }, done: { type: 'boolean' }, time: { type: 'string', format: 'date-time', nullable: true } } },
+            },
+          },
+        },
+
+        // ── Payments / Disputes ─────────────────────────────────────────────
+        Settlement: {
+          type: 'object',
+          properties: {
+            id:           { type: 'string', format: 'uuid' },
+            bookingId:    { type: 'string', format: 'uuid' },
+            route:        { type: 'string', example: 'Pune -> Mumbai' },
+            truck:        { type: 'string', nullable: true },
+            driver:       { type: 'string', nullable: true },
+            amount:       { type: 'number' },
+            platformFee:  { type: 'number' },
+            net:          { type: 'number' },
+            netEarnings:  { type: 'number' },
+            status:       { type: 'string', enum: ['paid', 'pending'] },
+            settledAt:    { type: 'string', format: 'date-time', nullable: true },
+            date:         { type: 'string', format: 'date-time' },
+          },
+        },
+
+        CreateDisputeRequest: {
+          type: 'object',
+          required: ['booking_id', 'issue_type', 'description'],
+          properties: {
+            booking_id:  { type: 'string', format: 'uuid' },
+            issue_type: {
+              type: 'string',
+              enum: ['damaged_goods', 'payment_delay', 'cancellation_fee', 'route_dispute', 'late_delivery', 'fuel_surcharge', 'wrong_items', 'weight_discrepancy'],
+            },
+            description: { type: 'string' },
+          },
+        },
+
+        Dispute: {
+          type: 'object',
+          properties: {
+            id:           { type: 'string', format: 'uuid' },
+            bookingId:    { type: 'string', format: 'uuid' },
+            raisedBy:     { type: 'string', enum: ['client', 'broker'] },
+            raisedByName: { type: 'string' },
+            issueType:    { type: 'string' },
+            description:  { type: 'string' },
+            status:       { type: 'string', enum: ['open', 'under_review', 'resolved'] },
+            resolution:   { type: 'string', nullable: true },
+            date:         { type: 'string', format: 'date-time' },
+          },
+        },
+
+        // ── Admin analytics / settings ──────────────────────────────────────
+        DashboardStats: {
+          type: 'object',
+          properties: {
+            totalBookings:      { type: 'integer' },
+            activeTrips:        { type: 'integer' },
+            totalRevenue:       { type: 'number' },
+            registeredTrucks:   { type: 'integer' },
+            bookingsChange:     { type: 'number', example: 12.5 },
+            activeTripsChange:  { type: 'number', example: -3.2 },
+            revenueChange:      { type: 'number', example: 8.1 },
+            trucksChange:       { type: 'number', example: 0 },
+          },
+        },
+
+        UpdateSettingsRequest: {
+          type: 'object',
+          properties: {
+            platform_name:      { type: 'string' },
+            contact_email:      { type: 'string', format: 'email' },
+            commission_rate:    { type: 'number', example: 10 },
+            email_alerts:       { type: 'boolean' },
+            sms_alerts:         { type: 'boolean' },
+            push_notifications: { type: 'boolean' },
+          },
+        },
       },
     },
 
@@ -356,6 +679,38 @@ const options = {
       {
         name: 'Admin Management',
         description: 'Admin-only endpoints: list, view, block/unblock, and delete users across all roles.',
+      },
+      {
+        name: 'Bookings',
+        description: 'Client booking lifecycle: create, list (role-scoped), view, and advance status through the delivery pipeline.',
+      },
+      {
+        name: 'Pricing',
+        description: 'Price quoting (intra/inter-city/part-load breakdowns) and the admin-managed pricing configuration.',
+      },
+      {
+        name: 'Vehicles',
+        description: 'Broker fleet management: trucks and driver profiles.',
+      },
+      {
+        name: 'Jobs',
+        description: 'Broker job requests generated from bookings — accept/decline, with a TTL-based expiry.',
+      },
+      {
+        name: 'Trips',
+        description: 'Active trip tracking for brokers/drivers: status, live location, and proof of delivery.',
+      },
+      {
+        name: 'Payments',
+        description: 'Settlement records and broker/driver earnings analytics.',
+      },
+      {
+        name: 'Disputes',
+        description: 'Client/broker dispute reporting and admin resolution.',
+      },
+      {
+        name: 'Admin Analytics',
+        description: 'Admin dashboard stats, platform-wide analytics, and platform settings.',
       },
     ],
   },

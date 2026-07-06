@@ -455,4 +455,9 @@ const googleSignIn = async (req, res, next) => {
   }
 };
 
-module.exports = { register, registerAdmin, login, googleSignIn, sendOtp, verifyOtp, refreshToken, logout, forgotPassword, resetPassword };
+// ─── GET /api/auth/me ─────────────────────────────────────────────────────────
+const getMe = async (req, res) => {
+  return successResponse(res, 200, 'Current user fetched', { user: req.user });
+};
+
+module.exports = { register, registerAdmin, login, googleSignIn, sendOtp, verifyOtp, refreshToken, logout, forgotPassword, resetPassword, getMe };
