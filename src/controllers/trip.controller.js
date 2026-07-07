@@ -79,6 +79,23 @@ const getActiveTrip = async (req, res, next) => {
   }
 };
 
+// ─── GET /api/trips/upcoming ───────────────────────────────────────────────────
+// The driver's next assigned trip that hasn't started yet (status still 'confirmed').
+// Distinct from /trips/active, which only ever returns one in-progress trip at a time —
+// this lets the UI show "what's next" without it duplicating the active trip card.
+const getUpcomingTrip = async (req, res, next) => {
+  try {
+    const active = await TripModel.findActiveByDriver(req.user.id);
+    const trip = await TripModel.findUpcomingByDriver(req.user.id, active?.id);
+    if (!trip) return successResponse(res, 200, 'No upcoming trip', { trip: null });
+
+    const timeline = await TripModel.getTimeline(trip.id);
+    return successResponse(res, 200, 'Upcoming trip fetched', { trip: projectTrip(trip, timeline) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── GET /api/trips/:id ───────────────────────────────────────────────────────
 const getTrip = async (req, res, next) => {
   try {
@@ -180,4 +197,4 @@ const uploadPod = async (req, res) => {
   );
 };
 
-module.exports = { getActiveTrip, getTrip, updateTripStatus, updateTripLocation, uploadPod };
+module.exports = { getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, updateTripLocation, uploadPod };

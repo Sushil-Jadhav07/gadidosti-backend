@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { getActiveTrip, getTrip, updateTripStatus, updateTripLocation, uploadPod } = require('../controllers/trip.controller');
+const { getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, updateTripLocation, uploadPod } = require('../controllers/trip.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { updateTripStatusValidation, updateTripLocationValidation } = require('../validations/trip.validation');
@@ -23,6 +23,24 @@ const { updateTripStatusValidation, updateTripLocationValidation } = require('..
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.get('/trips/active', authenticate, authorize('driver'), getActiveTrip);
+
+/**
+ * @swagger
+ * /api/trips/upcoming:
+ *   get:
+ *     tags: [Trips]
+ *     summary: Get the driver's next assigned trip that hasn't started yet
+ *     description: Status still 'confirmed' — distinct from /trips/active, which only returns a trip once it's in progress. Never returns the same trip as /trips/active. Returns { trip null } if there is none.
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Upcoming trip fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ */
+router.get('/trips/upcoming', authenticate, authorize('driver'), getUpcomingTrip);
 
 /**
  * @swagger

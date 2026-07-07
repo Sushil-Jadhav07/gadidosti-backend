@@ -4,6 +4,8 @@ const { successResponse } = require('../utils/response');
 const projectSettlement = (row) => ({
   id: row.id,
   bookingId: row.booking_id,
+  brokerId: row.broker_id,
+  driverId: row.driver_id,
   route: row.route,
   truck: row.truck,
   driver: row.driver_name,

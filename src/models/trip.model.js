@@ -55,6 +55,24 @@ class TripModel {
     return result.rows[0] || null;
   }
 
+  // The driver's next assigned-but-not-yet-started trip (status still 'confirmed').
+  // Excludes activeTripId so the same trip never appears as both active and upcoming.
+  static async findUpcomingByDriver(driverId, activeTripId) {
+    const conditions = [`tr.driver_id = $1`, `tr.status = 'confirmed'`];
+    const params = [driverId];
+    let idx = 2;
+    if (activeTripId) {
+      conditions.push(`tr.id != $${idx++}`);
+      params.push(activeTripId);
+    }
+    const result = await pool.query(
+      `${SELECT_WITH_JOINS} WHERE ${conditions.join(' AND ')}
+       ORDER BY tr.pickup_time ASC NULLS LAST, tr.created_at ASC LIMIT 1`,
+      params
+    );
+    return result.rows[0] || null;
+  }
+
   static async findAllByBroker(brokerId, { status, page = 1, limit = 10 } = {}) {
     const conditions = [`tr.broker_id = $1`];
     const params = [brokerId];

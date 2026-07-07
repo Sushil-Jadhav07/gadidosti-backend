@@ -585,6 +585,8 @@ const options = {
           properties: {
             id:           { type: 'string', format: 'uuid' },
             bookingId:    { type: 'string', format: 'uuid' },
+            brokerId:     { type: 'string', format: 'uuid', nullable: true },
+            driverId:     { type: 'string', format: 'uuid', nullable: true },
             route:        { type: 'string', example: 'Pune -> Mumbai' },
             truck:        { type: 'string', nullable: true },
             driver:       { type: 'string', nullable: true },
