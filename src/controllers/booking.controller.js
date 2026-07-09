@@ -16,6 +16,7 @@ const STATUS_STEPS = ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'pi
 const projectBooking = (row, timeline, role) => {
   const base = {
     id: row.id,
+    bookingNumber: row.booking_number,
     clientId: row.client_id,
     brokerId: row.broker_id,
     driverId: row.driver_id,

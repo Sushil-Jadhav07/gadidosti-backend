@@ -2,7 +2,7 @@ const pool = require('../config/db');
 
 const SELECT_WITH_JOINS = `
   SELECT jr.*,
-         b.pickup_location AS pickup, b.drop_location AS drop_location,
+         b.booking_number, b.pickup_location AS pickup, b.drop_location AS drop_location,
          b.truck_type, b.weight, b.weight_unit,
          client.name AS client_name, client.phone AS client_phone
   FROM job_requests jr

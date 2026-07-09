@@ -5,7 +5,7 @@ const SELECT_WITH_JOINS = `
          broker.name  AS broker_name,  broker.phone  AS broker_phone,
          driver.name  AS driver_name,  driver.phone  AS driver_phone,
          client.name  AS client_name,  client.phone  AS client_phone,
-         b.truck_id, t.registration AS truck_reg
+         b.truck_id, b.booking_number, t.registration AS truck_reg
   FROM trips tr
   JOIN bookings b       ON b.id = tr.booking_id
   JOIN users client     ON client.id = b.client_id

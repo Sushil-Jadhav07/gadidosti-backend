@@ -8,6 +8,7 @@ const logger = require('../utils/logger');
 const projectDispute = (row) => ({
   id: row.id,
   bookingId: row.booking_id,
+  bookingNumber: row.booking_number,
   raisedBy: row.raised_by_role,
   raisedByName: row.raised_by_name,
   issueType: row.issue_type,

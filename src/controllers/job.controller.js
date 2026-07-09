@@ -29,6 +29,7 @@ const expiresInMinutes = (expiresAt) => {
 const projectJobRequest = (row) => ({
   id: row.id,
   bookingId: row.booking_id,
+  bookingNumber: row.booking_number,
   clientName: row.client_name,
   clientPhone: row.client_phone,
   pickup: row.pickup,

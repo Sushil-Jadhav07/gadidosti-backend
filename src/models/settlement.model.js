@@ -2,6 +2,7 @@ const pool = require('../config/db');
 
 const SELECT_WITH_JOINS = `
   SELECT s.*,
+         b.booking_number,
          (b.pickup_location || ' -> ' || b.drop_location) AS route,
          t.registration AS truck,
          driver.name AS driver_name

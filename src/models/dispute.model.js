@@ -1,9 +1,10 @@
 const pool = require('../config/db');
 
 const SELECT_WITH_JOINS = `
-  SELECT d.*, u.name AS raised_by_name
+  SELECT d.*, u.name AS raised_by_name, b.booking_number
   FROM disputes d
   JOIN users u ON u.id = d.raised_by_user_id
+  JOIN bookings b ON b.id = d.booking_id
 `;
 
 class DisputeModel {

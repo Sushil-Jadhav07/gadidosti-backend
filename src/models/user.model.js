@@ -45,6 +45,15 @@ class UserModel {
     return result.rows[0] || null;
   }
 
+  // Find by phone, safe fields only (no password_hash) — used for broker/admin lookups, not auth.
+  static async findByPhonePublic(phone) {
+    const result = await pool.query(
+      `SELECT id, name, phone, email, role, kyc_status FROM users WHERE phone = $1`,
+      [phone]
+    );
+    return result.rows[0] || null;
+  }
+
   // Find by Google ID (includes password_hash and status for auth)
   static async findByGoogleId(googleId) {
     const result = await pool.query(

@@ -3,7 +3,7 @@ const router = express.Router();
 
 const {
   createTruck, listTrucks, getTruck, updateTruck, deleteTruck,
-  createDriver, listDrivers, getDriver, updateDriver,
+  lookupDriverByPhone, createDriver, listDrivers, getDriver, updateDriver,
 } = require('../controllers/vehicle.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -160,6 +160,44 @@ router.patch('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin'),
 router.delete('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin'), deleteTruck);
 
 // ─── DRIVERS ──────────────────────────────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/lookup:
+ *   get:
+ *     tags: [Vehicles]
+ *     summary: Look up a driver-role user by phone number (broker)
+ *     description: Used by the "Add Driver" flow so the broker can find a driver by phone instead of needing their raw user ID. Returns 404 if no driver-role account has that phone, 409 if that driver already has a profile (linked to a broker).
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: phone
+ *         required: true
+ *         schema: { type: string, example: '9876543210' }
+ *     responses:
+ *       200:
+ *         description: Driver found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: No driver account found with this phone number
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Driver already linked to a broker
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Invalid phone number
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/vehicles/drivers/lookup', authenticate, authorize('broker'), lookupDriverByPhone);
 
 /**
  * @swagger

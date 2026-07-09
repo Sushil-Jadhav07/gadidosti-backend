@@ -189,6 +189,7 @@ const runMigrations = async (client) => {
 
       CREATE TABLE IF NOT EXISTS bookings (
         id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        booking_number      VARCHAR(20),
         client_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         broker_id           UUID REFERENCES users(id) ON DELETE SET NULL,
         driver_id           UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -309,6 +310,29 @@ const runMigrations = async (client) => {
     // had the table, so back-fill it explicitly here.
     await client.query(`
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS rating JSONB;
+    `);
+
+    // booking_number is a short human-readable reference (BKG-YYYYMM-NNN) shown in the UI
+    // instead of the raw UUID. Same no-op-on-existing-table caveat as rating above.
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_number VARCHAR(20);
+    `);
+
+    // Back-fill any bookings created before booking_number existed, numbering them
+    // sequentially within their creation month in chronological order.
+    await client.query(`
+      WITH numbered AS (
+        SELECT id, 'BKG-' || TO_CHAR(created_at, 'YYYYMM') || '-' ||
+               LPAD(ROW_NUMBER() OVER (PARTITION BY TO_CHAR(created_at, 'YYYYMM') ORDER BY created_at)::text, 3, '0') AS generated
+        FROM bookings
+        WHERE booking_number IS NULL
+      )
+      UPDATE bookings b SET booking_number = numbered.generated
+      FROM numbered WHERE b.id = numbered.id;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_booking_number ON bookings(booking_number);
     `);
 
     // ── JOBS + TRIPS ──

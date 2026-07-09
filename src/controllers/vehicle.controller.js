@@ -171,6 +171,31 @@ const deleteTruck = async (req, res, next) => {
 
 // ─── DRIVERS ──────────────────────────────────────────────────────────────────
 
+// GET /api/vehicles/drivers/lookup?phone=...
+// Lets a broker find a driver's account by phone instead of needing their raw user ID
+// before linking them via POST /api/vehicles/drivers.
+const lookupDriverByPhone = async (req, res, next) => {
+  try {
+    const phone = String(req.query.phone || '').replace(/\D/g, '').slice(-10);
+    if (phone.length !== 10) return errorResponse(res, 422, 'Enter a valid 10-digit phone number');
+
+    const targetUser = await UserModel.findByPhonePublic(phone);
+    if (!targetUser || targetUser.role !== 'driver') {
+      return errorResponse(res, 404, 'No driver account found with this phone number');
+    }
+
+    if (await DriverProfileModel.exists(targetUser.id)) {
+      return errorResponse(res, 409, 'This driver is already linked to a broker');
+    }
+
+    return successResponse(res, 200, 'Driver found', {
+      driver: { id: targetUser.id, name: targetUser.name, phone: targetUser.phone, kycStatus: targetUser.kyc_status },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // POST /api/vehicles/drivers
 const createDriver = async (req, res, next) => {
   try {
@@ -276,5 +301,5 @@ const updateDriver = async (req, res, next) => {
 
 module.exports = {
   createTruck, listTrucks, getTruck, updateTruck, deleteTruck,
-  createDriver, listDrivers, getDriver, updateDriver,
+  lookupDriverByPhone, createDriver, listDrivers, getDriver, updateDriver,
 };

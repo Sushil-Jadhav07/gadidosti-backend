@@ -335,6 +335,7 @@ const options = {
           type: 'object',
           properties: {
             id:             { type: 'string', format: 'uuid' },
+            bookingNumber:  { type: 'string', example: 'BKG-202412-003', description: 'Short human-readable reference for display' },
             status:         { type: 'string', enum: ['pending', 'confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'] },
             pickup:         { type: 'string', example: 'Pune, Maharashtra' },
             drop:           { type: 'string', example: 'Mumbai, Maharashtra' },
@@ -516,8 +517,9 @@ const options = {
         JobRequest: {
           type: 'object',
           properties: {
-            id:          { type: 'string', format: 'uuid' },
-            bookingId:   { type: 'string', format: 'uuid' },
+            id:            { type: 'string', format: 'uuid' },
+            bookingId:     { type: 'string', format: 'uuid' },
+            bookingNumber: { type: 'string', example: 'BKG-202412-003', description: 'Short human-readable reference for display' },
             clientName:  { type: 'string' },
             clientPhone: { type: 'string' },
             pickup:      { type: 'string' },
@@ -537,6 +539,7 @@ const options = {
           properties: {
             id:             { type: 'string', format: 'uuid' },
             bookingId:      { type: 'string', format: 'uuid' },
+            bookingNumber:  { type: 'string', example: 'BKG-202412-003', description: 'Short human-readable reference for display' },
             status:         { type: 'string' },
             broker:         { type: 'string', nullable: true },
             brokerPhone:    { type: 'string', nullable: true },
@@ -585,6 +588,7 @@ const options = {
           properties: {
             id:           { type: 'string', format: 'uuid' },
             bookingId:    { type: 'string', format: 'uuid' },
+            bookingNumber: { type: 'string', example: 'BKG-202412-003', description: 'Short human-readable reference for display' },
             brokerId:     { type: 'string', format: 'uuid', nullable: true },
             driverId:     { type: 'string', format: 'uuid', nullable: true },
             route:        { type: 'string', example: 'Pune -> Mumbai' },
@@ -618,6 +622,7 @@ const options = {
           properties: {
             id:           { type: 'string', format: 'uuid' },
             bookingId:    { type: 'string', format: 'uuid' },
+            bookingNumber: { type: 'string', example: 'BKG-202412-003', description: 'Short human-readable reference for display' },
             raisedBy:     { type: 'string', enum: ['client', 'broker'] },
             raisedByName: { type: 'string' },
             issueType:    { type: 'string' },

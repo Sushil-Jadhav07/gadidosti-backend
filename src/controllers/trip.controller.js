@@ -13,6 +13,7 @@ const TRIP_STEPS = ['confirmed', 'en_route_pickup', 'picked_up', 'in_transit', '
 const projectTrip = (row, timeline) => ({
   id: row.id,
   bookingId: row.booking_id,
+  bookingNumber: row.booking_number,
   status: row.status,
   broker: row.broker_name || null,
   brokerPhone: row.broker_phone || null,
