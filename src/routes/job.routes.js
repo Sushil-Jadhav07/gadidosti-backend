@@ -37,7 +37,9 @@ router.get('/jobs/requests', authenticate, authorize('broker'), listJobRequests)
  *   patch:
  *     tags: [Jobs]
  *     summary: Accept a job request
- *     description: Advances the booking to confirmed and notifies the client. Does NOT assign a driver/truck or create the trip yet — call POST /api/jobs/{id}/assign-driver next for that.
+ *     description: |
+ *       Advances the booking to confirmed and notifies the client. Does NOT assign a driver/truck or create the trip yet — call POST /api/jobs/{id}/assign-driver next for that.
+ *       Every new booking is broadcast to all verified brokers as a separate job_request row, so accepting is a compare-and-swap: the first broker to accept wins, and every other broker's pending request for the same booking is automatically declined. If another broker won the race a split second earlier, this returns 409.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -53,6 +55,11 @@ router.get('/jobs/requests', authenticate, authorize('broker'), listJobRequests)
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  *       400:
  *         description: Already actioned or expired
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Another broker already accepted this booking first
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }

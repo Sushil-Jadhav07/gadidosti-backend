@@ -72,16 +72,25 @@ const acceptJobRequest = async (req, res, next) => {
       return errorResponse(res, 400, 'This job request has expired');
     }
 
-    const booking = await BookingModel.findById(jobRequest.booking_id);
+    // Broadcast bookings go to every broker at once — claim this specific request atomically
+    // first, then the booking itself, so two brokers racing on the same booking can't both win.
+    const claimed = await JobRequestModel.acceptIfPending(id);
+    if (!claimed) return errorResponse(res, 400, 'Job request is already actioned');
 
-    await BookingModel.advanceStatus(booking.id, {
+    const booking = await BookingModel.advanceStatusIfCurrent(jobRequest.booking_id, 'pending', {
       status: 'confirmed',
       currentStep: 1,
       brokerId: req.user.id,
     });
-    await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
 
-    await JobRequestModel.setStatus(id, 'accepted');
+    if (!booking) {
+      // Another broker already got this booking first — undo our claim and bail out.
+      await JobRequestModel.setStatus(id, 'declined');
+      return errorResponse(res, 409, 'This booking has already been accepted by another broker');
+    }
+
+    await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
+    await JobRequestModel.declineOthersForBooking(booking.id, id);
 
     await AuditLogModel.log({
       userId: req.user.id,

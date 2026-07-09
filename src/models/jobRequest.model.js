@@ -66,6 +66,24 @@ class JobRequestModel {
     );
     return result.rows[0] || null;
   }
+
+  // Atomic compare-and-swap — only flips pending -> accepted, so two brokers racing on
+  // *their own* job_request row for the same booking can't both "win" it.
+  static async acceptIfPending(id) {
+    const result = await pool.query(
+      `UPDATE job_requests SET status = 'accepted' WHERE id = $1 AND status = 'pending' RETURNING *`,
+      [id]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Declines every other still-pending request for the same booking once one broker has won it.
+  static async declineOthersForBooking(bookingId, exceptJobRequestId) {
+    await pool.query(
+      `UPDATE job_requests SET status = 'declined' WHERE booking_id = $1 AND id != $2 AND status = 'pending'`,
+      [bookingId, exceptJobRequestId]
+    );
+  }
 }
 
 module.exports = JobRequestModel;

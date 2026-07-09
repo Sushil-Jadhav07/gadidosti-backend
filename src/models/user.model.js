@@ -169,6 +169,15 @@ class UserModel {
     );
   }
 
+  // KYC-verified, active brokers — used to broadcast a new booking's job request to
+  // everyone eligible to accept it (there's no broker-selection step in the client app).
+  static async findActiveBrokers() {
+    const result = await pool.query(
+      `SELECT id FROM users WHERE role = 'broker' AND status = 'active' AND kyc_status = 'verified'`
+    );
+    return result.rows.map((row) => row.id);
+  }
+
   // List users with filters + pagination (admin)
   static async findAll({ role, status, kycStatus, search, page = 1, limit = 10 }) {
     const offset = (page - 1) * limit;

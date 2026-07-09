@@ -336,6 +336,10 @@ const options = {
           properties: {
             id:             { type: 'string', format: 'uuid' },
             bookingNumber:  { type: 'string', example: 'BKG-202412-003', description: 'Short human-readable reference for display' },
+            clientId:       { type: 'string', format: 'uuid' },
+            brokerId:       { type: 'string', format: 'uuid', nullable: true, description: 'Null until a broker accepts the job request' },
+            driverId:       { type: 'string', format: 'uuid', nullable: true, description: 'Null until the broker assigns a driver' },
+            truckId:        { type: 'string', format: 'uuid', nullable: true, description: 'Null until the broker assigns a truck' },
             status:         { type: 'string', enum: ['pending', 'confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'] },
             pickup:         { type: 'string', example: 'Pune, Maharashtra' },
             drop:           { type: 'string', example: 'Mumbai, Maharashtra' },
@@ -361,6 +365,8 @@ const options = {
             clientPhone:    { type: 'string', nullable: true, description: 'Admin projection only' },
             clientEmail:    { type: 'string', nullable: true, description: 'Admin projection only' },
             driverPhone:    { type: 'string', nullable: true, description: 'Admin projection only' },
+            createdAt:      { type: 'string', format: 'date-time' },
+            updatedAt:      { type: 'string', format: 'date-time' },
           },
         },
 

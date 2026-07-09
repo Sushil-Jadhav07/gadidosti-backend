@@ -78,8 +78,12 @@ class BookingModel {
     return result.rows;
   }
 
-  static async findById(id) {
-    const result = await pool.query(`${SELECT_WITH_JOINS} WHERE b.id = $1`, [id]);
+  // Accepts either the raw UUID or the human-readable booking_number (e.g. "BKG-202412-001") —
+  // callers (search boxes, support lookups) shouldn't need to know which one they have.
+  static async findById(idOrBookingNumber) {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrBookingNumber || '');
+    const column = isUuid ? 'b.id' : 'b.booking_number';
+    const result = await pool.query(`${SELECT_WITH_JOINS} WHERE ${column} = $1`, [idOrBookingNumber]);
     return result.rows[0] || null;
   }
 
@@ -146,6 +150,24 @@ class BookingModel {
        WHERE id = $6
        RETURNING *`,
       [status, currentStep, brokerId || null, driverId || null, truckId || null, id]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Same as advanceStatus, but only commits if the booking is still in fromStatus — the
+  // compare-and-swap that stops two brokers racing to accept the same broadcast booking.
+  static async advanceStatusIfCurrent(id, fromStatus, { status, currentStep, brokerId, driverId, truckId }) {
+    const result = await pool.query(
+      `UPDATE bookings
+       SET status = $1,
+           current_step = COALESCE($2, current_step),
+           broker_id = COALESCE($3, broker_id),
+           driver_id = COALESCE($4, driver_id),
+           truck_id = COALESCE($5, truck_id),
+           updated_at = NOW()
+       WHERE id = $6 AND status = $7
+       RETURNING *`,
+      [status, currentStep, brokerId || null, driverId || null, truckId || null, id, fromStatus]
     );
     return result.rows[0] || null;
   }

@@ -4,6 +4,7 @@ const PricingModel = require('../models/pricing.model');
 const TripModel = require('../models/trip.model');
 const TruckModel = require('../models/truck.model');
 const DriverProfileModel = require('../models/driverProfile.model');
+const UserModel = require('../models/user.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const pool = require('../config/db');
@@ -74,7 +75,7 @@ const createBooking = async (req, res, next) => {
     const {
       pickup_location, pickup_lat, pickup_lng, drop_location, drop_lat, drop_lng,
       truck_type, truck_category, weight, weight_unit, quantity, material,
-      transport_type = 'intra', scheduled_date, distance, broker_id, truck_id,
+      transport_type = 'intra', scheduled_date, distance,
       amount: providedAmount, payment_status,
     } = req.body;
 
@@ -88,10 +89,10 @@ const createBooking = async (req, res, next) => {
       platformFee = pricingBreakdown.platformFee;
     }
 
+    // No broker/truck is assigned at booking time — a broker picks up the request via the job
+    // queue and assigns a driver + truck themselves (see POST /api/jobs/{id}/assign-driver).
     const booking = await BookingModel.create({
       clientId: req.user.id,
-      brokerId: broker_id,
-      truckId: truck_id,
       pickupLocation: pickup_location,
       pickupLat: pickup_lat,
       pickupLng: pickup_lng,
@@ -115,21 +116,24 @@ const createBooking = async (req, res, next) => {
 
     await BookingModel.addTimelineStep(booking.id, { step: 'pending', position: 0 });
 
-    if (broker_id) {
+    // Broadcast to every verified, active broker — whichever one accepts first gets the job.
+    // acceptJobRequest() auto-declines the sibling requests once someone takes it.
+    const brokerIds = await UserModel.findActiveBrokers();
+    await Promise.all(brokerIds.map(async (brokerId) => {
       const jobRequest = await JobRequestModel.create({
         bookingId: booking.id,
-        brokerId: broker_id,
+        brokerId,
         distance,
         amount,
       });
       await NotificationModel.create({
-        userId: broker_id,
+        userId: brokerId,
         title: 'New Job Request',
         message: `A new booking (${pickup_location} to ${drop_location}) is awaiting your response.`,
         type: 'booking',
         meta: { booking_id: booking.id, job_request_id: jobRequest.id },
       });
-    }
+    }));
 
     await AuditLogModel.log({
       userId: req.user.id,
@@ -304,6 +308,35 @@ const cancelBooking = async (req, res, next) => {
   }
 };
 
+// ─── PATCH /api/bookings/:id/pay ─────────────────────────────────────────────
+// Settles a booking that was created with payment_status "pending" (Pay Later) —
+// there's no real payment gateway wired up, this just records that the client paid.
+const payBooking = async (req, res, next) => {
+  try {
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (booking.status === 'cancelled') return errorResponse(res, 409, 'Booking is cancelled');
+    if (booking.payment_status !== 'pending') return errorResponse(res, 409, `Booking is already ${booking.payment_status}`);
+
+    await BookingModel.update(booking.id, { payment_status: 'paid' });
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'BOOKING_PAID',
+      entity: 'bookings',
+      entityId: booking.id,
+      ipAddress: req.ip,
+    });
+
+    const full = await BookingModel.findById(booking.id);
+    const timeline = await BookingModel.getTimeline(booking.id);
+    return successResponse(res, 200, 'Payment recorded', { booking: projectBooking(full, timeline, req.user.role) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 const rateBooking = async (req, res, next) => {
   try {
     const booking = await BookingModel.findById(req.params.id);
@@ -353,4 +386,4 @@ const estimatePricing = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, listBookings, getBooking, updateBookingStatus, cancelBooking, rateBooking, estimatePricing };
+module.exports = { createBooking, listBookings, getBooking, updateBookingStatus, cancelBooking, payBooking, rateBooking, estimatePricing };

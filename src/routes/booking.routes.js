@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, listBookings, getBooking, updateBookingStatus, cancelBooking, rateBooking, estimatePricing } = require('../controllers/booking.controller');
+const { createBooking, listBookings, getBooking, updateBookingStatus, cancelBooking, payBooking, rateBooking, estimatePricing } = require('../controllers/booking.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { createBookingValidation, updateBookingStatusValidation, rateBookingValidation } = require('../validations/booking.validation');
@@ -13,6 +13,7 @@ const { estimatePricingValidation } = require('../validations/pricing.validation
  *   post:
  *     tags: [Bookings]
  *     summary: Create a booking (client)
+ *     description: No broker or truck is assigned at creation — the booking is broadcast as a job_request to every KYC-verified, active broker. Whichever broker accepts first (PATCH /api/jobs/requests/{id}/accept) wins it; everyone else's request is auto-declined. The winning broker then assigns a driver + truck themselves via POST /api/jobs/{id}/assign-driver.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -39,8 +40,6 @@ const { estimatePricingValidation } = require('../validations/pricing.validation
  *               scheduled_date: { type: string, format: date-time }
  *               distance: { type: number, description: "If provided, pricing is auto-computed" }
  *               amount: { type: number, description: "Overrides the auto-computed total when provided" }
- *               broker_id: { type: string, format: uuid, description: "Optional — creates a job request for this broker" }
- *               truck_id: { type: string, format: uuid }
  *               payment_status: { type: string, enum: [paid, pending], default: pending, description: "'paid' for Pay Now, 'pending' for Pay Later — no real payment gateway is wired up, this just records the client's choice" }
  *     responses:
  *       201:
@@ -118,15 +117,16 @@ router.post('/bookings/quote', authenticate, estimatePricingValidation, validate
  * /api/bookings/{id}:
  *   get:
  *     tags: [Bookings]
- *     summary: Get a booking by ID (role-appropriate projection)
- *     description: Admin gets extra fields (client, clientPhone, clientEmail, driverPhone) that other roles don't.
+ *     summary: Get a booking by ID or booking number (role-appropriate projection)
+ *     description: Admin gets extra fields (client, clientPhone, clientEmail, driverPhone) that other roles don't. Accepts either the raw UUID or the human-readable booking_number (e.g. "BKG-202412-001").
  *     security:
  *       - BearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
  *         required: true
- *         schema: { type: string, format: uuid }
+ *         description: Booking UUID or booking_number
+ *         schema: { type: string, example: 'BKG-202412-001' }
  *     responses:
  *       200:
  *         description: Booking fetched
@@ -222,6 +222,45 @@ router.patch('/bookings/:id/status', authenticate, authorize('broker', 'driver',
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/bookings/:id/cancel', authenticate, authorize('client', 'admin'), cancelBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/pay:
+ *   patch:
+ *     tags: [Bookings]
+ *     summary: Settle a Pay Later booking (client)
+ *     description: Marks payment_status as paid. Only allowed while payment_status is pending and the booking isn't cancelled. No real payment gateway is wired up — this just records that the client paid.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: Booking UUID or booking_number
+ *         schema: { type: string, example: 'BKG-202412-001' }
+ *     responses:
+ *       200:
+ *         description: Payment recorded
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Booking is cancelled, or already paid/refunded
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/bookings/:id/pay', authenticate, authorize('client'), payBooking);
 
 /**
  * @swagger

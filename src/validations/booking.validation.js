@@ -13,8 +13,6 @@ const createBookingValidation = [
   body('quantity').optional({ nullable: true }).isInt({ min: 0 }).withMessage('quantity must be a positive integer'),
   body('distance').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('distance must be a positive number'),
   body('amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('amount must be a positive number'),
-  body('broker_id').optional({ nullable: true }).isUUID().withMessage('broker_id must be a valid UUID'),
-  body('truck_id').optional({ nullable: true }).isUUID().withMessage('truck_id must be a valid UUID'),
   body('payment_status').optional({ nullable: true }).isIn(['paid', 'pending']).withMessage('payment_status must be paid or pending'),
 ];
 
