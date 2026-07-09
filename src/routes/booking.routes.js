@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, listBookings, getBooking, updateBookingStatus, estimatePricing } = require('../controllers/booking.controller');
+const { createBooking, listBookings, getBooking, updateBookingStatus, cancelBooking, rateBooking, estimatePricing } = require('../controllers/booking.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
-const { createBookingValidation, updateBookingStatusValidation } = require('../validations/booking.validation');
+const { createBookingValidation, updateBookingStatusValidation, rateBookingValidation } = require('../validations/booking.validation');
 const { estimatePricingValidation } = require('../validations/pricing.validation');
 
 /**
@@ -67,7 +67,7 @@ router.post('/bookings', authenticate, authorize('client'), createBookingValidat
  *     parameters:
  *       - in: query
  *         name: status
- *         schema: { type: string, enum: [pending, confirmed, en_route_pickup, picked_up, in_transit, delivered, completed, cancelled] }
+ *         schema: { type: string, enum: [pending, confirmed, assigned, en_route_pickup, picked_up, in_transit, delivered, completed, cancelled] }
  *       - in: query
  *         name: page
  *         schema: { type: integer, default: 1 }
@@ -167,7 +167,7 @@ router.get('/bookings/:id', authenticate, getBooking);
  *             type: object
  *             required: [status]
  *             properties:
- *               status: { type: string, enum: [pending, confirmed, en_route_pickup, picked_up, in_transit, delivered, completed, cancelled] }
+ *               status: { type: string, enum: [pending, confirmed, assigned, en_route_pickup, picked_up, in_transit, delivered, completed, cancelled] }
  *               driver_id: { type: string, format: uuid }
  *               truck_id: { type: string, format: uuid }
  *     responses:
@@ -183,6 +183,8 @@ router.get('/bookings/:id', authenticate, getBooking);
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/bookings/:id/status', authenticate, authorize('broker', 'driver', 'admin'), updateBookingStatusValidation, validate, updateBookingStatus);
+router.patch('/bookings/:id/cancel', authenticate, authorize('client', 'admin'), cancelBooking);
+router.post('/bookings/:id/rate', authenticate, authorize('client'), rateBookingValidation, validate, rateBooking);
 
 /**
  * @swagger

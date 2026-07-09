@@ -20,10 +20,15 @@ const createBookingValidation = [
 const updateBookingStatusValidation = [
   body('status')
     .notEmpty().withMessage('Status is required')
-    .isIn(['pending', 'confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'])
+    .isIn(['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'])
     .withMessage('Invalid booking status'),
   body('driver_id').optional({ nullable: true }).isUUID().withMessage('driver_id must be a valid UUID'),
   body('truck_id').optional({ nullable: true }).isUUID().withMessage('truck_id must be a valid UUID'),
 ];
 
-module.exports = { createBookingValidation, updateBookingStatusValidation };
+const rateBookingValidation = [
+  body('stars').notEmpty().withMessage('stars is required').isInt({ min: 1, max: 5 }).withMessage('stars must be between 1 and 5'),
+  body('review').optional({ nullable: true }).isString().withMessage('review must be a string'),
+];
+
+module.exports = { createBookingValidation, updateBookingStatusValidation, rateBookingValidation };

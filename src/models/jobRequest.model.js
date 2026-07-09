@@ -26,6 +26,11 @@ class JobRequestModel {
     return result.rows[0] || null;
   }
 
+  static async findByBookingId(bookingId) {
+    const result = await pool.query(`${SELECT_WITH_JOINS} WHERE jr.booking_id = $1 ORDER BY jr.created_at DESC`, [bookingId]);
+    return result.rows;
+  }
+
   // Auto-lapses anything past its expiry before reading — job requests are a TTL feature.
   static async findByBroker(brokerId, { page = 1, limit = 10 } = {}) {
     await pool.query(

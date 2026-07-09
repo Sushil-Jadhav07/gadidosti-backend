@@ -67,7 +67,7 @@ class BookingModel {
   }
 
   // Role-scoped list: client -> own bookings, broker -> assigned to them, admin -> all with filters
-  static async findAll({ role, userId, status, page = 1, limit = 10 } = {}) {
+  static async findAll({ role, userId, status, sort = 'desc', page = 1, limit = 10 } = {}) {
     const offset = (page - 1) * limit;
     const conditions = [];
     const params = [];
@@ -85,9 +85,15 @@ class BookingModel {
     }
     // admin: no scoping condition — sees all
 
-    if (status) {
+    const statuses = typeof status === 'string'
+      ? status.split(',').map((value) => value.trim()).filter(Boolean)
+      : [];
+    if (statuses.length === 1) {
       conditions.push(`b.status = $${idx++}`);
-      params.push(status);
+      params.push(statuses[0]);
+    } else if (statuses.length > 1) {
+      conditions.push(`b.status = ANY($${idx++})`);
+      params.push(statuses);
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -95,8 +101,10 @@ class BookingModel {
     const countResult = await pool.query(`SELECT COUNT(*) FROM bookings b ${where}`, params);
     const total = parseInt(countResult.rows[0].count);
 
+    const order = String(sort).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
     const rows = await pool.query(
-      `${SELECT_WITH_JOINS} ${where} ORDER BY b.created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
+      `${SELECT_WITH_JOINS} ${where} ORDER BY b.created_at ${order} LIMIT $${idx} OFFSET $${idx + 1}`,
       [...params, limit, offset]
     );
 
@@ -121,6 +129,22 @@ class BookingModel {
        WHERE id = $6
        RETURNING *`,
       [status, currentStep, brokerId || null, driverId || null, truckId || null, id]
+    );
+    return result.rows[0] || null;
+  }
+
+  static async update(id, fields) {
+    const keys = Object.keys(fields).filter((key) => fields[key] !== undefined);
+    if (!keys.length) return this.findById(id);
+
+    const assignments = keys.map((key, index) => `${key} = $${index + 1}`);
+    const values = keys.map((key) => fields[key]);
+    const result = await pool.query(
+      `UPDATE bookings
+       SET ${assignments.join(', ')}, updated_at = NOW()
+       WHERE id = $${keys.length + 1}
+       RETURNING *`,
+      [...values, id]
     );
     return result.rows[0] || null;
   }

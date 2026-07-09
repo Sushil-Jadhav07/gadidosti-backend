@@ -101,6 +101,49 @@ class TripModel {
     };
   }
 
+  static async findAll({ role, userId, status, page = 1, limit = 10 } = {}) {
+    const offset = (page - 1) * limit;
+    const conditions = [];
+    const params = [];
+    let idx = 1;
+
+    if (role === 'broker') {
+      conditions.push(`tr.broker_id = $${idx++}`);
+      params.push(userId);
+    } else if (role === 'driver') {
+      conditions.push(`tr.driver_id = $${idx++}`);
+      params.push(userId);
+    }
+
+    const statuses = typeof status === 'string'
+      ? status.split(',').map((value) => value.trim()).filter(Boolean)
+      : [];
+    if (statuses.length === 1) {
+      conditions.push(`tr.status = $${idx++}`);
+      params.push(statuses[0]);
+    } else if (statuses.length > 1) {
+      conditions.push(`tr.status = ANY($${idx++})`);
+      params.push(statuses);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const countResult = await pool.query(`SELECT COUNT(*) FROM trips tr ${where}`, params);
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    const rows = await pool.query(
+      `${SELECT_WITH_JOINS} ${where} ORDER BY tr.created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
+      [...params, limit, offset]
+    );
+
+    return {
+      trips: rows.rows,
+      total,
+      page: parseInt(page, 10),
+      limit: parseInt(limit, 10),
+      total_pages: Math.ceil(total / limit) || 0,
+    };
+  }
+
   static async updateStatus(id, status) {
     const result = await pool.query(
       `UPDATE trips SET status = $1,

@@ -1,10 +1,13 @@
 const JobRequestModel = require('../models/jobRequest.model');
 const BookingModel = require('../models/booking.model');
 const TripModel = require('../models/trip.model');
+const TruckModel = require('../models/truck.model');
+const DriverProfileModel = require('../models/driverProfile.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
+const STATUS_STEPS = ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
 
 // "2 min ago" style relative-time label — the broker JobRequests list reads this, not a raw timestamp.
 const timeAgo = (date) => {
@@ -59,8 +62,6 @@ const listJobRequests = async (req, res, next) => {
 const acceptJobRequest = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { driver_id, truck_id } = req.body;
-
     const jobRequest = await JobRequestModel.findById(id);
     if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
     if (jobRequest.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your job request');
@@ -72,9 +73,88 @@ const acceptJobRequest = async (req, res, next) => {
 
     const booking = await BookingModel.findById(jobRequest.booking_id);
 
+    await BookingModel.advanceStatus(booking.id, {
+      status: 'confirmed',
+      currentStep: 1,
+      brokerId: req.user.id,
+    });
+    await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
+
+    await JobRequestModel.setStatus(id, 'accepted');
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'JOB_REQUEST_ACCEPTED',
+      entity: 'job_requests',
+      entityId: id,
+      meta: { booking_id: booking.id },
+      ipAddress: req.ip,
+    });
+
+    await NotificationModel.create({
+      userId: booking.client_id,
+      title: 'Booking Confirmed',
+      message: `Your booking has been accepted by a broker and is now confirmed.`,
+      type: 'booking',
+      meta: { booking_id: booking.id },
+    });
+
+    logger.info(`Job request ${id} accepted by broker ${req.user.id}`);
+    const full = await BookingModel.findById(booking.id);
+    const timeline = await BookingModel.getTimeline(booking.id);
+    return successResponse(res, 200, 'Job request accepted', { booking: {
+      id: full.id,
+      status: full.status,
+      brokerId: full.broker_id,
+      driverId: full.driver_id,
+      truckId: full.truck_id,
+      pickup: full.pickup_location,
+      drop: full.drop_location,
+      timeline: timeline.map((item) => item.step),
+      currentStep: full.current_step,
+    } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const assignDriver = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { driverId, truckId } = req.body;
+
+    const jobRequest = await JobRequestModel.findById(id);
+    if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
+    if (jobRequest.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your job request');
+    if (jobRequest.status !== 'accepted') return errorResponse(res, 409, 'Job request must be accepted before assigning driver');
+
+    const booking = await BookingModel.findById(jobRequest.booking_id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+
+    const driverProfile = await DriverProfileModel.findById(driverId);
+    if (!driverProfile || driverProfile.broker_id !== req.user.id) {
+      return errorResponse(res, 404, 'Driver not found for this broker');
+    }
+
+    const truck = await TruckModel.findOwnedByBroker(truckId, req.user.id);
+    if (!truck) return errorResponse(res, 404, 'Truck not found for this broker');
+    if (truck.status !== 'available') return errorResponse(res, 409, 'Truck is not available');
+
+    await BookingModel.advanceStatus(booking.id, {
+      status: 'assigned',
+      currentStep: STATUS_STEPS.indexOf('assigned'),
+      brokerId: req.user.id,
+      driverId,
+      truckId,
+    });
+    await BookingModel.addTimelineStep(booking.id, { step: 'assigned', position: 2 });
+
+    await TruckModel.update(truckId, { status: 'on_trip' });
+    await DriverProfileModel.update(driverId, { status: 'on_trip', truckId });
+
     const trip = await TripModel.create({
       bookingId: booking.id,
-      driverId: driver_id || booking.driver_id,
+      driverId,
       brokerId: req.user.id,
       pickupAddress: booking.pickup_location,
       pickupLat: booking.pickup_lat,
@@ -90,36 +170,40 @@ const acceptJobRequest = async (req, res, next) => {
       earnings: booking.amount && booking.platform_fee ? booking.amount - booking.platform_fee : booking.amount,
     });
 
-    await BookingModel.advanceStatus(booking.id, {
-      status: 'confirmed',
-      currentStep: 1,
-      brokerId: req.user.id,
-      driverId: driver_id,
-      truckId: truck_id,
-    });
-    await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
+    await TripModel.addTimelineStep(trip.id, { step: 'Pickup', done: false, position: 0, occurredAt: null });
+    await TripModel.addTimelineStep(trip.id, { step: 'In Transit', done: false, position: 1, occurredAt: null });
+    await TripModel.addTimelineStep(trip.id, { step: 'Delivered', done: false, position: 2, occurredAt: null });
 
-    await JobRequestModel.setStatus(id, 'accepted');
+    await NotificationModel.create({
+      userId: driverId,
+      title: 'New Trip Assigned',
+      message: `New trip assigned: ${booking.pickup_location} -> ${booking.drop_location}`,
+      type: 'booking',
+      meta: { booking_id: booking.id, trip_id: trip.id },
+    });
 
     await AuditLogModel.log({
       userId: req.user.id,
-      action: 'JOB_REQUEST_ACCEPTED',
+      action: 'JOB_DRIVER_ASSIGNED',
       entity: 'job_requests',
       entityId: id,
-      meta: { booking_id: booking.id, trip_id: trip.id },
+      meta: { booking_id: booking.id, trip_id: trip.id, driver_id: driverId, truck_id: truckId },
       ipAddress: req.ip,
     });
 
-    await NotificationModel.create({
-      userId: booking.client_id,
-      title: 'Booking Confirmed',
-      message: `Your booking has been accepted by a broker and is now confirmed.`,
-      type: 'booking',
-      meta: { booking_id: booking.id },
-    });
-
-    logger.info(`Job request ${id} accepted by broker ${req.user.id} -> trip ${trip.id}`);
-    return successResponse(res, 200, 'Job request accepted', { trip });
+    const full = await BookingModel.findById(booking.id);
+    const timeline = await BookingModel.getTimeline(booking.id);
+    return successResponse(res, 200, 'Driver assigned', { booking: {
+      id: full.id,
+      status: full.status,
+      brokerId: full.broker_id,
+      driverId: full.driver_id,
+      truckId: full.truck_id,
+      pickup: full.pickup_location,
+      drop: full.drop_location,
+      timeline: timeline.map((item) => item.step),
+      currentStep: full.current_step,
+    } });
   } catch (err) {
     next(err);
   }
@@ -151,4 +235,4 @@ const declineJobRequest = async (req, res, next) => {
   }
 };
 
-module.exports = { listJobRequests, acceptJobRequest, declineJobRequest };
+module.exports = { listJobRequests, acceptJobRequest, assignDriver, declineJobRequest };

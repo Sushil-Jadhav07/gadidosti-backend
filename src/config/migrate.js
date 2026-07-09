@@ -1,8 +1,7 @@
 require('dotenv').config();
 const pool = require('./db');
 
-const migrate = async () => {
-  const client = await pool.connect();
+const runMigrations = async (client) => {
   try {
     console.log('🚀 Running migrations...');
 
@@ -167,8 +166,14 @@ const migrate = async () => {
     // ── BOOKINGS (client bookings + progress timeline) ──
     await client.query(`
       DO $$ BEGIN
-        CREATE TYPE booking_status AS ENUM ('pending', 'confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed', 'cancelled');
+        CREATE TYPE booking_status AS ENUM ('pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed', 'cancelled');
       EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+      -- 'assigned' was added after booking_status first shipped — back-fill it on
+      -- any DB that already had the type without this value (safe no-op otherwise).
+      DO $$ BEGIN
+        ALTER TYPE booking_status ADD VALUE IF NOT EXISTS 'assigned' AFTER 'confirmed';
+      EXCEPTION WHEN others THEN NULL; END $$;
 
       DO $$ BEGIN
         CREATE TYPE truck_category AS ENUM ('small', 'medium', 'large', 'part');
@@ -207,6 +212,7 @@ const migrate = async () => {
         payment_status      payment_status NOT NULL DEFAULT 'pending',
         current_step        INT NOT NULL DEFAULT 0,
         pricing_breakdown   JSONB,
+        rating              JSONB,
         distance            NUMERIC(8,2),
         platform_fee        NUMERIC(12,2),
         created_at          TIMESTAMPTZ DEFAULT NOW(),
@@ -296,6 +302,13 @@ const migrate = async () => {
       DO $$ BEGIN
         ALTER TABLE bookings ADD CONSTRAINT fk_bookings_truck FOREIGN KEY (truck_id) REFERENCES trucks(id) ON DELETE SET NULL;
       EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    `);
+
+    // rating was added to the bookings table after it first shipped — the inline
+    // column in CREATE TABLE IF NOT EXISTS above is a no-op on any DB that already
+    // had the table, so back-fill it explicitly here.
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS rating JSONB;
     `);
 
     // ── JOBS + TRIPS ──
@@ -485,11 +498,22 @@ const migrate = async () => {
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
-    process.exit(1);
+    throw err;
+  }
+};
+
+const migrate = async () => {
+  const client = await pool.connect();
+  try {
+    await runMigrations(client);
   } finally {
     client.release();
     await pool.end();
   }
 };
 
-migrate();
+if (require.main === module) {
+  migrate().catch(() => process.exit(1));
+}
+
+module.exports = { runMigrations };

@@ -1,10 +1,12 @@
 const express = require('express');
 const router = express.Router();
 
-const { getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, updateTripLocation, uploadPod } = require('../controllers/trip.controller');
+const { listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, updateTripLocation, uploadPod } = require('../controllers/trip.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { updateTripStatusValidation, updateTripLocationValidation } = require('../validations/trip.validation');
+
+router.get('/trips', authenticate, authorize('broker', 'driver', 'admin'), listTrips);
 
 /**
  * @swagger

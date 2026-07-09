@@ -1,13 +1,17 @@
 const BookingModel = require('../models/booking.model');
 const JobRequestModel = require('../models/jobRequest.model');
 const PricingModel = require('../models/pricing.model');
+const TripModel = require('../models/trip.model');
+const TruckModel = require('../models/truck.model');
+const DriverProfileModel = require('../models/driverProfile.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
+const pool = require('../config/db');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
 // Canonical progress-tracker order — position in this array drives current_step.
-const STATUS_STEPS = ['pending', 'confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
+const STATUS_STEPS = ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
 
 const projectBooking = (row, timeline, role) => {
   const base = {
@@ -146,12 +150,13 @@ const createBooking = async (req, res, next) => {
 // ─── GET /api/bookings ───────────────────────────────────────────────────────
 const listBookings = async (req, res, next) => {
   try {
-    const { status, page = 1, limit = 10 } = req.query;
+    const { status, sort = 'desc', page = 1, limit = 10 } = req.query;
 
     const result = await BookingModel.findAll({
       role: req.user.role,
       userId: req.user.id,
       status,
+      sort,
       page: parseInt(page),
       limit: Math.min(parseInt(limit), 100),
     });
@@ -234,6 +239,93 @@ const updateBookingStatus = async (req, res, next) => {
   }
 };
 
+const cancelBooking = async (req, res, next) => {
+  try {
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (req.user.role === 'client' && booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (!['pending', 'confirmed', 'assigned'].includes(booking.status)) {
+      return errorResponse(res, 409, 'Booking cannot be cancelled at this stage');
+    }
+
+    await BookingModel.update(booking.id, {
+      status: 'cancelled',
+      payment_status: 'refunded',
+    });
+    await BookingModel.addTimelineStep(booking.id, { step: 'cancelled', position: 99 });
+
+    if (booking.truck_id) {
+      await TruckModel.update(booking.truck_id, { status: 'available' });
+    }
+
+    if (booking.driver_id) {
+      await DriverProfileModel.update(booking.driver_id, { status: 'available' });
+    }
+
+    if (booking.broker_id) {
+      const requests = await JobRequestModel.findByBookingId(booking.id);
+      await Promise.all(
+        requests
+          .filter((request) => ['pending', 'accepted'].includes(request.status))
+          .map((request) => JobRequestModel.setStatus(request.id, 'declined'))
+      );
+    }
+
+    await pool.query(
+      `UPDATE trips SET status = 'cancelled', updated_at = NOW() WHERE booking_id = $1`,
+      [booking.id]
+    );
+
+    if (booking.broker_id) {
+      await NotificationModel.create({
+        userId: booking.broker_id,
+        title: 'Booking Cancelled',
+        message: `Booking ${booking.pickup_location} -> ${booking.drop_location} was cancelled.`,
+        type: 'booking',
+        meta: { booking_id: booking.id },
+      });
+    }
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'BOOKING_CANCELLED',
+      entity: 'bookings',
+      entityId: booking.id,
+      ipAddress: req.ip,
+    });
+
+    const full = await BookingModel.findById(booking.id);
+    const timeline = await BookingModel.getTimeline(booking.id);
+    return successResponse(res, 200, 'Booking cancelled', { booking: projectBooking(full, timeline, req.user.role) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const rateBooking = async (req, res, next) => {
+  try {
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (!['delivered', 'completed'].includes(booking.status)) {
+      return errorResponse(res, 409, 'Booking cannot be rated yet');
+    }
+    if (booking.rating) return errorResponse(res, 409, 'Booking already rated');
+
+    const rating = {
+      stars: req.body.stars,
+      review: req.body.review || '',
+      createdAt: new Date().toISOString(),
+    };
+
+    await BookingModel.update(booking.id, { rating: JSON.stringify(rating) });
+
+    return successResponse(res, 200, 'Booking rated', { rating });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── POST /api/pricing/estimate, POST /api/bookings/quote ────────────────────
 const estimatePricing = async (req, res, next) => {
   try {
@@ -259,4 +351,4 @@ const estimatePricing = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, listBookings, getBooking, updateBookingStatus, estimatePricing };
+module.exports = { createBooking, listBookings, getBooking, updateBookingStatus, cancelBooking, rateBooking, estimatePricing };

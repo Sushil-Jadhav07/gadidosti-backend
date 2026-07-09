@@ -66,6 +66,28 @@ const assertCanView = (trip, user) => {
   return false;
 };
 
+const listTrips = async (req, res, next) => {
+  try {
+    const { status, page = 1, limit = 10 } = req.query;
+    const result = await TripModel.findAll({
+      role: req.user.role,
+      userId: req.user.id,
+      status,
+      page: parseInt(page, 10),
+      limit: Math.min(parseInt(limit, 10), 100),
+    });
+
+    const trips = await Promise.all(result.trips.map(async (row) => {
+      const timeline = await TripModel.getTimeline(row.id);
+      return projectTrip(row, timeline);
+    }));
+
+    return successResponse(res, 200, 'Trips fetched', { ...result, trips });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── GET /api/trips/active ────────────────────────────────────────────────────
 const getActiveTrip = async (req, res, next) => {
   try {
@@ -197,4 +219,4 @@ const uploadPod = async (req, res) => {
   );
 };
 
-module.exports = { getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, updateTripLocation, uploadPod };
+module.exports = { listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, updateTripLocation, uploadPod };

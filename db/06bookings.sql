@@ -7,7 +7,7 @@
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TYPE booking_status AS ENUM ('pending', 'confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed', 'cancelled');
+    CREATE TYPE booking_status AS ENUM ('pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed', 'cancelled');
 EXCEPTION
     WHEN duplicate_object THEN RAISE NOTICE 'Type booking_status already exists, skipping.';
 END $$;
@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS bookings (
     payment_status      payment_status  NOT NULL DEFAULT 'pending',
     current_step        INT             NOT NULL DEFAULT 0,
     pricing_breakdown   JSONB,
+    rating              JSONB,
     distance            NUMERIC(8,2),
     platform_fee        NUMERIC(12,2),
     created_at          TIMESTAMPTZ     DEFAULT NOW(),

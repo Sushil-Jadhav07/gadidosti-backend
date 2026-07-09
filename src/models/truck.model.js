@@ -27,6 +27,11 @@ class TruckModel {
     return result.rows[0] || null;
   }
 
+  static async findOwnedByBroker(id, brokerId) {
+    const result = await pool.query(`${SELECT_WITH_JOINS} WHERE t.id = $1 AND t.broker_id = $2`, [id, brokerId]);
+    return result.rows[0] || null;
+  }
+
   static async findByRegistration(registration) {
     const result = await pool.query(`SELECT id FROM trucks WHERE registration = $1`, [registration]);
     return result.rows[0] || null;

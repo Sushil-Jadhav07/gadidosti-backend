@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
 
-const { listJobRequests, acceptJobRequest, declineJobRequest } = require('../controllers/job.controller');
+const { listJobRequests, acceptJobRequest, assignDriver, declineJobRequest } = require('../controllers/job.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
+const validate = require('../middleware/validate.middleware');
+const { assignDriverValidation } = require('../validations/job.validation');
 
 /**
  * @swagger
@@ -65,6 +67,7 @@ router.get('/jobs/requests', authenticate, authorize('broker'), listJobRequests)
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/jobs/requests/:id/accept', authenticate, authorize('broker'), acceptJobRequest);
+router.post('/jobs/:id/assign-driver', authenticate, authorize('broker'), assignDriverValidation, validate, assignDriver);
 
 /**
  * @swagger
