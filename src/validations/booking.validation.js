@@ -15,6 +15,7 @@ const createBookingValidation = [
   body('amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('amount must be a positive number'),
   body('broker_id').optional({ nullable: true }).isUUID().withMessage('broker_id must be a valid UUID'),
   body('truck_id').optional({ nullable: true }).isUUID().withMessage('truck_id must be a valid UUID'),
+  body('payment_status').optional({ nullable: true }).isIn(['paid', 'pending']).withMessage('payment_status must be paid or pending'),
 ];
 
 const updateBookingStatusValidation = [

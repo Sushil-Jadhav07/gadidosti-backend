@@ -38,7 +38,7 @@ class BookingModel {
     clientId, brokerId, driverId, truckId, pickupLocation, pickupLat, pickupLng,
     dropLocation, dropLat, dropLng, truckType, truckCategory, weight, weightUnit,
     quantity, material, transportType, scheduledDate, amount, currentStep,
-    pricingBreakdown, distance, platformFee,
+    pricingBreakdown, distance, platformFee, paymentStatus,
   }) {
     const bookingNumber = await this.generateBookingNumber();
     const result = await pool.query(
@@ -46,14 +46,15 @@ class BookingModel {
          booking_number, client_id, broker_id, driver_id, truck_id, pickup_location, pickup_lat, pickup_lng,
          drop_location, drop_lat, drop_lng, truck_type, truck_category, weight, weight_unit,
          quantity, material, transport_type, scheduled_date, amount, current_step,
-         pricing_breakdown, distance, platform_fee
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+         pricing_breakdown, distance, platform_fee, payment_status
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
        RETURNING *`,
       [
         bookingNumber, clientId, brokerId || null, driverId || null, truckId || null, pickupLocation, pickupLat || null, pickupLng || null,
         dropLocation, dropLat || null, dropLng || null, truckType || null, truckCategory || null, weight || null, weightUnit || 'tons',
         quantity || null, material || null, transportType, scheduledDate || null, amount != null ? amount : null, currentStep || 0,
         pricingBreakdown ? JSON.stringify(pricingBreakdown) : null, distance != null ? distance : null, platformFee != null ? platformFee : null,
+        paymentStatus || 'pending',
       ]
     );
     return result.rows[0];

@@ -75,7 +75,7 @@ const createBooking = async (req, res, next) => {
       pickup_location, pickup_lat, pickup_lng, drop_location, drop_lat, drop_lng,
       truck_type, truck_category, weight, weight_unit, quantity, material,
       transport_type = 'intra', scheduled_date, distance, broker_id, truck_id,
-      amount: providedAmount,
+      amount: providedAmount, payment_status,
     } = req.body;
 
     let amount = providedAmount;
@@ -110,6 +110,7 @@ const createBooking = async (req, res, next) => {
       pricingBreakdown,
       distance,
       platformFee,
+      paymentStatus: payment_status,
     });
 
     await BookingModel.addTimelineStep(booking.id, { step: 'pending', position: 0 });

@@ -41,6 +41,7 @@ const { estimatePricingValidation } = require('../validations/pricing.validation
  *               amount: { type: number, description: "Overrides the auto-computed total when provided" }
  *               broker_id: { type: string, format: uuid, description: "Optional — creates a job request for this broker" }
  *               truck_id: { type: string, format: uuid }
+ *               payment_status: { type: string, enum: [paid, pending], default: pending, description: "'paid' for Pay Now, 'pending' for Pay Later — no real payment gateway is wired up, this just records the client's choice" }
  *     responses:
  *       201:
  *         description: Booking created
