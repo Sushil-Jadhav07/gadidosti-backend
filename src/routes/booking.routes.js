@@ -183,7 +183,91 @@ router.get('/bookings/:id', authenticate, getBooking);
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/bookings/:id/status', authenticate, authorize('broker', 'driver', 'admin'), updateBookingStatusValidation, validate, updateBookingStatus);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/cancel:
+ *   patch:
+ *     tags: [Bookings]
+ *     summary: Cancel a booking (client/admin)
+ *     description: Only allowed while status is pending/confirmed/assigned — otherwise responds 409. Sets status to cancelled and payment_status to refunded (no real refund is triggered — Razorpay integration is out of scope), and appends a cancelled timeline entry.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Booking cancelled
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Booking is no longer cancellable (already past assigned)
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
 router.patch('/bookings/:id/cancel', authenticate, authorize('client', 'admin'), cancelBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/rate:
+ *   post:
+ *     tags: [Bookings]
+ *     summary: Rate a completed booking (client)
+ *     description: Only allowed once the booking is delivered/completed. One rating per booking — a second attempt returns an error.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [stars]
+ *             properties:
+ *               stars:  { type: integer, minimum: 1, maximum: 5, example: 5 }
+ *               review: { type: string, nullable: true, example: 'Great service, on time delivery.' }
+ *     responses:
+ *       200:
+ *         description: Booking rated
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Booking already rated, or not yet delivered/completed
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Validation errors — stars must be 1-5
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
 router.post('/bookings/:id/rate', authenticate, authorize('client'), rateBookingValidation, validate, rateBooking);
 
 /**

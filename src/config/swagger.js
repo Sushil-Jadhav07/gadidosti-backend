@@ -663,6 +663,10 @@ const options = {
         description: 'Server and database health check',
       },
       {
+        name: 'Config',
+        description: 'Public master-data lookups (vehicle types, material types, cities, distance estimates) that power booking-form dropdowns. No auth required.',
+      },
+      {
         name: 'Auth',
         description: 'Authentication for all roles (admin, broker, driver, client). One login, one register, OTP verification, password management, token refresh, and logout.',
       },

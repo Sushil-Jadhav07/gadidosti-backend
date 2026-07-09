@@ -6,6 +6,32 @@ const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { updateTripStatusValidation, updateTripLocationValidation } = require('../validations/trip.validation');
 
+/**
+ * @swagger
+ * /api/trips:
+ *   get:
+ *     tags: [Trips]
+ *     summary: List trips (role-scoped)
+ *     description: broker/driver -> own trips only, admin -> all trips. Each item uses the same rich projection as GET /api/trips/{id}.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [confirmed, en_route_pickup, picked_up, in_transit, delivered, completed, cancelled] }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 10, maximum: 100 }
+ *     responses:
+ *       200:
+ *         description: Trips fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ */
 router.get('/trips', authenticate, authorize('broker', 'driver', 'admin'), listTrips);
 
 /**
