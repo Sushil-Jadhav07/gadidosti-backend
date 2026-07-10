@@ -88,12 +88,11 @@ router.patch('/jobs/requests/:id/accept', authenticate, authorize('broker'), acc
  *         description: Job request ID
  *         schema: { type: string, format: uuid }
  *     requestBody:
- *       required: true
+ *       required: false
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required: [driverId, truckId]
  *             properties:
  *               driverId: { type: string, format: uuid }
  *               truckId:  { type: string, format: uuid }
