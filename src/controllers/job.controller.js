@@ -148,53 +148,85 @@ const assignDriver = async (req, res, next) => {
 
     const truck = await TruckModel.findOwnedByBroker(truckId, req.user.id);
     if (!truck) return errorResponse(res, 404, 'Truck not found for this broker');
-    if (truck.status !== 'available') return errorResponse(res, 409, 'Truck is not available');
+    // A truck already "on_trip" is only acceptable here if it's the same truck already
+    // on this booking — i.e. keeping the truck while swapping the driver mid-trip.
+    if (truck.status !== 'available' && truckId !== booking.truck_id) {
+      return errorResponse(res, 409, 'Truck is not available');
+    }
+
+    // A trip already exists once this booking has been through assignDriver once before —
+    // e.g. the broker is reassigning a different driver mid-trip after an incident, rather
+    // than making the first assignment. trips.booking_id is UNIQUE, so this branch updates
+    // the existing trip's driver instead of trying to insert a second one.
+    const existingTrip = await TripModel.findByBookingId(booking.id);
+    const isReassignment = !!existingTrip;
+
+    if (isReassignment) {
+      if (booking.driver_id && booking.driver_id !== driverId) {
+        await DriverProfileModel.update(booking.driver_id, { status: 'available' });
+      }
+      if (booking.truck_id && booking.truck_id !== truckId) {
+        await TruckModel.update(booking.truck_id, { status: 'available' });
+      }
+    }
 
     await BookingModel.advanceStatus(booking.id, {
-      status: 'assigned',
-      currentStep: STATUS_STEPS.indexOf('assigned'),
+      // Reassignment keeps the booking's current status/step — a driver swap shouldn't
+      // regress an in-transit shipment back to "assigned" in the client's tracker.
+      status: isReassignment ? booking.status : 'assigned',
+      currentStep: isReassignment ? booking.current_step : STATUS_STEPS.indexOf('assigned'),
       brokerId: req.user.id,
       driverId,
       truckId,
     });
-    await BookingModel.addTimelineStep(booking.id, { step: 'assigned', position: 2 });
+    await BookingModel.addTimelineStep(booking.id, {
+      step: isReassignment ? 'driver_reassigned' : 'assigned',
+      position: isReassignment ? 99 : 2,
+    });
 
     await TruckModel.update(truckId, { status: 'on_trip' });
     await DriverProfileModel.update(driverId, { status: 'on_trip', truckId });
 
-    const trip = await TripModel.create({
-      bookingId: booking.id,
-      driverId,
-      brokerId: req.user.id,
-      pickupAddress: booking.pickup_location,
-      pickupLat: booking.pickup_lat,
-      pickupLng: booking.pickup_lng,
-      dropAddress: booking.drop_location,
-      dropLat: booking.drop_lat,
-      dropLng: booking.drop_lng,
-      distance: booking.distance,
-      cargoMaterial: booking.material,
-      cargoWeight: booking.weight,
-      cargoQuantity: booking.quantity,
-      cargoValue: booking.amount,
-      earnings: booking.amount && booking.platform_fee ? booking.amount - booking.platform_fee : booking.amount,
-    });
+    let trip;
+    if (isReassignment) {
+      trip = await TripModel.reassignDriver(existingTrip.id, driverId);
+    } else {
+      trip = await TripModel.create({
+        bookingId: booking.id,
+        driverId,
+        brokerId: req.user.id,
+        pickupAddress: booking.pickup_location,
+        pickupLat: booking.pickup_lat,
+        pickupLng: booking.pickup_lng,
+        dropAddress: booking.drop_location,
+        dropLat: booking.drop_lat,
+        dropLng: booking.drop_lng,
+        distance: booking.distance,
+        cargoMaterial: booking.material,
+        cargoWeight: booking.weight,
+        cargoQuantity: booking.quantity,
+        cargoValue: booking.amount,
+        earnings: booking.amount && booking.platform_fee ? booking.amount - booking.platform_fee : booking.amount,
+      });
 
-    await TripModel.addTimelineStep(trip.id, { step: 'Pickup', done: false, position: 0, occurredAt: null });
-    await TripModel.addTimelineStep(trip.id, { step: 'In Transit', done: false, position: 1, occurredAt: null });
-    await TripModel.addTimelineStep(trip.id, { step: 'Delivered', done: false, position: 2, occurredAt: null });
+      await TripModel.addTimelineStep(trip.id, { step: 'Pickup', done: false, position: 0, occurredAt: null });
+      await TripModel.addTimelineStep(trip.id, { step: 'In Transit', done: false, position: 1, occurredAt: null });
+      await TripModel.addTimelineStep(trip.id, { step: 'Delivered', done: false, position: 2, occurredAt: null });
+    }
 
     await NotificationModel.create({
       userId: driverId,
-      title: 'New Trip Assigned',
-      message: `New trip assigned: ${booking.pickup_location} -> ${booking.drop_location}`,
+      title: isReassignment ? 'Trip Reassigned to You' : 'New Trip Assigned',
+      message: isReassignment
+        ? `You've been assigned to an in-progress trip: ${booking.pickup_location} -> ${booking.drop_location}`
+        : `New trip assigned: ${booking.pickup_location} -> ${booking.drop_location}`,
       type: 'booking',
       meta: { booking_id: booking.id, trip_id: trip.id },
     });
 
     await AuditLogModel.log({
       userId: req.user.id,
-      action: 'JOB_DRIVER_ASSIGNED',
+      action: isReassignment ? 'JOB_DRIVER_REASSIGNED' : 'JOB_DRIVER_ASSIGNED',
       entity: 'job_requests',
       entityId: id,
       meta: { booking_id: booking.id, trip_id: trip.id, driver_id: driverId, truck_id: truckId },
@@ -203,7 +235,7 @@ const assignDriver = async (req, res, next) => {
 
     const full = await BookingModel.findById(booking.id);
     const timeline = await BookingModel.getTimeline(booking.id);
-    return successResponse(res, 200, 'Driver assigned', { booking: {
+    return successResponse(res, 200, isReassignment ? 'Driver reassigned' : 'Driver assigned', { booking: {
       id: full.id,
       status: full.status,
       brokerId: full.broker_id,

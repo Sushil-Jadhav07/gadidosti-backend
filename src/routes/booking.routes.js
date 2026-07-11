@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, listBookings, getBooking, updateBookingStatus, cancelBooking, payBooking, rateBooking, estimatePricing } = require('../controllers/booking.controller');
+const { createBooking, listBookings, getBooking, trackBooking, updateBookingStatus, cancelBooking, payBooking, rateBooking, estimatePricing } = require('../controllers/booking.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
+const idempotent = require('../middleware/idempotency.middleware');
 const { createBookingValidation, updateBookingStatusValidation, rateBookingValidation } = require('../validations/booking.validation');
 const { estimatePricingValidation } = require('../validations/pricing.validation');
 
@@ -41,6 +42,12 @@ const { estimatePricingValidation } = require('../validations/pricing.validation
  *               distance: { type: number, description: "If provided, pricing is auto-computed" }
  *               amount: { type: number, description: "Overrides the auto-computed total when provided" }
  *               payment_status: { type: string, enum: [paid, pending], default: pending, description: "'paid' for Pay Now, 'pending' for Pay Later — no real payment gateway is wired up, this just records the client's choice" }
+ *     parameters:
+ *       - in: header
+ *         name: Idempotency-Key
+ *         required: false
+ *         description: Optional. A duplicate key + same user replays the original booking response instead of creating a new one.
+ *         schema: { type: string }
  *     responses:
  *       201:
  *         description: Booking created
@@ -53,7 +60,7 @@ const { estimatePricingValidation } = require('../validations/pricing.validation
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/bookings', authenticate, authorize('client'), createBookingValidation, validate, createBooking);
+router.post('/bookings', authenticate, authorize('client'), idempotent('POST /bookings'), createBookingValidation, validate, createBooking);
 
 /**
  * @swagger
@@ -145,6 +152,40 @@ router.post('/bookings/quote', authenticate, estimatePricingValidation, validate
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/bookings/:id', authenticate, getBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/track:
+ *   get:
+ *     tags: [Bookings]
+ *     summary: Live-track a booking's assigned driver (client/broker/driver/admin)
+ *     description: Meant to be polled every 5-10s, not pushed via WebSocket. Returns null location fields if no driver is assigned yet or no location has been reported yet. ETA is a straight-line estimate (no routing engine).
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: Booking UUID or booking_number
+ *         schema: { type: string, example: 'BKG-202412-001' }
+ *     responses:
+ *       200:
+ *         description: Booking location fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: No access to this booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/bookings/:id/track', authenticate, trackBooking);
 
 /**
  * @swagger

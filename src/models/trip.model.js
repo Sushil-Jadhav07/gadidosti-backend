@@ -4,7 +4,7 @@ const SELECT_WITH_JOINS = `
   SELECT tr.*,
          broker.name  AS broker_name,  broker.phone  AS broker_phone,
          driver.name  AS driver_name,  driver.phone  AS driver_phone,
-         client.name  AS client_name,  client.phone  AS client_phone,
+         client.id    AS client_id,    client.name  AS client_name, client.phone AS client_phone,
          b.truck_id, b.booking_number, t.registration AS truck_reg
   FROM trips tr
   JOIN bookings b       ON b.id = tr.booking_id
@@ -41,6 +41,12 @@ class TripModel {
 
   static async findById(id) {
     const result = await pool.query(`${SELECT_WITH_JOINS} WHERE tr.id = $1`, [id]);
+    return result.rows[0] || null;
+  }
+
+  // trips.booking_id is UNIQUE — a booking has at most one trip.
+  static async findByBookingId(bookingId) {
+    const result = await pool.query(`${SELECT_WITH_JOINS} WHERE tr.booking_id = $1`, [bookingId]);
     return result.rows[0] || null;
   }
 
@@ -151,6 +157,17 @@ class TripModel {
               updated_at = NOW()
        WHERE id = $2 RETURNING *`,
       [status, id]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Swaps the driver on an already-created trip — used when a broker reassigns a different
+  // driver mid-trip (e.g. after an incident), instead of creating a second trip row (which
+  // would violate trips.booking_id's UNIQUE constraint).
+  static async reassignDriver(id, driverId) {
+    const result = await pool.query(
+      `UPDATE trips SET driver_id = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+      [driverId, id]
     );
     return result.rows[0] || null;
   }

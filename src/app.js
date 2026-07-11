@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -15,6 +16,7 @@ const healthRoutes  = require('./routes/health.routes');
 const bookingRoutes = require('./routes/booking.routes');
 const pricingRoutes = require('./routes/pricing.routes');
 const vehicleRoutes = require('./routes/vehicle.routes');
+const brokerRoutes  = require('./routes/broker.routes');
 const configRoutes  = require('./routes/config.routes');
 const jobRoutes     = require('./routes/job.routes');
 const tripRoutes    = require('./routes/trip.routes');
@@ -60,6 +62,12 @@ app.use(morgan('combined', {
   stream: { write: (msg) => logger.info(msg.trim()) },
 }));
 
+// ─── Local file uploads (FakeLocalStorageProvider) ────────────────────────────
+// NOT safe for production on platforms with an ephemeral filesystem (e.g. Render) —
+// this only serves what FakeLocalStorageProvider wrote to disk. Once a real cloud
+// storage provider is wired up (STORAGE_PROVIDER), this static mount becomes unused.
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+
 // ─── Swagger UI ───────────────────────────────────────────────────────────────
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
   customSiteTitle: 'SSK Logistics API',
@@ -92,6 +100,7 @@ app.use('/api', kycRoutes);
 app.use('/api', bookingRoutes);
 app.use('/api', pricingRoutes);
 app.use('/api', vehicleRoutes);
+app.use('/api', brokerRoutes);
 app.use('/api', configRoutes);
 app.use('/api', jobRoutes);
 app.use('/api', tripRoutes);

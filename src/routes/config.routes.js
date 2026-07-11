@@ -98,8 +98,9 @@ router.get('/config/cities', listCities);
  *     tags: [Config]
  *     summary: Look up an approximate distance between two cities
  *     description: |
- *       Public, no auth required. Backed by a static city-pair distance table (no Google Maps integration).
- *       Falls back to 500 km for any pair not in the table.
+ *       Public, no auth required. Backed by the active LocationProvider (LOCATION_PROVIDER env var);
+ *       the default fake provider uses a static city-pair distance table (no Google Maps integration).
+ *       Returns 404 for any pair not in the table instead of guessing a distance.
  *     requestBody:
  *       required: true
  *       content:
@@ -124,6 +125,11 @@ router.get('/config/cities', listCities);
  *                       type: object
  *                       properties:
  *                         distance: { type: number, example: 150, description: 'Distance in km' }
+ *       404:
+ *         description: Distance unavailable for this city pair
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/config/distance', getDistance);
 

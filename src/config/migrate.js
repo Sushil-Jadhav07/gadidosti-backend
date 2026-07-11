@@ -519,6 +519,82 @@ const runMigrations = async (client) => {
       ['00000000-0000-0000-0000-000000000002']
     );
 
+    // ── BROKER PROFILES (service zone + availability, mirrors db/13broker_profiles.sql) ──
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS broker_profiles (
+        user_id         UUID            PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        service_city    TEXT,
+        is_online       BOOLEAN         NOT NULL DEFAULT TRUE,
+        created_at      TIMESTAMPTZ     DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ     DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_broker_profiles_service_city ON broker_profiles(service_city);
+
+      DROP TRIGGER IF EXISTS update_broker_profiles_updated_at ON broker_profiles;
+      CREATE TRIGGER update_broker_profiles_updated_at
+        BEFORE UPDATE ON broker_profiles
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `);
+
+    // 'no_broker_available' was added after booking_status first shipped — same
+    // defensive backfill pattern as 'assigned' above (own client.query call so the
+    // ADD VALUE runs in its own implicit transaction).
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TYPE booking_status ADD VALUE IF NOT EXISTS 'no_broker_available';
+      EXCEPTION WHEN others THEN NULL; END $$;
+    `);
+
+    // ── IDEMPOTENCY KEYS (mirrors db/14idempotency_keys.sql) ──
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS idempotency_keys (
+        id                 UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+        idempotency_key    TEXT         NOT NULL,
+        user_id            UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        endpoint           TEXT         NOT NULL,
+        response_snapshot  JSONB        NOT NULL,
+        created_at         TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_idempotency_keys_unique
+        ON idempotency_keys(idempotency_key, user_id, endpoint);
+    `);
+
+    // ── DRIVER LOCATION (live location on driver_profiles, mirrors db/12driver_location.sql) ──
+    await client.query(`
+      ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS current_lat NUMERIC(9,6);
+      ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS current_lng NUMERIC(9,6);
+      ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS last_location_at TIMESTAMPTZ;
+    `);
+
+    // ── TRIP INCIDENTS (mid-trip issue reporting, mirrors db/15trip_incidents.sql) ──
+    await client.query(`
+      DO $$ BEGIN
+        CREATE TYPE trip_incident_reason AS ENUM ('accident', 'breakdown', 'traffic_block', 'medical', 'other');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+      DO $$ BEGIN
+        CREATE TYPE trip_incident_status AS ENUM ('reported', 'acknowledged', 'resolved');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+      CREATE TABLE IF NOT EXISTS trip_incidents (
+        id            UUID                    PRIMARY KEY DEFAULT uuid_generate_v4(),
+        trip_id       UUID                    NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+        driver_id     UUID                    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        reason        trip_incident_reason    NOT NULL,
+        notes         TEXT,
+        status        trip_incident_status    NOT NULL DEFAULT 'reported',
+        reported_at   TIMESTAMPTZ             NOT NULL DEFAULT NOW(),
+        resolved_at   TIMESTAMPTZ,
+        resolution    TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_trip_incidents_trip    ON trip_incidents(trip_id);
+      CREATE INDEX IF NOT EXISTS idx_trip_incidents_driver  ON trip_incidents(driver_id);
+      CREATE INDEX IF NOT EXISTS idx_trip_incidents_status  ON trip_incidents(status);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

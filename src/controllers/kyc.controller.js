@@ -4,6 +4,9 @@ const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
+const { getStorageProvider } = require('../providers/storage');
+
+const storageProvider = getStorageProvider();
 
 // ─── POST /api/kyc/broker, POST /api/kyc/driver ─────────────────────────────────
 // Shared handler — role-specific required fields are enforced by validation
@@ -31,14 +34,40 @@ const submitKyc = async (req, res, next) => {
 };
 
 // ─── POST /api/kyc/documents/upload ──────────────────────────────────────────────
-// Stub — no object storage (S3/Cloudinary) is configured yet. Returns a clear
-// "not configured" error instead of silently pretending to accept the file.
-const uploadKycDocument = async (req, res) => {
-  return errorResponse(
-    res,
-    501,
-    'Document file upload is not configured yet. Submit document numbers via POST /api/kyc/broker or /api/kyc/driver instead.'
-  );
+// Uploads a document file via the active StorageProvider and merges the returned
+// URL into the user's kyc_submissions.documents under `document_key`. Requires a
+// multipart request — see upload.middleware.js (multer, memory storage) on the route.
+const uploadKycDocument = async (req, res, next) => {
+  try {
+    if (!req.file) return errorResponse(res, 422, 'No file uploaded — attach it as multipart form field "file"');
+
+    const { document_key } = req.body;
+    if (!document_key) return errorResponse(res, 422, 'document_key is required (e.g. "pan_card_photo")');
+
+    const { url } = await storageProvider.upload({
+      buffer: req.file.buffer,
+      filename: req.file.originalname,
+      folder: `kyc/${req.user.id}`,
+    });
+
+    const existing = await KycModel.findByUserId(req.user.id);
+    const documents = { ...(existing?.documents || {}), [document_key]: url };
+    const submission = await KycModel.upsertSubmission(req.user.id, documents);
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'KYC_DOCUMENT_UPLOADED',
+      entity: 'kyc_submissions',
+      entityId: submission.id,
+      meta: { document_key },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`KYC document uploaded: ${req.user.id} [${document_key}]`);
+    return successResponse(res, 200, 'Document uploaded', { url, submission });
+  } catch (err) {
+    next(err);
+  }
 };
 
 // ─── GET /api/kyc/status ──────────────────────────────────────────────────────────

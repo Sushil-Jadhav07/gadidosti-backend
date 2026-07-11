@@ -39,6 +39,10 @@ const projectDriver = (row) => ({
   avatar: row.avatar,
   status: row.status,
   kycStatus: row.kyc_status,
+  currentLat: row.current_lat != null ? Number(row.current_lat) : null,
+  currentLng: row.current_lng != null ? Number(row.current_lng) : null,
+  lastLocationAt: row.last_location_at || null,
+  distanceKm: row.distance_km != null ? Number(row.distance_km) : undefined,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -243,7 +247,7 @@ const createDriver = async (req, res, next) => {
 // GET /api/vehicles/drivers
 const listDrivers = async (req, res, next) => {
   try {
-    const { status, page = 1, limit = 10 } = req.query;
+    const { status, page = 1, limit = 10, near_lat, near_lng, truck_type } = req.query;
 
     const result = await DriverProfileModel.findAll({
       role: req.user.role,
@@ -251,6 +255,9 @@ const listDrivers = async (req, res, next) => {
       status,
       page: parseInt(page),
       limit: Math.min(parseInt(limit), 100),
+      nearLat: near_lat !== undefined ? parseFloat(near_lat) : undefined,
+      nearLng: near_lng !== undefined ? parseFloat(near_lng) : undefined,
+      truckType: truck_type,
     });
 
     return successResponse(res, 200, 'Drivers fetched', { ...result, drivers: result.drivers.map(projectDriver) });
@@ -299,7 +306,28 @@ const updateDriver = async (req, res, next) => {
   }
 };
 
+// PATCH /api/vehicles/drivers/me/location
+// Pinged periodically by the driver's own app while online, even before a trip starts.
+const updateDriverLocation = async (req, res, next) => {
+  try {
+    const { lat, lng } = req.body;
+
+    const updated = await DriverProfileModel.updateLocation(req.user.id, { lat, lng });
+    if (!updated) return errorResponse(res, 404, 'Driver profile not found');
+
+    return successResponse(res, 200, 'Location updated', {
+      location: {
+        lat: Number(updated.current_lat),
+        lng: Number(updated.current_lng),
+        lastLocationAt: updated.last_location_at,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   createTruck, listTrucks, getTruck, updateTruck, deleteTruck,
-  lookupDriverByPhone, createDriver, listDrivers, getDriver, updateDriver,
+  lookupDriverByPhone, createDriver, listDrivers, getDriver, updateDriver, updateDriverLocation,
 };

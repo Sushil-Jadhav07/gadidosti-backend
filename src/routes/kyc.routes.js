@@ -12,6 +12,7 @@ const {
 } = require('../controllers/kyc.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
+const upload = require('../middleware/upload.middleware');
 const {
   submitBrokerKycValidation,
   submitDriverKycValidation,
@@ -130,22 +131,38 @@ router.post('/kyc/driver', authenticate, authorize('driver'), submitDriverKycVal
  * /api/kyc/documents/upload:
  *   post:
  *     tags: [KYC]
- *     summary: Upload a KYC document file (not yet configured)
+ *     summary: Upload a KYC document file
  *     description: |
- *       Reserved for uploading document photos/PDFs to object storage (S3/Cloudinary) and returning a URL to reference
- *       from `POST /api/kyc/broker` or `/api/kyc/driver`. No storage provider is configured yet, so this currently
- *       always returns `501 Not Implemented`.
+ *       Uploads a document photo/PDF via the active StorageProvider (STORAGE_PROVIDER env var, defaults to a local-disk
+ *       fake provider not safe for production) and merges the returned URL into the caller's kyc_submissions.documents
+ *       under `document_key`.
  *     security:
  *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [file, document_key]
+ *             properties:
+ *               file: { type: string, format: binary }
+ *               document_key: { type: string, example: 'pan_card_photo' }
  *     responses:
- *       501:
- *         description: Not configured
+ *       200:
+ *         description: Document uploaded
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/SuccessResponse'
+ *       422:
+ *         description: Missing file or document_key
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post('/kyc/documents/upload', authenticate, authorize('broker', 'driver'), uploadKycDocument);
+router.post('/kyc/documents/upload', authenticate, authorize('broker', 'driver'), upload.single('file'), uploadKycDocument);
 
 /**
  * @swagger

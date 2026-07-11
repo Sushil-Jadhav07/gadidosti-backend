@@ -3,12 +3,13 @@ const router = express.Router();
 
 const {
   createTruck, listTrucks, getTruck, updateTruck, deleteTruck,
-  lookupDriverByPhone, createDriver, listDrivers, getDriver, updateDriver,
+  lookupDriverByPhone, createDriver, listDrivers, getDriver, updateDriver, updateDriverLocation,
 } = require('../controllers/vehicle.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
+  updateDriverLocationValidation,
 } = require('../validations/vehicle.validation');
 
 // ─── TRUCKS ───────────────────────────────────────────────────────────────────
@@ -249,6 +250,17 @@ router.post('/vehicles/drivers', authenticate, authorize('broker'), createDriver
  *       - in: query
  *         name: limit
  *         schema: { type: integer, default: 10, maximum: 100 }
+ *       - in: query
+ *         name: near_lat
+ *         description: When given together with near_lng, ranks drivers by distance from this point instead of created_at.
+ *         schema: { type: number }
+ *       - in: query
+ *         name: near_lng
+ *         schema: { type: number }
+ *       - in: query
+ *         name: truck_type
+ *         description: Only used together with near_lat/near_lng — narrows the near-search to a matching truck type.
+ *         schema: { type: string }
  *     responses:
  *       200:
  *         description: Drivers fetched
@@ -257,6 +269,44 @@ router.post('/vehicles/drivers', authenticate, authorize('broker'), createDriver
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.get('/vehicles/drivers', authenticate, authorize('broker', 'admin'), listDrivers);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/me/location:
+ *   patch:
+ *     tags: [Vehicles]
+ *     summary: Update the authenticated driver's current location (driver)
+ *     description: Pinged periodically by the driver's app while online, even before a trip starts.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [lat, lng]
+ *             properties:
+ *               lat: { type: number, example: 19.076 }
+ *               lng: { type: number, example: 72.8777 }
+ *     responses:
+ *       200:
+ *         description: Location updated
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: Driver profile not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Validation errors
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/vehicles/drivers/me/location', authenticate, authorize('driver'), updateDriverLocationValidation, validate, updateDriverLocation);
 
 /**
  * @swagger

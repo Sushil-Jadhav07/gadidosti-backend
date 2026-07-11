@@ -84,6 +84,27 @@ class JobRequestModel {
       [bookingId, exceptJobRequestId]
     );
   }
+
+  // Background sweep counterpart to findByBroker's inline lazy-expiry — flips every
+  // pending request whose expiry has passed, regardless of broker. Returns the distinct
+  // booking_ids touched so the caller can check whether a booking just lost its last offer.
+  static async expirePending() {
+    const result = await pool.query(
+      `UPDATE job_requests SET status = 'expired' WHERE status = 'pending' AND expires_at < NOW() RETURNING booking_id`
+    );
+    return [...new Set(result.rows.map((row) => row.booking_id))];
+  }
+
+  // True once every job_request for this booking has lapsed (expired/declined) with
+  // none accepted — i.e. nobody is going to pick this booking up on their own.
+  static async allLapsedForBooking(bookingId) {
+    const result = await pool.query(
+      `SELECT COUNT(*) FILTER (WHERE status IN ('pending', 'accepted')) AS live
+       FROM job_requests WHERE booking_id = $1`,
+      [bookingId]
+    );
+    return parseInt(result.rows[0].live, 10) === 0;
+  }
 }
 
 module.exports = JobRequestModel;

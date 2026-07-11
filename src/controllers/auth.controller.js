@@ -7,6 +7,9 @@ const AuditLogModel = require('../models/auditLog.model');
 const { generateAccessToken, generateRefreshToken, verifyRefreshToken, hashToken, generateOTP } = require('../utils/jwt');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
+const { getSmsProvider } = require('../providers/sms');
+
+const smsProvider = getSmsProvider();
 
 // ─── POST /api/auth/register ─────────────────────────────────────────────────
 const register = async (req, res, next) => {
@@ -154,8 +157,7 @@ const sendOtp = async (req, res, next) => {
     const expiryMinutes = parseInt(process.env.OTP_EXPIRY_MINUTES) || 10;
     await OtpModel.create({ phone, otpCode, purpose, expiryMinutes });
 
-    // TODO: Integrate SMS provider (Twilio / MSG91 / Fast2SMS)
-    logger.info(`OTP for ${phone} [${purpose}]: ${otpCode}`);
+    await smsProvider.send({ phone, message: `Your SSK Logistics OTP for ${purpose} is ${otpCode}. Valid for ${expiryMinutes} minutes.` });
 
     return successResponse(res, 200, `OTP sent to ${phone}. Valid for ${expiryMinutes} minutes.`, {
       phone,

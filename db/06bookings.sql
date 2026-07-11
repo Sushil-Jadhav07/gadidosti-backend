@@ -12,6 +12,16 @@ EXCEPTION
     WHEN duplicate_object THEN RAISE NOTICE 'Type booking_status already exists, skipping.';
 END $$;
 
+-- 'no_broker_available' was added after booking_status first shipped — back-fill it on
+-- any DB that already had the type without this value (safe no-op otherwise). Set by the
+-- offer-expiry cron sweep (src/cron/offerExpirySweep.js) when every job_request for a
+-- booking has lapsed with none accepted.
+DO $$ BEGIN
+    ALTER TYPE booking_status ADD VALUE IF NOT EXISTS 'no_broker_available';
+EXCEPTION
+    WHEN duplicate_object THEN RAISE NOTICE 'Value no_broker_available already exists, skipping.';
+END $$;
+
 DO $$ BEGIN
     CREATE TYPE truck_category AS ENUM ('small', 'medium', 'large', 'part');
 EXCEPTION

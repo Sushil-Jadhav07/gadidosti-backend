@@ -2,10 +2,15 @@ const TripModel = require('../models/trip.model');
 const BookingModel = require('../models/booking.model');
 const DriverProfileModel = require('../models/driverProfile.model');
 const SettlementModel = require('../models/settlement.model');
+const TripIncidentModel = require('../models/tripIncident.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
+
+// A trip is "active" (still underway, incident-reportable) once it's past creation
+// but before it's wrapped up one way or another.
+const ACTIVE_TRIP_STATUSES = ['confirmed', 'en_route_pickup', 'picked_up', 'in_transit'];
 
 // Subset of the booking status stepper that applies once a trip exists.
 const TRIP_STEPS = ['confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
@@ -66,6 +71,27 @@ const assertCanView = (trip, user) => {
   if (user.role === 'driver') return trip.driver_id === user.id;
   return false;
 };
+
+// Incidents are visible to a wider audience than the full trip record (which includes
+// broker/driver-sensitive fields like earnings and phone numbers) — the client who owns
+// the booking can see incidents on their own trip, but not the full trip via GET /api/trips/:id.
+const assertCanViewIncidents = (trip, user) => {
+  if (assertCanView(trip, user)) return true;
+  if (user.role === 'client') return trip.client_id === user.id;
+  return false;
+};
+
+const projectIncident = (row) => ({
+  id: row.id,
+  tripId: row.trip_id,
+  driverId: row.driver_id,
+  reason: row.reason,
+  notes: row.notes,
+  status: row.status,
+  reportedAt: row.reported_at,
+  resolvedAt: row.resolved_at,
+  resolution: row.resolution,
+});
 
 const listTrips = async (req, res, next) => {
   try {
@@ -210,6 +236,112 @@ const updateTripLocation = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/trips/:id/report-issue ─────────────────────────────────────────
+const reportIssue = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { reason, notes } = req.body;
+
+    const trip = await TripModel.findById(id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (trip.driver_id !== req.user.id) return errorResponse(res, 403, 'Not your trip');
+    if (!ACTIVE_TRIP_STATUSES.includes(trip.status)) return errorResponse(res, 409, 'Trip is not in an active state');
+
+    const incident = await TripIncidentModel.create({ tripId: id, driverId: req.user.id, reason, notes });
+    const reasonLabel = reason.replace(/_/g, ' ');
+
+    if (trip.broker_id) {
+      await NotificationModel.create({
+        userId: trip.broker_id,
+        title: 'Trip Incident Reported',
+        message: `Your driver reported a ${reasonLabel} on trip ${trip.booking_number || id}. The trip may be delayed or need reassignment.`,
+        type: 'incident',
+        meta: { trip_id: id, incident_id: incident.id, reason },
+      });
+    }
+
+    if (trip.client_id) {
+      await NotificationModel.create({
+        userId: trip.client_id,
+        title: 'Delivery Update',
+        message: `Your driver reported a ${reasonLabel}. Your shipment may be delayed or reassigned — our team has been notified.`,
+        type: 'incident',
+        meta: { trip_id: id, incident_id: incident.id, reason },
+      });
+    }
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'TRIP_INCIDENT_REPORTED',
+      entity: 'trip_incidents',
+      entityId: incident.id,
+      meta: { trip_id: id, reason },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Trip incident reported: trip ${id} reason=${reason} by driver ${req.user.id}`);
+    return successResponse(res, 201, 'Incident reported. Broker and client have been notified.', { incident: projectIncident(incident) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/trips/:id/incidents ─────────────────────────────────────────────
+const listIncidents = async (req, res, next) => {
+  try {
+    const trip = await TripModel.findById(req.params.id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (!assertCanViewIncidents(trip, req.user)) return errorResponse(res, 403, 'You do not have access to this trip');
+
+    const incidents = await TripIncidentModel.findByTrip(trip.id);
+    return successResponse(res, 200, 'Incidents fetched', { incidents: incidents.map(projectIncident) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/trips/:id/incidents/:incidentId/resolve ──────────────────────
+const resolveIncident = async (req, res, next) => {
+  try {
+    const { id, incidentId } = req.params;
+    const { resolution } = req.body;
+
+    const trip = await TripModel.findById(id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (req.user.role === 'broker' && trip.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your trip');
+
+    const incident = await TripIncidentModel.findById(incidentId);
+    if (!incident || incident.trip_id !== id) return errorResponse(res, 404, 'Incident not found');
+    if (incident.status === 'resolved') return errorResponse(res, 409, 'Incident already resolved');
+
+    const updated = await TripIncidentModel.resolve(incidentId, resolution);
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'TRIP_INCIDENT_RESOLVED',
+      entity: 'trip_incidents',
+      entityId: incidentId,
+      meta: { trip_id: id },
+      ipAddress: req.ip,
+    });
+
+    if (trip.driver_id) {
+      await NotificationModel.create({
+        userId: trip.driver_id,
+        title: 'Incident Resolved',
+        message: 'The incident you reported has been marked resolved by your broker.',
+        type: 'incident',
+        meta: { trip_id: id, incident_id: incidentId },
+      });
+    }
+
+    logger.info(`Trip incident ${incidentId} resolved by ${req.user.id}`);
+    return successResponse(res, 200, 'Incident resolved', { incident: projectIncident(updated) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── POST /api/trips/:id/pod ──────────────────────────────────────────────────
 // Stub — no object storage configured, mirrors uploadKycDocument's pattern.
 const uploadPod = async (req, res) => {
@@ -220,4 +352,7 @@ const uploadPod = async (req, res) => {
   );
 };
 
-module.exports = { listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, updateTripLocation, uploadPod };
+module.exports = {
+  listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, updateTripLocation,
+  reportIssue, listIncidents, resolveIncident, uploadPod,
+};

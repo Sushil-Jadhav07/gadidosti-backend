@@ -4,12 +4,17 @@ const PricingModel = require('../models/pricing.model');
 const TripModel = require('../models/trip.model');
 const TruckModel = require('../models/truck.model');
 const DriverProfileModel = require('../models/driverProfile.model');
+const BrokerProfileModel = require('../models/brokerProfile.model');
+const TripIncidentModel = require('../models/tripIncident.model');
 const UserModel = require('../models/user.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const pool = require('../config/db');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
+const { getPaymentProvider } = require('../providers/payment');
+
+const paymentProvider = getPaymentProvider();
 
 // Canonical progress-tracker order — position in this array drives current_step.
 const STATUS_STEPS = ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
@@ -116,9 +121,19 @@ const createBooking = async (req, res, next) => {
 
     await BookingModel.addTimelineStep(booking.id, { step: 'pending', position: 0 });
 
-    // Broadcast to every verified, active broker — whichever one accepts first gets the job.
-    // acceptJobRequest() auto-declines the sibling requests once someone takes it.
-    const brokerIds = await UserModel.findActiveBrokers();
+    // Broadcast to verified, active, online brokers whose service_city matches the pickup
+    // location — whichever one accepts first gets the job (acceptJobRequest() auto-declines
+    // the sibling requests once someone takes it). Falls back to every active broker if zero
+    // brokers are zoned for this city, so a booking never silently gets zero offers just
+    // because no broker has set up a matching service_city yet.
+    // Caveat: this is a straightforward string-equality match against pickup_location, which
+    // is freeform text — pairs best with an exact city name. A real geocoding LocationProvider
+    // (src/providers/location) would be a more robust way to derive the city from an address.
+    let brokerIds = await BrokerProfileModel.findEligibleBrokers({ city: pickup_location });
+    if (!brokerIds.length) {
+      brokerIds = await UserModel.findActiveBrokers();
+      logger.warn(`No brokers zoned for pickup city "${pickup_location}" — falling back to broadcasting to all ${brokerIds.length} active brokers`);
+    }
     await Promise.all(brokerIds.map(async (brokerId) => {
       const jobRequest = await JobRequestModel.create({
         bookingId: booking.id,
@@ -189,6 +204,64 @@ const getBooking = async (req, res, next) => {
 
     const timeline = await BookingModel.getTimeline(booking.id);
     return successResponse(res, 200, 'Booking fetched', { booking: projectBooking(booking, timeline, req.user.role) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Straight-line ETA only — no routing engine, so this is a rough estimate for the
+// "how far out is my driver" UI, not turn-by-turn navigation.
+const AVERAGE_SPEED_KMPH = 40;
+
+const haversineKm = (lat1, lng1, lat2, lng2) => {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+// ─── GET /api/bookings/:id/track ─────────────────────────────────────────────
+// Polled by the frontend every 5-10s — plain lat/lng snapshot, no WebSocket infra.
+const trackBooking = async (req, res, next) => {
+  try {
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (!assertCanView(booking, req.user)) return errorResponse(res, 403, 'You do not have access to this booking');
+
+    const location = booking.driver_id ? await DriverProfileModel.findLocation(booking.driver_id) : null;
+    const hasLocation = !!(location && location.current_lat != null && location.current_lng != null);
+
+    let distanceRemainingKm = null;
+    let etaMinutes = null;
+    if (hasLocation && booking.drop_lat != null && booking.drop_lng != null) {
+      distanceRemainingKm = haversineKm(
+        Number(location.current_lat), Number(location.current_lng),
+        Number(booking.drop_lat), Number(booking.drop_lng)
+      );
+      etaMinutes = Math.round((distanceRemainingKm / AVERAGE_SPEED_KMPH) * 60);
+    }
+
+    // Surfaced so the client's tracking screen can show an incident banner without a
+    // separate call to GET /api/trips/:id/incidents.
+    const trip = await TripModel.findByBookingId(booking.id);
+    const incident = trip ? await TripIncidentModel.findLatestUnresolvedByTrip(trip.id) : null;
+
+    return successResponse(res, 200, 'Booking location fetched', {
+      status: booking.status,
+      driverLat: hasLocation ? Number(location.current_lat) : null,
+      driverLng: hasLocation ? Number(location.current_lng) : null,
+      lastLocationAt: location ? location.last_location_at : null,
+      distanceRemainingKm: distanceRemainingKm != null ? Math.round(distanceRemainingKm * 100) / 100 : null,
+      etaMinutes,
+      incident: incident ? {
+        reason: incident.reason,
+        notes: incident.notes,
+        status: incident.status,
+        reportedAt: incident.reported_at,
+      } : null,
+    });
   } catch (err) {
     next(err);
   }
@@ -319,6 +392,10 @@ const payBooking = async (req, res, next) => {
     if (booking.status === 'cancelled') return errorResponse(res, 409, 'Booking is cancelled');
     if (booking.payment_status !== 'pending') return errorResponse(res, 409, `Booking is already ${booking.payment_status}`);
 
+    const order = await paymentProvider.createOrder({ bookingId: booking.id, amount: booking.amount });
+    const verification = await paymentProvider.verifyPayment({ orderId: order.orderId, payload: req.body });
+    if (!verification.success) return errorResponse(res, 402, 'Payment verification failed');
+
     await BookingModel.update(booking.id, { payment_status: 'paid' });
 
     await AuditLogModel.log({
@@ -386,4 +463,6 @@ const estimatePricing = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, listBookings, getBooking, updateBookingStatus, cancelBooking, payBooking, rateBooking, estimatePricing };
+module.exports = {
+  createBooking, listBookings, getBooking, trackBooking, updateBookingStatus, cancelBooking, payBooking, rateBooking, estimatePricing,
+};

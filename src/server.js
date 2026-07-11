@@ -3,6 +3,7 @@ const app    = require('./app');
 const logger = require('./utils/logger');
 const pool   = require('./config/db');
 const { runMigrations } = require('./config/migrate');
+const { startOfferExpirySweep } = require('./cron/offerExpirySweep');
 
 const PORT = process.env.PORT || 5000;
 
@@ -30,6 +31,8 @@ const startServer = async () => {
     logger.info(`📖 Swagger docs: http://localhost:${PORT}/api-docs`);
     logger.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   });
+
+  startOfferExpirySweep();
 
   process.on('SIGTERM', () => {
     logger.info('SIGTERM received — shutting down gracefully');

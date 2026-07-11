@@ -1,10 +1,16 @@
 const express = require('express');
 const router = express.Router();
 
-const { listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, updateTripLocation, uploadPod } = require('../controllers/trip.controller');
+const {
+  listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, updateTripLocation,
+  reportIssue, listIncidents, resolveIncident, uploadPod,
+} = require('../controllers/trip.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
-const { updateTripStatusValidation, updateTripLocationValidation } = require('../validations/trip.validation');
+const idempotent = require('../middleware/idempotency.middleware');
+const {
+  updateTripStatusValidation, updateTripLocationValidation, reportIssueValidation, resolveIncidentValidation,
+} = require('../validations/trip.validation');
 
 /**
  * @swagger
@@ -116,6 +122,11 @@ router.get('/trips/:id', authenticate, authorize('broker', 'driver', 'admin'), g
  *         name: id
  *         required: true
  *         schema: { type: string, format: uuid }
+ *       - in: header
+ *         name: Idempotency-Key
+ *         required: false
+ *         description: Optional. A duplicate key + same user replays the original response instead of re-applying the status change.
+ *         schema: { type: string }
  *     requestBody:
  *       required: true
  *       content:
@@ -132,7 +143,7 @@ router.get('/trips/:id', authenticate, authorize('broker', 'driver', 'admin'), g
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
-router.patch('/trips/:id/status', authenticate, authorize('broker', 'driver', 'admin'), updateTripStatusValidation, validate, updateTripStatus);
+router.patch('/trips/:id/status', authenticate, authorize('broker', 'driver', 'admin'), idempotent('PATCH /trips/:id/status'), updateTripStatusValidation, validate, updateTripStatus);
 
 /**
  * @swagger
@@ -165,6 +176,122 @@ router.patch('/trips/:id/status', authenticate, authorize('broker', 'driver', 'a
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.patch('/trips/:id/location', authenticate, authorize('driver'), updateTripLocationValidation, validate, updateTripLocation);
+
+/**
+ * @swagger
+ * /api/trips/{id}/report-issue:
+ *   post:
+ *     tags: [Trips]
+ *     summary: Report a mid-trip incident (driver only)
+ *     description: Only allowed while the trip is active (confirmed/en_route_pickup/picked_up/in_transit). Creates a trip_incidents row and immediately notifies the trip's broker and the booking's client.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reason]
+ *             properties:
+ *               reason: { type: string, enum: [accident, breakdown, traffic_block, medical, other] }
+ *               notes: { type: string, nullable: true }
+ *     responses:
+ *       201:
+ *         description: Incident reported
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your trip
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Trip is not in an active state
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/trips/:id/report-issue', authenticate, authorize('driver'), reportIssueValidation, validate, reportIssue);
+
+/**
+ * @swagger
+ * /api/trips/{id}/incidents:
+ *   get:
+ *     tags: [Trips]
+ *     summary: List incidents reported on a trip
+ *     description: Accessible by the trip's broker, driver, client (via the owning booking), or admin.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Incidents fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: No access to this trip
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/trips/:id/incidents', authenticate, listIncidents);
+
+/**
+ * @swagger
+ * /api/trips/{id}/incidents/{incidentId}/resolve:
+ *   patch:
+ *     tags: [Trips]
+ *     summary: Mark a trip incident resolved (broker or admin only)
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: incidentId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [resolution]
+ *             properties:
+ *               resolution: { type: string, example: 'Backup truck dispatched, driver swapped.' }
+ *     responses:
+ *       200:
+ *         description: Incident resolved
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: Incident not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Incident already resolved
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/trips/:id/incidents/:incidentId/resolve', authenticate, authorize('broker', 'admin'), resolveIncidentValidation, validate, resolveIncident);
 
 /**
  * @swagger
