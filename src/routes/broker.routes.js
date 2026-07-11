@@ -29,7 +29,15 @@ const { updateServiceCityValidation, updateAvailabilityValidation } = require('.
  *         description: Service city updated
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         profile: { $ref: '#/components/schemas/BrokerProfile' }
  *       422:
  *         description: Validation errors
  *         content:
@@ -61,7 +69,15 @@ router.patch('/broker/service-city', authenticate, authorize('broker'), updateSe
  *         description: Availability updated
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         profile: { $ref: '#/components/schemas/BrokerProfile' }
  *       422:
  *         description: Validation errors
  *         content:

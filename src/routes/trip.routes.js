@@ -206,7 +206,15 @@ router.patch('/trips/:id/location', authenticate, authorize('driver'), updateTri
  *         description: Incident reported
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         incident: { $ref: '#/components/schemas/TripIncident' }
  *       403:
  *         description: Not your trip
  *         content:
@@ -239,7 +247,15 @@ router.post('/trips/:id/report-issue', authenticate, authorize('driver'), report
  *         description: Incidents fetched
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         incidents: { type: array, items: { $ref: '#/components/schemas/TripIncident' } }
  *       403:
  *         description: No access to this trip
  *         content:
@@ -279,7 +295,15 @@ router.get('/trips/:id/incidents', authenticate, listIncidents);
  *         description: Incident resolved
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         incident: { $ref: '#/components/schemas/TripIncident' }
  *       404:
  *         description: Incident not found
  *         content:

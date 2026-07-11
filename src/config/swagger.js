@@ -340,7 +340,7 @@ const options = {
             brokerId:       { type: 'string', format: 'uuid', nullable: true, description: 'Null until a broker accepts the job request' },
             driverId:       { type: 'string', format: 'uuid', nullable: true, description: 'Null until the broker assigns a driver' },
             truckId:        { type: 'string', format: 'uuid', nullable: true, description: 'Null until the broker assigns a truck' },
-            status:         { type: 'string', enum: ['pending', 'confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'] },
+            status:         { type: 'string', enum: ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed', 'cancelled', 'no_broker_available'], description: "no_broker_available is set automatically by the offer-expiry cron sweep when every broadcast job_request lapses with none accepted — never set directly via PATCH /api/bookings/{id}/status." },
             pickup:         { type: 'string', example: 'Pune, Maharashtra' },
             drop:           { type: 'string', example: 'Mumbai, Maharashtra' },
             truckType:      { type: 'string', nullable: true },
@@ -491,6 +491,10 @@ const options = {
             avatar:         { type: 'string', nullable: true },
             status:         { type: 'string', enum: ['available', 'on_trip', 'offline'] },
             kycStatus:      { type: 'string', enum: ['pending', 'submitted', 'verified', 'rejected'] },
+            currentLat:     { type: 'number', nullable: true, description: 'Last location reported via PATCH /api/vehicles/drivers/me/location' },
+            currentLng:     { type: 'number', nullable: true },
+            lastLocationAt: { type: 'string', format: 'date-time', nullable: true },
+            distanceKm:     { type: 'number', nullable: true, description: 'Only present when GET /api/vehicles/drivers was called with near_lat/near_lng' },
           },
         },
 
@@ -516,6 +520,15 @@ const options = {
             truck_id:       { type: 'string', format: 'uuid', nullable: true },
             avatar:         { type: 'string', nullable: true },
             status:         { type: 'string', enum: ['available', 'on_trip', 'offline'] },
+          },
+        },
+
+        // ── Broker profile ────────────────────────────────────────────────────
+        BrokerProfile: {
+          type: 'object',
+          properties: {
+            serviceCity: { type: 'string', nullable: true, example: 'Mumbai', description: 'Narrows which new bookings get broadcast to this broker — null means never set, treated as no zone restriction' },
+            isOnline:    { type: 'boolean', example: true, description: 'While false, this broker is excluded from new booking job-request broadcasts. Defaults true if never explicitly set.' },
           },
         },
 
@@ -585,6 +598,21 @@ const options = {
               type: 'array',
               items: { type: 'object', properties: { step: { type: 'string' }, done: { type: 'boolean' }, time: { type: 'string', format: 'date-time', nullable: true } } },
             },
+          },
+        },
+
+        TripIncident: {
+          type: 'object',
+          properties: {
+            id:         { type: 'string', format: 'uuid' },
+            tripId:     { type: 'string', format: 'uuid' },
+            driverId:   { type: 'string', format: 'uuid' },
+            reason:     { type: 'string', enum: ['accident', 'breakdown', 'traffic_block', 'medical', 'other'] },
+            notes:      { type: 'string', nullable: true },
+            status:     { type: 'string', enum: ['reported', 'acknowledged', 'resolved'] },
+            reportedAt: { type: 'string', format: 'date-time' },
+            resolvedAt: { type: 'string', format: 'date-time', nullable: true },
+            resolution: { type: 'string', nullable: true, description: 'Set only once status is resolved' },
           },
         },
 
@@ -708,6 +736,10 @@ const options = {
       {
         name: 'Vehicles',
         description: 'Broker fleet management: trucks and driver profiles.',
+      },
+      {
+        name: 'Broker',
+        description: 'Broker-only profile settings: service city (for zoned job broadcast) and online/offline availability.',
       },
       {
         name: 'Jobs',

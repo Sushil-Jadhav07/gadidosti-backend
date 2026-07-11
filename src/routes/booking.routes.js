@@ -74,7 +74,7 @@ router.post('/bookings', authenticate, authorize('client'), idempotent('POST /bo
  *     parameters:
  *       - in: query
  *         name: status
- *         schema: { type: string, enum: [pending, confirmed, assigned, en_route_pickup, picked_up, in_transit, delivered, completed, cancelled] }
+ *         schema: { type: string, enum: [pending, confirmed, assigned, en_route_pickup, picked_up, in_transit, delivered, completed, cancelled, no_broker_available] }
  *       - in: query
  *         name: page
  *         schema: { type: integer, default: 1 }
@@ -159,7 +159,7 @@ router.get('/bookings/:id', authenticate, getBooking);
  *   get:
  *     tags: [Bookings]
  *     summary: Live-track a booking's assigned driver (client/broker/driver/admin)
- *     description: Meant to be polled every 5-10s, not pushed via WebSocket. Returns null location fields if no driver is assigned yet or no location has been reported yet. ETA is a straight-line estimate (no routing engine).
+ *     description: Meant to be polled every 5-10s, not pushed via WebSocket. Returns null location fields if no driver is assigned yet or no location has been reported yet. ETA is a straight-line estimate (no routing engine). Also surfaces the trip's latest unresolved incident, if any, so the client doesn't need a separate call to GET /api/trips/{id}/incidents.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -173,7 +173,29 @@ router.get('/bookings/:id', authenticate, getBooking);
  *         description: Booking location fetched
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         status:               { type: string, enum: [pending, confirmed, assigned, en_route_pickup, picked_up, in_transit, delivered, completed, cancelled, no_broker_available] }
+ *                         driverLat:            { type: number, nullable: true }
+ *                         driverLng:            { type: number, nullable: true }
+ *                         lastLocationAt:       { type: string, format: date-time, nullable: true }
+ *                         distanceRemainingKm:  { type: number, nullable: true }
+ *                         etaMinutes:           { type: integer, nullable: true }
+ *                         incident:
+ *                           type: object
+ *                           nullable: true
+ *                           description: The trip's latest unresolved incident, or null if there is none
+ *                           properties:
+ *                             reason:     { type: string, enum: [accident, breakdown, traffic_block, medical, other] }
+ *                             notes:      { type: string, nullable: true }
+ *                             status:     { type: string, enum: [reported, acknowledged, resolved] }
+ *                             reportedAt: { type: string, format: date-time }
  *       403:
  *         description: No access to this booking
  *         content:
