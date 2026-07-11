@@ -655,6 +655,7 @@ const options = {
           type: 'object',
           properties: {
             id:           { type: 'string', format: 'uuid' },
+            disputeNumber: { type: 'string', example: 'DSP-003', description: 'Short human-readable reference for display' },
             bookingId:    { type: 'string', format: 'uuid' },
             bookingNumber: { type: 'string', example: 'BKG-202412-003', description: 'Short human-readable reference for display' },
             raisedBy:     { type: 'string', enum: ['client', 'broker'] },

@@ -595,6 +595,27 @@ const runMigrations = async (client) => {
       CREATE INDEX IF NOT EXISTS idx_trip_incidents_status  ON trip_incidents(status);
     `);
 
+    // ── DISPUTE NUMBER (mirrors db/16dispute_number.sql) ──
+    await client.query(`
+      ALTER TABLE disputes ADD COLUMN IF NOT EXISTS dispute_number VARCHAR(20);
+    `);
+
+    // Back-fill any disputes created before dispute_number existed, numbering them
+    // sequentially in chronological order.
+    await client.query(`
+      WITH numbered AS (
+        SELECT id, 'DSP-' || LPAD(ROW_NUMBER() OVER (ORDER BY created_at)::text, 3, '0') AS generated
+        FROM disputes
+        WHERE dispute_number IS NULL
+      )
+      UPDATE disputes d SET dispute_number = numbered.generated
+      FROM numbered WHERE d.id = numbered.id;
+    `);
+
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_disputes_dispute_number ON disputes(dispute_number);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

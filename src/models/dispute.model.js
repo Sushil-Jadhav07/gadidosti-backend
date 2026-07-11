@@ -8,11 +8,28 @@ const SELECT_WITH_JOINS = `
 `;
 
 class DisputeModel {
+  // Short human-readable reference shown in the UI instead of the raw UUID, e.g. "DSP-001".
+  // Flat incrementing sequence (unlike bookings' month-scoped booking_number) — dispute volume
+  // is low enough that a global counter never needs to reset. Short retry loop handles the
+  // rare concurrent-insert collision, same pattern as BookingModel.generateBookingNumber.
+  static async generateDisputeNumber() {
+    const countResult = await pool.query(`SELECT COUNT(*) FROM disputes`);
+    const startSeq = parseInt(countResult.rows[0].count, 10) + 1;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = `DSP-${String(startSeq + attempt).padStart(3, '0')}`;
+      const exists = await pool.query(`SELECT 1 FROM disputes WHERE dispute_number = $1`, [candidate]);
+      if (!exists.rows.length) return candidate;
+    }
+    return `DSP-${Date.now().toString().slice(-6)}`;
+  }
+
   static async create({ bookingId, raisedByUserId, raisedByRole, issueType, description }) {
+    const disputeNumber = await this.generateDisputeNumber();
     const result = await pool.query(
-      `INSERT INTO disputes (booking_id, raised_by_user_id, raised_by_role, issue_type, description)
-       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [bookingId, raisedByUserId, raisedByRole, issueType, description]
+      `INSERT INTO disputes (dispute_number, booking_id, raised_by_user_id, raised_by_role, issue_type, description)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [disputeNumber, bookingId, raisedByUserId, raisedByRole, issueType, description]
     );
     return result.rows[0];
   }
