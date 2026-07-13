@@ -1,5 +1,6 @@
 const { successResponse, errorResponse } = require('../utils/response');
 const { getLocationProvider } = require('../providers/location');
+const PricingModel = require('../models/pricing.model');
 
 const locationProvider = getLocationProvider();
 
@@ -14,7 +15,23 @@ const MATERIAL_TYPES = ['Electronics', 'FMCG', 'Construction', 'Furniture', 'Pha
 
 const CITIES = ['Mumbai', 'Pune', 'Delhi', 'Bengaluru', 'Chennai', 'Hyderabad', 'Jaipur', 'Ahmedabad', 'Surat', 'Nashik', 'Nagpur', 'Kolhapur', 'Indore', 'Goa', 'Aurangabad'];
 
-const listVehicleTypes = async (req, res) => successResponse(res, 200, 'Vehicle types fetched', { vehicleTypes: VEHICLE_TYPES });
+// Attaches the admin-configured base fare (pricing_config.intraCity.<id>.baseFare) to each
+// vehicle type, so the truck-selection card always reflects whatever Pricing Management
+// currently has saved — no hardcoded price ever ships in this response. Part truck has no
+// fixed base fare (billed by capacity used %, see PricingModel.estimate), so it stays null.
+const listVehicleTypes = async (req, res, next) => {
+  try {
+    const configRow = await PricingModel.getConfig();
+    const intraCity = configRow?.config?.intraCity || {};
+    const vehicleTypes = VEHICLE_TYPES.map((v) => ({
+      ...v,
+      basePrice: intraCity[v.id]?.baseFare ?? null,
+    }));
+    return successResponse(res, 200, 'Vehicle types fetched', { vehicleTypes });
+  } catch (err) {
+    next(err);
+  }
+};
 const listMaterialTypes = async (req, res) => successResponse(res, 200, 'Material types fetched', { materialTypes: MATERIAL_TYPES });
 const listCities = async (req, res) => successResponse(res, 200, 'Cities fetched', { cities: CITIES });
 

@@ -10,7 +10,12 @@ const router = express.Router();
  *   get:
  *     tags: [Config]
  *     summary: List available truck/vehicle categories
- *     description: Public, no auth required. Powers the truck-selection step of the booking form.
+ *     description: |
+ *       Public, no auth required. Powers the truck-selection step of the booking form.
+ *       `basePrice` is read live from the admin-configured pricing (PUT /api/admin/pricing,
+ *       `intraCity.<id>.baseFare`) — it always reflects whatever Pricing Management currently
+ *       has saved. `part` has no fixed base fare (billed by capacity used %, see
+ *       POST /api/pricing/estimate) so its `basePrice` is always `null`.
  *     responses:
  *       200:
  *         description: Vehicle types fetched
@@ -29,10 +34,11 @@ const router = express.Router();
  *                           items:
  *                             type: object
  *                             properties:
- *                               id:       { type: string, enum: [small, medium, large, part] }
- *                               name:     { type: string, example: 'Medium Truck' }
- *                               capacity: { type: string, example: 'Up to 5 Tons' }
- *                               featured: { type: boolean, example: true, nullable: true }
+ *                               id:        { type: string, enum: [small, medium, large, part] }
+ *                               name:      { type: string, example: 'Medium Truck' }
+ *                               capacity:  { type: string, example: 'Up to 5 Tons' }
+ *                               basePrice: { type: number, example: 800, nullable: true, description: "From live pricing_config.intraCity.<id>.baseFare; null for part (capacity-based billing)" }
+ *                               featured:  { type: boolean, example: true, nullable: true }
  *                               savePercent: { type: integer, example: 40, nullable: true }
  */
 router.get('/config/vehicle-types', listVehicleTypes);
