@@ -53,9 +53,13 @@ const uploadKycDocument = async (req, res, next) => {
       documentKey: document_key,
       folder: `kyc/${req.user.id}`,
     });
+    // Store the absolute url, not the provider's raw relative path — otherwise a client
+    // reading it back later (e.g. after a refresh, before API_BASE_URL existed) would
+    // resolve it against its own origin instead of the API's.
+    const absoluteUrl = toAbsoluteUrl(req, url);
 
     const existing = await KycModel.findByUserId(req.user.id);
-    const documents = { ...(existing?.documents || {}), [document_key]: url };
+    const documents = { ...(existing?.documents || {}), [document_key]: absoluteUrl };
     const submission = await KycModel.upsertSubmission(req.user.id, documents);
 
     await AuditLogModel.log({

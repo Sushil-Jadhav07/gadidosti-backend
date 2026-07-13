@@ -21,6 +21,7 @@ const {
   submitBrokerKycValidation,
   submitDriverKycValidation,
   rejectKycValidation,
+  uploadKycDocumentValidation,
 } = require('../validations/kyc.validation');
 
 // ─── Broker/Driver — submit KYC ──────────────────────────────────────────────
@@ -152,12 +153,16 @@ router.post('/kyc/driver', authenticate, authorize('driver'), submitDriverKycVal
  *       use this in production); `fake` (default) writes to local disk instead, which is lost on
  *       every deploy/restart on platforms with an ephemeral filesystem (e.g. Render) — dev only.
  *
- *       Re-uploading the same `document_key` replaces the previous file for that key (old row is
- *       deleted when STORAGE_PROVIDER=postgres) — this is how document photos get "edited".
+ *       The uploaded file's absolute url is merged into the caller's `kyc_submissions.documents`
+ *       under `document_key` **immediately** — it survives a page refresh even before
+ *       `POST /api/kyc/broker`/`driver` is ever called. Re-uploading the same `document_key`
+ *       replaces the previous file for that key (old row is deleted when
+ *       STORAGE_PROVIDER=postgres) — this is how document photos get "edited".
  *
- *       The returned `url` isn't saved anywhere by this call alone — pass it back in the
- *       `documents` object on `POST /api/kyc/broker` or `POST /api/kyc/driver` under a
- *       `*_photo_url` key (e.g. `pan_photo_url`, `license_photo_url`) to attach it to the submission.
+ *       `document_key` is restricted per role, and must be the *exact* key you also want it
+ *       to appear under in `POST /api/kyc/broker`/`driver`'s `documents` object:
+ *       - **broker**: `pan_photo_url`, `aadhaar_photo_url`
+ *       - **driver**: `license_photo_url`, `aadhaar_photo_url`
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -169,7 +174,11 @@ router.post('/kyc/driver', authenticate, authorize('driver'), submitDriverKycVal
  *             required: [file, document_key]
  *             properties:
  *               file: { type: string, format: binary }
- *               document_key: { type: string, example: 'pan_photo', description: "Free-form label for this file, e.g. 'pan_photo', 'aadhaar_photo', 'license_photo'" }
+ *               document_key:
+ *                 type: string
+ *                 enum: [pan_photo_url, aadhaar_photo_url, license_photo_url]
+ *                 example: 'aadhaar_photo_url'
+ *                 description: "Broker accounts may only use pan_photo_url/aadhaar_photo_url; driver accounts only license_photo_url/aadhaar_photo_url — a mismatched key for your role returns 422."
  *     responses:
  *       200:
  *         description: Document uploaded
@@ -191,13 +200,21 @@ router.post('/kyc/driver', authenticate, authorize('driver'), submitDriverKycVal
  *                             document_type: { type: string, example: 'pan_photo' }
  *                             url:           { type: string, example: 'https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>' }
  *       422:
- *         description: Missing file or document_key
+ *         description: Missing file, or document_key missing/not valid for this role
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post('/kyc/documents/upload', authenticate, authorize('broker', 'driver'), upload.single('file'), uploadKycDocument);
+router.post(
+  '/kyc/documents/upload',
+  authenticate,
+  authorize('broker', 'driver'),
+  upload.single('file'),
+  uploadKycDocumentValidation,
+  validate,
+  uploadKycDocument
+);
 
 /**
  * @swagger
