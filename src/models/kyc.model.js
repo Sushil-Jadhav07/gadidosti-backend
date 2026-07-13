@@ -101,6 +101,32 @@ class KycModel {
     };
   }
 
+  // Re-uploading the same document_key replaces it — deletes every other kyc_files row
+  // for this user+document_key so old versions don't pile up as orphaned rows.
+  static async deleteOtherFiles(userId, documentKey, keepFileId) {
+    await pool.query(
+      `DELETE FROM kyc_files WHERE user_id = $1 AND document_key = $2 AND id != $3`,
+      [userId, documentKey, keepFileId]
+    );
+  }
+
+  // Every uploaded document, one row per document_key (latest upload wins if the
+  // same key was re-uploaded — matches what's merged into kyc_submissions.documents).
+  // Path-style organization (kyc/{user_id}/{document_type}/{filename}) is metadata-only —
+  // actual bytes live in kyc_files.data, not on a real filesystem.
+  static async listFiles(userId) {
+    const result = await pool.query(
+      `SELECT DISTINCT ON (document_key)
+              id, user_id, document_key AS document_type, filename, mime_type,
+              octet_length(data) AS size_bytes, created_at
+       FROM kyc_files
+       WHERE user_id = $1
+       ORDER BY document_key, created_at DESC`,
+      [userId]
+    );
+    return result.rows;
+  }
+
   // Admin: approve or reject a user's KYC
   static async review(userId, { status, reviewerId, reason }) {
     const client = await pool.connect();

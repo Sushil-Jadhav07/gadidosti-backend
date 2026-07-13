@@ -4,6 +4,10 @@ const router = express.Router();
 const {
   submitKyc,
   uploadKycDocument,
+  listMyKycDocuments,
+  listUserKycDocuments,
+  getKycFile,
+  getKycById,
   getMyKyc,
   getUserKyc,
   getAllKyc,
@@ -32,6 +36,9 @@ const {
  *       Resubmitting (e.g. after a rejection) overwrites the previous submission and clears any rejection reason.
  *
  *       **Required document keys:** `pan_number`, `aadhaar_number`, `gst_number`, `bank_account_number`, `business_registration_number`
+ *
+ *       **Optional photo keys** (get the url from `POST /api/kyc/documents/upload` first,
+ *       then include it here): `pan_photo_url`, `aadhaar_photo_url`
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -48,7 +55,9 @@ const {
  *           example:
  *             documents:
  *               pan_number: "ABCDE1234F"
+ *               pan_photo_url: "https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>"
  *               aadhaar_number: "XXXX-XXXX-1234"
+ *               aadhaar_photo_url: "https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>"
  *               gst_number: "27ABCDE1234F1Z5"
  *               bank_account_number: "1234567890123"
  *               business_registration_number: "U12345MH2020PTC123456"
@@ -85,6 +94,9 @@ router.post('/kyc/broker', authenticate, authorize('broker'), submitBrokerKycVal
  *       Resubmitting (e.g. after a rejection) overwrites the previous submission and clears any rejection reason.
  *
  *       **Required document keys:** `license_number`, `aadhaar_number`, `vehicle_registration_number`, `vehicle_insurance_number`
+ *
+ *       **Optional photo keys** (get the url from `POST /api/kyc/documents/upload` first,
+ *       then include it here): `license_photo_url`, `aadhaar_photo_url`
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -101,7 +113,9 @@ router.post('/kyc/broker', authenticate, authorize('broker'), submitBrokerKycVal
  *           example:
  *             documents:
  *               license_number: "MH-2020123456789"
+ *               license_photo_url: "https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>"
  *               aadhaar_number: "XXXX-XXXX-1234"
+ *               aadhaar_photo_url: "https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>"
  *               vehicle_registration_number: "MH-12-CD-5678"
  *               vehicle_insurance_number: "INS-2024-567890"
  *     responses:
@@ -133,9 +147,17 @@ router.post('/kyc/driver', authenticate, authorize('driver'), submitDriverKycVal
  *     tags: [KYC]
  *     summary: Upload a KYC document file
  *     description: |
- *       Uploads a document photo/PDF via the active StorageProvider (STORAGE_PROVIDER env var, defaults to a local-disk
- *       fake provider not safe for production) and merges the returned URL into the caller's kyc_submissions.documents
- *       under `document_key`.
+ *       Uploads a document photo/PDF via the active StorageProvider (STORAGE_PROVIDER env var).
+ *       `postgres` stores the bytes in the kyc_files table (persists across deploys/restarts —
+ *       use this in production); `fake` (default) writes to local disk instead, which is lost on
+ *       every deploy/restart on platforms with an ephemeral filesystem (e.g. Render) — dev only.
+ *
+ *       Re-uploading the same `document_key` replaces the previous file for that key (old row is
+ *       deleted when STORAGE_PROVIDER=postgres) — this is how document photos get "edited".
+ *
+ *       The returned `url` isn't saved anywhere by this call alone — pass it back in the
+ *       `documents` object on `POST /api/kyc/broker` or `POST /api/kyc/driver` under a
+ *       `*_photo_url` key (e.g. `pan_photo_url`, `license_photo_url`) to attach it to the submission.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -147,14 +169,27 @@ router.post('/kyc/driver', authenticate, authorize('driver'), submitDriverKycVal
  *             required: [file, document_key]
  *             properties:
  *               file: { type: string, format: binary }
- *               document_key: { type: string, example: 'pan_card_photo' }
+ *               document_key: { type: string, example: 'pan_photo', description: "Free-form label for this file, e.g. 'pan_photo', 'aadhaar_photo', 'license_photo'" }
  *     responses:
  *       200:
  *         description: Document uploaded
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/SuccessResponse'
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         document:
+ *                           type: object
+ *                           properties:
+ *                             id:            { type: string, format: uuid, nullable: true }
+ *                             user_id:       { type: string, format: uuid }
+ *                             document_type: { type: string, example: 'pan_photo' }
+ *                             url:           { type: string, example: 'https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>' }
  *       422:
  *         description: Missing file or document_key
  *         content:
@@ -163,6 +198,81 @@ router.post('/kyc/driver', authenticate, authorize('driver'), submitDriverKycVal
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/kyc/documents/upload', authenticate, authorize('broker', 'driver'), upload.single('file'), uploadKycDocument);
+
+/**
+ * @swagger
+ * /api/kyc/documents:
+ *   get:
+ *     tags: [KYC]
+ *     summary: List own uploaded KYC documents, one entry per document type (broker/driver only)
+ *     description: |
+ *       Unlike GET /api/kyc/status (which returns documents merged into one object keyed by
+ *       document_type), this returns each uploaded document as a separate object with its own
+ *       absolute url, filename, mime type, size, and upload timestamp.
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Documents fetched
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         documents:
+ *                           type: array
+ *                           items:
+ *                             type: object
+ *                             properties:
+ *                               id:            { type: string, format: uuid }
+ *                               document_type: { type: string, example: 'pan_photo' }
+ *                               path:          { type: string, example: 'kyc/<user_id>/pan_photo/pan.pdf' }
+ *                               filename:      { type: string }
+ *                               mime_type:     { type: string }
+ *                               size_bytes:    { type: integer }
+ *                               uploaded_at:   { type: string, format: date-time }
+ *                               url:           { type: string, example: 'https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>' }
+ */
+router.get('/kyc/documents', authenticate, authorize('broker', 'driver'), listMyKycDocuments);
+
+/**
+ * @swagger
+ * /api/kyc/documents/file/{id}:
+ *   get:
+ *     tags: [KYC]
+ *     summary: Fetch a stored KYC document file (owner or admin only)
+ *     description: |
+ *       Serves the raw file bytes for a document uploaded while STORAGE_PROVIDER=postgres.
+ *       Only the uploading user or an admin may fetch it.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: File bytes
+ *         content:
+ *           application/octet-stream: {}
+ *       403:
+ *         description: Not your document
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: File not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/kyc/documents/file/:id', authenticate, authorize('broker', 'driver', 'admin'), getKycFile);
 
 /**
  * @swagger
@@ -190,6 +300,47 @@ router.post('/kyc/documents/upload', authenticate, authorize('broker', 'driver')
  *                           $ref: '#/components/schemas/KycSubmission'
  */
 router.get('/kyc/status', authenticate, authorize('broker', 'driver'), getMyKyc);
+
+/**
+ * @swagger
+ * /api/kyc/{userId}:
+ *   get:
+ *     tags: [KYC]
+ *     summary: Get own KYC status + submission by explicit user id (broker/driver only)
+ *     description: |
+ *       Self-only counterpart to GET /api/admin/kyc/{userId} — same data as GET /api/kyc/status,
+ *       but addressed by id instead of implicitly via the bearer token. Passing any id other
+ *       than your own returns 404 (not 403), so it doesn't reveal whether that id exists.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: KYC status fetched
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         kyc_status: { type: string, enum: [pending, submitted, verified, rejected] }
+ *                         submission:
+ *                           $ref: '#/components/schemas/KycSubmission'
+ *       404:
+ *         description: Not your id
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/kyc/:userId', authenticate, authorize('broker', 'driver'), getKycById);
 
 // ─── Admin — KYC review queue ──────────────────────────────────────────────────
 
@@ -266,6 +417,34 @@ router.get('/admin/kyc/pending', authenticate, authorize('admin'), getAllKyc);
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.get('/admin/kyc/:userId', authenticate, authorize('admin'), getUserKyc);
+
+/**
+ * @swagger
+ * /api/admin/kyc/{userId}/documents:
+ *   get:
+ *     tags: [KYC]
+ *     summary: List a user's uploaded KYC documents, one entry per document type (admin only)
+ *     description: Same shape as GET /api/kyc/documents but for any broker/driver, for the admin review screen.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: userId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Documents fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: User not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/admin/kyc/:userId/documents', authenticate, authorize('admin'), listUserKycDocuments);
 
 /**
  * @swagger

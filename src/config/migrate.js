@@ -616,6 +616,21 @@ const runMigrations = async (client) => {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_disputes_dispute_number ON disputes(dispute_number);
     `);
 
+    // ── KYC FILES (uploaded document bytes when STORAGE_PROVIDER=postgres, mirrors db/17kyc_files.sql) ──
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS kyc_files (
+        id            UUID            PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id       UUID            NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        document_key  TEXT            NOT NULL,
+        filename      TEXT            NOT NULL,
+        mime_type     TEXT            NOT NULL,
+        data          BYTEA           NOT NULL,
+        created_at    TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_kyc_files_user_id ON kyc_files(user_id);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
