@@ -11,7 +11,8 @@ const { updatePricingConfigValidation } = require('../validations/pricing.valida
  * /api/admin/pricing:
  *   get:
  *     tags: [Pricing]
- *     summary: Get pricing configuration (admin only)
+ *     summary: Get pricing configuration
+ *     description: Any authenticated user (any role) can view the current pricing configuration. Only admins can change it — see PUT below.
  *     security:
  *       - BearerAuth: []
  *     responses:
@@ -21,7 +22,7 @@ const { updatePricingConfigValidation } = require('../validations/pricing.valida
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
-router.get('/admin/pricing', authenticate, authorize('admin'), getPricingConfig);
+router.get('/admin/pricing', authenticate, getPricingConfig);
 
 /**
  * @swagger
