@@ -30,6 +30,11 @@ const { createDisputeValidation, resolveDisputeValidation } = require('../valida
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Validation errors — booking_id/issue_type/description are required, issue_type must be a recognized value
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/disputes', authenticate, authorize('client', 'broker'), createDisputeValidation, validate, createDispute);
 

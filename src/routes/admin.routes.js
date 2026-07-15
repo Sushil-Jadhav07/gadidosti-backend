@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { getDashboard, getAdminAnalytics, getSettings, updateSettings } = require('../controllers/admin.controller');
+const { getDashboard, getAdminAnalytics, getSettings, updateSettings, listOpenIncidents } = require('../controllers/admin.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { updateSettingsValidation } = require('../validations/admin.validation');
@@ -23,6 +23,31 @@ const { updateSettingsValidation } = require('../validations/admin.validation');
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.get('/admin/dashboard', authenticate, authorize('admin'), getDashboard);
+
+/**
+ * @swagger
+ * /api/admin/incidents:
+ *   get:
+ *     tags: [Admin Analytics]
+ *     summary: List open (unresolved) trip incidents platform-wide (admin only)
+ *     description: Unlike GET /api/trips/{id}/incidents (scoped to one known trip), this surfaces every open incident with its trip/booking/driver/broker context so admin can discover problems without already knowing a trip ID. Resolve via the existing PATCH /api/trips/{id}/incidents/{incidentId}/resolve.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20 }
+ *     responses:
+ *       200:
+ *         description: Open incidents fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ */
+router.get('/admin/incidents', authenticate, authorize('admin'), listOpenIncidents);
 
 /**
  * @swagger

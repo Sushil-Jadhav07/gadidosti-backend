@@ -12,11 +12,15 @@ class AnalyticsModel {
   // of new records against the 30 days before that (a simple rolling-window delta,
   // not a live recompute of e.g. "active trips 30 days ago" which isn't a stored fact).
   static async dashboard() {
-    const [totalBookings, totalTrucks, revenueAgg, activeTrips] = await Promise.all([
+    const [totalBookings, totalTrucks, revenueAgg, activeTrips, stalePending] = await Promise.all([
       pool.query(`SELECT COUNT(*) FROM bookings`),
       pool.query(`SELECT COUNT(*) FROM trucks`),
       pool.query(`SELECT COALESCE(SUM(platform_fee), 0) AS total FROM settlements`),
       pool.query(`SELECT COUNT(*) FROM trips WHERE status NOT IN ('delivered', 'completed', 'cancelled')`),
+      // Job requests no longer expire, so a booking with no broker response just sits
+      // 'pending' forever with nothing to flag it. Surface it here instead so ops
+      // notices — 2 hours is a operational threshold, not a hard cutoff or auto-action.
+      pool.query(`SELECT COUNT(*) FROM bookings WHERE status = 'pending' AND created_at < NOW() - INTERVAL '2 hours'`),
     ]);
 
     const windowed = await pool.query(`
@@ -37,6 +41,7 @@ class AnalyticsModel {
       activeTrips: parseInt(activeTrips.rows[0].count),
       totalRevenue: parseFloat(revenueAgg.rows[0].total),
       registeredTrucks: parseInt(totalTrucks.rows[0].count),
+      stalePendingBookings: parseInt(stalePending.rows[0].count),
       bookingsChange: pctChange(parseInt(w.bookings_now), parseInt(w.bookings_prev)),
       activeTripsChange: pctChange(parseInt(w.trips_now), parseInt(w.trips_prev)),
       revenueChange: pctChange(parseFloat(w.revenue_now), parseFloat(w.revenue_prev)),

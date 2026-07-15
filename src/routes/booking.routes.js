@@ -214,8 +214,16 @@ router.get('/bookings/:id/track', authenticate, trackBooking);
  * /api/bookings/{id}/status:
  *   patch:
  *     tags: [Bookings]
- *     summary: Advance a booking's status (broker/driver/admin)
- *     description: Appends a timeline entry, bumps current_step, and notifies the client.
+ *     summary: Manually override a booking's status (admin only — escape hatch, not normal flow)
+ *     description: |
+ *       Not called by any frontend under normal operation — PATCH /api/trips/{id}/status is what
+ *       actually drives status progression day-to-day, and it keeps the booking in sync automatically.
+ *       This exists purely as an admin escape hatch for fixing a booking that's stuck out of sync
+ *       with reality. Also syncs the linked trip's status (if one exists) so the two can never disagree.
+ *
+ *       `completed` is **not** an allowed value here — that transition must go through
+ *       PATCH /api/trips/{id}/status so its atomic completion guard and settlement side effects
+ *       aren't bypassed.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -231,7 +239,7 @@ router.get('/bookings/:id/track', authenticate, trackBooking);
  *             type: object
  *             required: [status]
  *             properties:
- *               status: { type: string, enum: [pending, confirmed, assigned, en_route_pickup, picked_up, in_transit, delivered, completed, cancelled] }
+ *               status: { type: string, enum: [pending, confirmed, assigned, en_route_pickup, picked_up, in_transit, delivered, cancelled, no_broker_available] }
  *               driver_id: { type: string, format: uuid }
  *               truck_id: { type: string, format: uuid }
  *     responses:
@@ -241,12 +249,17 @@ router.get('/bookings/:id/track', authenticate, trackBooking);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  *       403:
- *         description: Not your booking
+ *         description: Admin only
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Validation errors — status must be one of the allowed values, 'completed' is rejected
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.patch('/bookings/:id/status', authenticate, authorize('broker', 'driver', 'admin'), updateBookingStatusValidation, validate, updateBookingStatus);
+router.patch('/bookings/:id/status', authenticate, authorize('admin'), updateBookingStatusValidation, validate, updateBookingStatus);
 
 /**
  * @swagger
@@ -330,8 +343,8 @@ router.patch('/bookings/:id/pay', authenticate, authorize('client'), payBooking)
  * /api/bookings/{id}/rate:
  *   post:
  *     tags: [Bookings]
- *     summary: Rate a completed booking (client)
- *     description: Only allowed once the booking is delivered/completed. One rating per booking — a second attempt returns an error.
+ *     summary: Client Rating — rate a completed booking
+ *     description: Client Rating of a completed delivery (brokers/drivers are not rated anywhere in this system). Only allowed once the booking is delivered/completed. One rating per booking — a second attempt returns an error.
  *     security:
  *       - BearerAuth: []
  *     parameters:

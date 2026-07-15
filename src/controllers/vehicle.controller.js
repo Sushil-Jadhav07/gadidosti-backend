@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const TruckModel = require('../models/truck.model');
 const DriverProfileModel = require('../models/driverProfile.model');
 const UserModel = require('../models/user.model');
@@ -244,6 +246,64 @@ const createDriver = async (req, res, next) => {
   }
 };
 
+// POST /api/vehicles/drivers/register
+// The other real-world onboarding path — most drivers don't have their own account yet,
+// so this creates a brand-new users row (role: driver) and links it to this broker's
+// fleet in one step, instead of requiring the driver to self-register first and the
+// broker to then find them via POST /api/vehicles/drivers/lookup + POST /api/vehicles/drivers.
+// Login here (see SSK broker-driver/app/src/pages/Login.jsx) is email + password, so a
+// temporary password is generated and returned once — the broker is expected to relay it
+// to the driver, who can change it via PATCH /api/users/change-password afterward.
+const registerDriver = async (req, res, next) => {
+  try {
+    const { name, phone, email, license_no, license_expiry, aadhaar, truck_id, avatar } = req.body;
+
+    const existingPhone = await UserModel.findByPhone(phone);
+    if (existingPhone) return errorResponse(res, 409, 'A user with this phone number already exists — use "Link Existing Driver" instead');
+
+    const existingEmail = await UserModel.findByEmail(email);
+    if (existingEmail) return errorResponse(res, 409, 'A user with this email already exists');
+
+    const tempPassword = crypto.randomBytes(9).toString('base64url');
+    const passwordHash = await bcrypt.hash(tempPassword, 12);
+    const user = await UserModel.create({ name, phone, email, passwordHash, role: 'driver' });
+
+    const profile = await DriverProfileModel.create({
+      userId: user.id,
+      brokerId: req.user.id,
+      licenseNo: license_no,
+      licenseExpiry: license_expiry,
+      aadhaar,
+      truckId: truck_id,
+      avatar,
+    });
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'DRIVER_REGISTERED',
+      entity: 'driver_profiles',
+      entityId: user.id,
+      meta: { phone, email },
+      ipAddress: req.ip,
+    });
+
+    await NotificationModel.create({
+      userId: user.id,
+      title: 'Driver Account Created',
+      message: `An account has been created for you by ${req.user.name}. Log in with your email and the temporary password shared with you, then change it from your profile.`,
+      type: 'general',
+    });
+
+    logger.info(`Driver registered by broker ${req.user.id}: ${user.id}`);
+    return successResponse(res, 201, 'Driver registered and added to your fleet', {
+      driver: projectDriver(profile),
+      tempPassword,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // GET /api/vehicles/drivers
 const listDrivers = async (req, res, next) => {
   try {
@@ -358,5 +418,5 @@ const updateDriverLocation = async (req, res, next) => {
 
 module.exports = {
   createTruck, listTrucks, getTruck, updateTruck, deleteTruck,
-  lookupDriverByPhone, createDriver, listDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
+  lookupDriverByPhone, createDriver, registerDriver, listDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
 };

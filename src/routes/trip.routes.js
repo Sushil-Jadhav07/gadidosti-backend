@@ -2,12 +2,13 @@ const express = require('express');
 const router = express.Router();
 
 const {
-  listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, updateTripLocation,
-  reportIssue, listIncidents, resolveIncident, uploadPod,
+  listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, declineTrip, updateTripLocation,
+  reportIssue, listIncidents, resolveIncident, uploadPod, getPodFile,
 } = require('../controllers/trip.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
+const upload = require('../middleware/upload.middleware');
 const {
   updateTripStatusValidation, updateTripLocationValidation, reportIssueValidation, resolveIncidentValidation,
 } = require('../validations/trip.validation');
@@ -144,6 +145,34 @@ router.get('/trips/:id', authenticate, authorize('broker', 'driver', 'admin'), g
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.patch('/trips/:id/status', authenticate, authorize('broker', 'driver', 'admin'), idempotent('PATCH /trips/:id/status'), updateTripStatusValidation, validate, updateTripStatus);
+
+/**
+ * @swagger
+ * /api/trips/{id}/decline:
+ *   post:
+ *     tags: [Trips]
+ *     summary: Driver declines a trip before starting it
+ *     description: Only allowed while the trip is still 'confirmed' (not yet started). Frees the driver/truck, clears the assignment on the booking so the broker can assign someone else, and deletes the trip row. Once en route to pickup or beyond, use report-issue instead.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Trip declined
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       409:
+ *         description: Trip already started
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/trips/:id/decline', authenticate, authorize('driver'), declineTrip);
 
 /**
  * @swagger
@@ -322,8 +351,54 @@ router.patch('/trips/:id/incidents/:incidentId/resolve', authenticate, authorize
  * /api/trips/{id}/pod:
  *   post:
  *     tags: [Trips]
- *     summary: Upload proof of delivery (not yet configured)
- *     description: No object storage provider is configured yet — always returns 501, matching the KYC document-upload stub.
+ *     summary: Upload proof of delivery (driver only)
+ *     description: Multipart upload — same pattern as POST /api/kyc/documents/upload. Only the assigned driver may upload, and only while the trip is in_transit or delivered. The stored file's URL is saved on trips.pod_url.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file: { type: string, format: binary }
+ *     responses:
+ *       200:
+ *         description: Proof of delivery uploaded
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your trip
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Trip is not in_transit or delivered
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: No file uploaded
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/trips/:id/pod', authenticate, authorize('driver'), upload.single('file'), uploadPod);
+
+/**
+ * @swagger
+ * /api/trips/pod/file/{id}:
+ *   get:
+ *     tags: [Trips]
+ *     summary: Serve a proof-of-delivery file (STORAGE_PROVIDER=postgres only)
+ *     description: Mirrors GET /api/kyc/documents/file/{id}. Visible to anyone who can view the trip (client/broker/driver/admin).
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -332,12 +407,19 @@ router.patch('/trips/:id/incidents/:incidentId/resolve', authenticate, authorize
  *         required: true
  *         schema: { type: string, format: uuid }
  *     responses:
- *       501:
- *         description: Not configured
+ *       200:
+ *         description: File bytes
+ *       403:
+ *         description: No access to this file
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: File not found
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/trips/:id/pod', authenticate, authorize('driver'), uploadPod);
+router.get('/trips/pod/file/:id', authenticate, getPodFile);
 
 module.exports = router;

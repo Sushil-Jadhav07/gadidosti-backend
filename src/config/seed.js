@@ -443,17 +443,16 @@ const seed = async () => {
 
     await client.query(
       `
-      INSERT INTO job_requests (id, booking_id, broker_id, distance, amount, expires_at, status, created_at)
+      INSERT INTO job_requests (id, booking_id, broker_id, distance, amount, status, created_at)
       VALUES
-        ($1, $3, $5, 210, 8650, NOW() + INTERVAL '45 minutes', 'pending', NOW() - INTERVAL '30 minutes'),
-        ($2, $4, $5, 280, 14200, NOW() + INTERVAL '6 hours', 'accepted', NOW() - INTERVAL '1 day')
+        ($1, $3, $5, 210, 8650, 'pending', NOW() - INTERVAL '30 minutes'),
+        ($2, $4, $5, 280, 14200, 'accepted', NOW() - INTERVAL '1 day')
       ON CONFLICT (id) DO UPDATE
       SET
         booking_id = EXCLUDED.booking_id,
         broker_id = EXCLUDED.broker_id,
         distance = EXCLUDED.distance,
         amount = EXCLUDED.amount,
-        expires_at = EXCLUDED.expires_at,
         status = EXCLUDED.status,
         created_at = EXCLUDED.created_at
       `,
@@ -925,13 +924,13 @@ const seed = async () => {
 
     await client.query(
       `
-      INSERT INTO job_requests (id, booking_id, broker_id, distance, amount, expires_at, status, created_at)
+      INSERT INTO job_requests (id, booking_id, broker_id, distance, amount, status, created_at)
       VALUES
-        ($1, $3, $5, 320, 11200, NOW() + INTERVAL '40 minutes', 'pending', NOW() - INTERVAL '20 minutes'),
-        ($2, $4, $5, 235, 9600, NOW() + INTERVAL '5 hours', 'accepted', NOW() - INTERVAL '6 hours')
+        ($1, $3, $5, 320, 11200, 'pending', NOW() - INTERVAL '20 minutes'),
+        ($2, $4, $5, 235, 9600, 'accepted', NOW() - INTERVAL '6 hours')
       ON CONFLICT (id) DO UPDATE
       SET booking_id = EXCLUDED.booking_id, broker_id = EXCLUDED.broker_id, distance = EXCLUDED.distance,
-          amount = EXCLUDED.amount, expires_at = EXCLUDED.expires_at, status = EXCLUDED.status, created_at = EXCLUDED.created_at
+          amount = EXCLUDED.amount, status = EXCLUDED.status, created_at = EXCLUDED.created_at
       `,
       [IDS2.jobs.pending, IDS2.jobs.accepted, IDS2.bookings.confirmed, IDS2.bookings.active, adhocBrokerId]
     );

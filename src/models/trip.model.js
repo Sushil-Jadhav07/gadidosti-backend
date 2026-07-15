@@ -161,6 +161,21 @@ class TripModel {
     return result.rows[0] || null;
   }
 
+  // Atomic compare-and-swap for the one transition that triggers settlement/total_trips
+  // side effects — only flips a trip to 'completed' if it isn't already, so two racing or
+  // duplicate PATCH /status calls (e.g. the driver app firing delivered->completed twice)
+  // can't both win and double up the payout.
+  static async completeIfNotAlready(id) {
+    const result = await pool.query(
+      `UPDATE trips SET status = 'completed',
+              started_at = CASE WHEN started_at IS NULL THEN NOW() ELSE started_at END,
+              updated_at = NOW()
+       WHERE id = $1 AND status != 'completed' RETURNING *`,
+      [id]
+    );
+    return result.rows[0] || null;
+  }
+
   // Swaps the driver on an already-created trip — used when a broker reassigns a different
   // driver mid-trip (e.g. after an incident), instead of creating a second trip row (which
   // would violate trips.booking_id's UNIQUE constraint).
@@ -168,6 +183,14 @@ class TripModel {
     const result = await pool.query(
       `UPDATE trips SET driver_id = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
       [driverId, id]
+    );
+    return result.rows[0] || null;
+  }
+
+  static async updatePodUrl(id, podUrl) {
+    const result = await pool.query(
+      `UPDATE trips SET pod_url = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+      [podUrl, id]
     );
     return result.rows[0] || null;
   }
@@ -196,6 +219,13 @@ class TripModel {
       [tripId]
     );
     return result.rows;
+  }
+
+  // Used when a driver declines a not-yet-started trip — trip_timeline rows cascade-delete
+  // with it (ON DELETE CASCADE), so the booking can be freshly reassigned to another driver
+  // via the normal (non-reassignment) assignDriver path.
+  static async remove(id) {
+    await pool.query(`DELETE FROM trips WHERE id = $1`, [id]);
   }
 }
 

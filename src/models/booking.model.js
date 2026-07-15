@@ -1,7 +1,10 @@
 const pool = require('../config/db');
 
 // Shared join so every read gets the denormalized display fields the UI needs
-// (broker/client/driver names, driver phone, truck reg) without duplicating columns.
+// (broker/client/driver names, driver phone, truck reg, POD) without duplicating columns.
+// pod_url lives on trips, not bookings — joined in here so both the admin and client
+// booking detail views can show it without needing a separate GET /api/trips/:id call
+// (which clients can't make anyway — that route is broker/driver/admin only).
 const SELECT_WITH_JOINS = `
   SELECT b.*,
          broker.name  AS broker_name,
@@ -10,12 +13,14 @@ const SELECT_WITH_JOINS = `
          client.email AS client_email,
          driver.name  AS driver_name,
          driver.phone AS driver_phone,
-         t.registration AS truck_reg
+         t.registration AS truck_reg,
+         trip.pod_url AS pod_url
   FROM bookings b
   LEFT JOIN users broker ON broker.id = b.broker_id
   LEFT JOIN users client ON client.id = b.client_id
   LEFT JOIN users driver ON driver.id = b.driver_id
   LEFT JOIN trucks t     ON t.id = b.truck_id
+  LEFT JOIN trips trip   ON trip.booking_id = b.id
 `;
 
 class BookingModel {

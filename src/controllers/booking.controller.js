@@ -52,6 +52,11 @@ const projectBooking = (row, timeline, role) => {
     pricing: row.pricing_breakdown,
     distance: row.distance,
     platformFee: row.platform_fee,
+    podUrl: row.pod_url || null,
+    // Client Rating — set once the client rates a delivered/completed booking via
+    // POST /api/bookings/:id/rate. Null until then; frontends use this to decide
+    // whether to show the "Rate this delivery" prompt.
+    rating: row.rating || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -268,6 +273,13 @@ const trackBooking = async (req, res, next) => {
 };
 
 // ─── PATCH /api/bookings/:id/status ──────────────────────────────────────────
+// Admin-only manual override — an escape hatch for fixing a booking stuck out of sync
+// with reality, NOT part of the normal flow (no frontend calls this; PATCH /trips/:id/status
+// is what actually drives normal status progression, and it keeps the booking in sync
+// automatically). 'completed' is deliberately excluded below — that transition must go
+// through PATCH /trips/:id/status so its atomic completeIfNotAlready guard and settlement
+// side effects (see trip.controller.js) aren't bypassed. Also syncs the linked trip's
+// status (when one exists) so the two can never disagree.
 const updateBookingStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -275,9 +287,6 @@ const updateBookingStatus = async (req, res, next) => {
 
     const existing = await BookingModel.findById(id);
     if (!existing) return errorResponse(res, 404, 'Booking not found');
-    if (!['admin', 'broker', 'driver'].includes(req.user.role)) return errorResponse(res, 403, 'Access denied');
-    if (req.user.role === 'broker' && existing.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
-    if (req.user.role === 'driver' && existing.driver_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
 
     const stepIndex = STATUS_STEPS.indexOf(status);
     const currentStep = stepIndex >= 0 ? stepIndex : existing.current_step;
@@ -285,19 +294,24 @@ const updateBookingStatus = async (req, res, next) => {
     const updated = await BookingModel.advanceStatus(id, {
       status,
       currentStep,
-      brokerId: req.user.role === 'broker' ? req.user.id : undefined,
       driverId: driver_id,
       truckId: truck_id,
     });
 
     await BookingModel.addTimelineStep(id, { step: status, position: stepIndex >= 0 ? stepIndex : 99 });
 
+    const trip = await TripModel.findByBookingId(id);
+    if (trip) {
+      await TripModel.updateStatus(trip.id, status);
+      await TripModel.addTimelineStep(trip.id, { step: status, position: stepIndex >= 0 ? stepIndex : 99 });
+    }
+
     await AuditLogModel.log({
       userId: req.user.id,
       action: 'BOOKING_STATUS_UPDATED',
       entity: 'bookings',
       entityId: id,
-      meta: { new_status: status },
+      meta: { new_status: status, trip_synced: !!trip },
       ipAddress: req.ip,
     });
 
@@ -414,6 +428,7 @@ const payBooking = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/bookings/:id/rate — Client Rating of a completed delivery ──────
 const rateBooking = async (req, res, next) => {
   try {
     const booking = await BookingModel.findById(req.params.id);

@@ -21,11 +21,6 @@ const timeAgo = (date) => {
   return `${days} day${days > 1 ? 's' : ''} ago`;
 };
 
-const expiresInMinutes = (expiresAt) => {
-  const ms = new Date(expiresAt).getTime() - Date.now();
-  return Math.max(0, Math.ceil(ms / 60000));
-};
-
 const projectJobRequest = (row) => ({
   id: row.id,
   bookingId: row.booking_id,
@@ -39,7 +34,6 @@ const projectJobRequest = (row) => ({
   weight: row.weight ? `${row.weight} ${row.weight_unit || ''}`.trim() : null,
   amount: row.amount,
   status: row.status,
-  expiresIn: expiresInMinutes(row.expires_at),
   timestamp: timeAgo(row.created_at),
 });
 
@@ -67,10 +61,6 @@ const acceptJobRequest = async (req, res, next) => {
     if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
     if (jobRequest.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your job request');
     if (jobRequest.status !== 'pending') return errorResponse(res, 400, `Job request is already ${jobRequest.status}`);
-    if (expiresInMinutes(jobRequest.expires_at) === 0) {
-      await JobRequestModel.setStatus(id, 'expired');
-      return errorResponse(res, 400, 'This job request has expired');
-    }
 
     // Broadcast bookings go to every broker at once — claim this specific request atomically
     // first, then the booking itself, so two brokers racing on the same booking can't both win.

@@ -1,12 +1,19 @@
+const pool = require('../config/db');
 const TripModel = require('../models/trip.model');
 const BookingModel = require('../models/booking.model');
 const DriverProfileModel = require('../models/driverProfile.model');
+const TruckModel = require('../models/truck.model');
 const SettlementModel = require('../models/settlement.model');
 const TripIncidentModel = require('../models/tripIncident.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
+const { getStorageProvider } = require('../providers/storage');
+const { toAbsoluteUrl } = require('../utils/fileUrl');
+
+const storageProvider = getStorageProvider();
+const STATUS_STEPS = ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
 
 // A trip is "active" (still underway, incident-reportable) once it's past creation
 // but before it's wrapped up one way or another.
@@ -169,7 +176,24 @@ const updateTripStatus = async (req, res, next) => {
     if (!trip) return errorResponse(res, 404, 'Trip not found');
     if (!assertCanView(trip, req.user)) return errorResponse(res, 403, 'You do not have access to this trip');
 
-    await TripModel.updateStatus(id, status);
+    // Settlement/trip-count must fire exactly once per trip. The driver flow sends two
+    // separate status updates for one trip (in_transit -> delivered, then, once POD is
+    // uploaded, delivered -> completed) — only the transition *into* 'completed' pays out.
+    // Uses an atomic compare-and-swap (not a read-then-write check) so two racing or
+    // duplicate/retried PATCH calls can't both win and double up the settlement.
+    let isNewCompletion = false;
+    if (status === 'completed') {
+      const completed = await TripModel.completeIfNotAlready(id);
+      if (!completed) {
+        // Already completed — idempotent no-op, don't re-run timeline/booking sync or settlement.
+        const full = await TripModel.findById(id);
+        const timeline = await TripModel.getTimeline(id);
+        return successResponse(res, 200, 'Trip already completed', { trip: projectTrip(full, timeline) });
+      }
+      isNewCompletion = true;
+    } else {
+      await TripModel.updateStatus(id, status);
+    }
     const stepIndex = TRIP_STEPS.indexOf(status);
     await TripModel.addTimelineStep(id, { step: status, position: stepIndex >= 0 ? stepIndex : 99 });
 
@@ -178,7 +202,7 @@ const updateTripStatus = async (req, res, next) => {
     await BookingModel.advanceStatus(trip.booking_id, { status, currentStep: bookingStepIndex >= 0 ? bookingStepIndex : undefined });
     await BookingModel.addTimelineStep(trip.booking_id, { step: status, position: bookingStepIndex >= 0 ? bookingStepIndex : 99 });
 
-    if (['delivered', 'completed'].includes(status)) {
+    if (isNewCompletion) {
       if (trip.driver_id) await DriverProfileModel.incrementTotalTrips(trip.driver_id);
 
       const booking = await BookingModel.findById(trip.booking_id);
@@ -194,7 +218,7 @@ const updateTripStatus = async (req, res, next) => {
         await NotificationModel.create({
           userId: trip.driver_id,
           title: 'Trip Completed',
-          message: 'Your trip has been marked delivered. Settlement is pending processing.',
+          message: 'Your trip has been completed. Settlement is pending processing.',
           type: 'payment',
           meta: { trip_id: id },
         });
@@ -214,6 +238,62 @@ const updateTripStatus = async (req, res, next) => {
     const full = await TripModel.findById(id);
     const timeline = await TripModel.getTimeline(id);
     return successResponse(res, 200, 'Trip status updated', { trip: projectTrip(full || trip, timeline) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/trips/:id/decline ──────────────────────────────────────────────
+// Lets a driver decline a trip that's been assigned to them but that they haven't
+// started yet (trips are created with status 'confirmed' and stay there until the
+// driver taps "Start Trip to Pickup", which moves it to 'en_route_pickup'). Once
+// started, this is no longer available — report-issue is the right path instead,
+// since cargo may already be picked up.
+const declineTrip = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const trip = await TripModel.findById(id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (trip.driver_id !== req.user.id) return errorResponse(res, 403, 'Not your trip');
+    if (trip.status !== 'confirmed') {
+      return errorResponse(res, 409, 'This trip has already started and can no longer be declined. Report an incident instead.');
+    }
+
+    if (trip.driver_id) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
+    if (trip.truck_id) await TruckModel.update(trip.truck_id, { status: 'available' });
+
+    await BookingModel.update(trip.booking_id, {
+      status: 'confirmed',
+      current_step: STATUS_STEPS.indexOf('confirmed'),
+      driver_id: null,
+      truck_id: null,
+    });
+    await BookingModel.addTimelineStep(trip.booking_id, { step: 'driver_declined', position: 99 });
+
+    await TripModel.remove(id);
+
+    if (trip.broker_id) {
+      await NotificationModel.create({
+        userId: trip.broker_id,
+        title: 'Driver Declined Trip',
+        message: `${trip.driver_name || 'Your driver'} declined the assignment for ${trip.pickup_address} -> ${trip.drop_address}. Please assign another driver.`,
+        type: 'booking',
+        meta: { booking_id: trip.booking_id },
+      });
+    }
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'TRIP_DECLINED',
+      entity: 'trips',
+      entityId: id,
+      meta: { booking_id: trip.booking_id },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Trip ${id} declined by driver ${req.user.id}`);
+    return successResponse(res, 200, 'Trip declined');
   } catch (err) {
     next(err);
   }
@@ -343,16 +423,79 @@ const resolveIncident = async (req, res, next) => {
 };
 
 // ─── POST /api/trips/:id/pod ──────────────────────────────────────────────────
-// Stub — no object storage configured, mirrors uploadKycDocument's pattern.
-const uploadPod = async (req, res) => {
-  return errorResponse(
-    res,
-    501,
-    'Proof-of-delivery file upload is not configured yet. No storage provider (S3/Cloudinary) is set up.'
-  );
+// Same pattern as kyc.controller.js's uploadKycDocument — multipart file handed to the
+// active StorageProvider (upload.middleware.js, multer memory storage), then the
+// returned URL is stored on the trip. Only the assigned driver may upload, and only
+// while the trip is in_transit or already delivered (POD is captured as part of the
+// "Mark Delivered" step, before the driver advances the trip to completed).
+const uploadPod = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const trip = await TripModel.findById(id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (trip.driver_id !== req.user.id) return errorResponse(res, 403, 'Not your trip');
+    if (!['in_transit', 'delivered'].includes(trip.status)) {
+      return errorResponse(res, 409, 'Proof of delivery can only be uploaded while the trip is in transit or delivered');
+    }
+    if (!req.file) return errorResponse(res, 422, 'No file uploaded — attach it as multipart form field "file"');
+
+    const { url } = await storageProvider.upload({
+      buffer: req.file.buffer,
+      filename: req.file.originalname,
+      mimeType: req.file.mimetype,
+      folder: `pod/${id}`,
+      resource: 'pod',
+      resourceId: id,
+    });
+    const absoluteUrl = toAbsoluteUrl(req, url);
+
+    const updated = await TripModel.updatePodUrl(id, absoluteUrl);
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'TRIP_POD_UPLOADED',
+      entity: 'trips',
+      entityId: id,
+      ipAddress: req.ip,
+    });
+
+    logger.info(`POD uploaded for trip ${id} by driver ${req.user.id}`);
+    return successResponse(res, 200, 'Proof of delivery uploaded', { podUrl: updated.pod_url });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/trips/pod/file/:id ──────────────────────────────────────────────
+// Serves a file uploaded when STORAGE_PROVIDER=postgres (pod_files.data), mirroring
+// kyc.controller.js's getKycFile. Visible to anyone who can view the trip itself
+// (client/broker/driver/admin), not just the uploading driver.
+const getPodFile = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const { rows } = await pool.query(
+      `SELECT trip_id, filename, mime_type, data FROM pod_files WHERE id = $1`,
+      [id]
+    );
+    const file = rows[0];
+    if (!file) return errorResponse(res, 404, 'File not found');
+
+    const trip = await TripModel.findById(file.trip_id);
+    if (!trip || !assertCanViewIncidents(trip, req.user)) {
+      return errorResponse(res, 403, 'You do not have access to this file');
+    }
+
+    res.set('Content-Type', file.mime_type);
+    res.set('Content-Disposition', `inline; filename="${file.filename}"`);
+    return res.send(file.data);
+  } catch (err) {
+    next(err);
+  }
 };
 
 module.exports = {
-  listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, updateTripLocation,
-  reportIssue, listIncidents, resolveIncident, uploadPod,
+  listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, declineTrip, updateTripLocation,
+  reportIssue, listIncidents, resolveIncident, uploadPod, getPodFile,
 };

@@ -2,9 +2,16 @@ const pool = require('../config/db');
 
 // Aadhaar is stored in full but never returned in full — mask to the
 // "XXXX-XXXX-1234" format the UI expects everywhere it's displayed.
+// Canonical source is kyc_submissions.documents.aadhaar_number (the one an admin actually
+// verifies) once the driver has submitted KYC; driver_profiles.aadhaar (entered by the
+// broker at link/create time, never verified) is only a fallback until KYC exists.
 const SELECT_WITH_JOINS = `
   SELECT dp.user_id, dp.broker_id, dp.license_no, dp.license_expiry,
-         CASE WHEN dp.aadhaar IS NOT NULL THEN 'XXXX-XXXX-' || right(dp.aadhaar, 4) ELSE NULL END AS aadhaar,
+         CASE
+           WHEN ks.documents->>'aadhaar_number' IS NOT NULL THEN 'XXXX-XXXX-' || right(ks.documents->>'aadhaar_number', 4)
+           WHEN dp.aadhaar IS NOT NULL THEN 'XXXX-XXXX-' || right(dp.aadhaar, 4)
+           ELSE NULL
+         END AS aadhaar,
          dp.truck_id, dp.total_trips, dp.avatar, dp.status, dp.created_at, dp.updated_at,
          dp.current_lat, dp.current_lng, dp.last_location_at,
          u.name, u.phone, u.kyc_status,
@@ -12,6 +19,7 @@ const SELECT_WITH_JOINS = `
   FROM driver_profiles dp
   JOIN users u ON u.id = dp.user_id
   LEFT JOIN trucks t ON t.id = dp.truck_id
+  LEFT JOIN kyc_submissions ks ON ks.user_id = dp.user_id
 `;
 
 class DriverProfileModel {

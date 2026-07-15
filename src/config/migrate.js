@@ -305,9 +305,9 @@ const runMigrations = async (client) => {
       EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     `);
 
-    // rating was added to the bookings table after it first shipped — the inline
-    // column in CREATE TABLE IF NOT EXISTS above is a no-op on any DB that already
-    // had the table, so back-fill it explicitly here.
+    // Client Rating's `rating` column was added to the bookings table after it first
+    // shipped — the inline column in CREATE TABLE IF NOT EXISTS above is a no-op on any
+    // DB that already had the table, so back-fill it explicitly here.
     await client.query(`
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS rating JSONB;
     `);
@@ -347,10 +347,13 @@ const runMigrations = async (client) => {
         broker_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         distance     NUMERIC(8,2),
         amount       NUMERIC(12,2),
-        expires_at   TIMESTAMPTZ NOT NULL,
+        expires_at   TIMESTAMPTZ,
         status       job_status NOT NULL DEFAULT 'pending',
         created_at   TIMESTAMPTZ DEFAULT NOW()
       );
+
+      -- Job requests no longer expire; expires_at is a harmless nullable leftover column.
+      ALTER TABLE job_requests ALTER COLUMN expires_at DROP NOT NULL;
 
       CREATE TABLE IF NOT EXISTS trips (
         id                          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -593,6 +596,22 @@ const runMigrations = async (client) => {
       CREATE INDEX IF NOT EXISTS idx_trip_incidents_trip    ON trip_incidents(trip_id);
       CREATE INDEX IF NOT EXISTS idx_trip_incidents_driver  ON trip_incidents(driver_id);
       CREATE INDEX IF NOT EXISTS idx_trip_incidents_status  ON trip_incidents(status);
+    `);
+
+    // ── PROOF OF DELIVERY ── Stores POD photo bytes the same way kyc_files does (bytea,
+    // not local disk) for STORAGE_PROVIDER=postgres — see PostgresStorageProvider.js.
+    // Served back out via GET /api/trips/pod/file/:id (trip.controller.js).
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS pod_files (
+        id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        trip_id     UUID NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+        filename    TEXT,
+        mime_type   TEXT,
+        data        BYTEA NOT NULL,
+        created_at  TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_pod_files_trip ON pod_files(trip_id);
     `);
 
     // ── DISPUTE NUMBER (mirrors db/16dispute_number.sql) ──

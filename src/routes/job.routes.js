@@ -12,7 +12,7 @@ const { assignDriverValidation } = require('../validations/job.validation');
  *   get:
  *     tags: [Jobs]
  *     summary: List the broker's job requests
- *     description: Requests past their expiry are auto-marked expired before the list is returned. Each item includes expiresIn (minutes) and a "N min ago" timestamp.
+ *     description: Job requests never expire — they stay pending until the broker accepts or declines. Each item includes a "N min ago" timestamp.
  *     security:
  *       - BearerAuth: []
  *     parameters:

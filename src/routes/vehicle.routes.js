@@ -3,13 +3,13 @@ const router = express.Router();
 
 const {
   createTruck, listTrucks, getTruck, updateTruck, deleteTruck,
-  lookupDriverByPhone, createDriver, listDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
+  lookupDriverByPhone, createDriver, registerDriver, listDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
 } = require('../controllers/vehicle.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
-  updateDriverLocationValidation,
+  registerDriverValidation, updateDriverLocationValidation,
 } = require('../validations/vehicle.validation');
 
 // ─── TRUCKS ───────────────────────────────────────────────────────────────────
@@ -35,6 +35,11 @@ const {
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  *       409:
  *         description: Registration already exists
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Validation errors — registration/type/category/capacity are required
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -121,6 +126,11 @@ router.get('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin'), g
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  *       404:
  *         description: Truck not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Validation errors
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -231,6 +241,49 @@ router.get('/vehicles/drivers/lookup', authenticate, authorize('broker'), lookup
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/vehicles/drivers', authenticate, authorize('broker'), createDriverValidation, validate, createDriver);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/register:
+ *   post:
+ *     tags: [Vehicles]
+ *     summary: Register a brand-new driver account and add them to the broker's fleet
+ *     description: Unlike POST /api/vehicles/drivers (which links an existing driver-role account found via phone lookup), this creates the users row itself — for the common case where the driver hasn't signed up on their own. A temporary password is generated and returned once in the response so the broker can relay it to the driver; login is email + password (see SSK broker-driver/app/src/pages/Login.jsx).
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, phone, email]
+ *             properties:
+ *               name:  { type: string, example: 'Ramesh Kumar' }
+ *               phone: { type: string, example: '9876543210' }
+ *               email: { type: string, example: 'ramesh.driver@gmail.com' }
+ *               license_no: { type: string, nullable: true }
+ *               license_expiry: { type: string, format: date, nullable: true }
+ *               aadhaar: { type: string, nullable: true, description: '12 digits' }
+ *               truck_id: { type: string, format: uuid, nullable: true }
+ *     responses:
+ *       201:
+ *         description: Driver registered and added to fleet — response includes a one-time tempPassword
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       409:
+ *         description: Phone or email already registered
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Validation errors
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/vehicles/drivers/register', authenticate, authorize('broker'), registerDriverValidation, validate, registerDriver);
 
 /**
  * @swagger
@@ -361,6 +414,11 @@ router.get('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin'), 
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  *       404:
  *         description: Driver profile not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Validation errors
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
