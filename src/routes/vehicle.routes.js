@@ -3,7 +3,7 @@ const router = express.Router();
 
 const {
   createTruck, listTrucks, getTruck, updateTruck, deleteTruck,
-  lookupDriverByPhone, createDriver, listDrivers, getDriver, updateDriver, updateDriverLocation,
+  lookupDriverByPhone, createDriver, listDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
 } = require('../controllers/vehicle.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -366,5 +366,37 @@ router.get('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin'), 
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin'), updateDriverValidation, validate, updateDriver);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/{id}:
+ *   delete:
+ *     tags: [Vehicles]
+ *     summary: Remove a driver from the broker's fleet (unlinks driver_profiles; the driver's account is untouched)
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Driver removed
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       400:
+ *         description: Driver has booking history
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Driver profile not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.delete('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin'), deleteDriver);
 
 module.exports = router;

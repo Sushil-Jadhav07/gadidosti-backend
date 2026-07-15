@@ -145,6 +145,18 @@ class DriverProfileModel {
   static async incrementTotalTrips(userId) {
     await pool.query(`UPDATE driver_profiles SET total_trips = total_trips + 1, updated_at = NOW() WHERE user_id = $1`, [userId]);
   }
+
+  // Unlinks the driver from this broker's fleet — deletes the driver_profiles row only.
+  // The underlying users row (the driver's account) is untouched, so they can be
+  // re-added later or linked to another broker.
+  static async remove(userId) {
+    await pool.query(`DELETE FROM driver_profiles WHERE user_id = $1`, [userId]);
+  }
+
+  static async isReferencedByBookings(userId) {
+    const result = await pool.query(`SELECT 1 FROM bookings WHERE driver_id = $1 LIMIT 1`, [userId]);
+    return result.rowCount > 0;
+  }
 }
 
 module.exports = DriverProfileModel;

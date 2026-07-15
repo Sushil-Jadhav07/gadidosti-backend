@@ -306,6 +306,35 @@ const updateDriver = async (req, res, next) => {
   }
 };
 
+// DELETE /api/vehicles/drivers/:id
+// Unlinks the driver from the broker's fleet (deletes the driver_profiles row only —
+// the driver's user account is untouched). Blocked if the driver has booking history,
+// same rule as truck deletion, to keep audit/earnings records intact.
+const deleteDriver = async (req, res, next) => {
+  try {
+    const driver = await DriverProfileModel.findById(req.params.id);
+    if (!driver) return errorResponse(res, 404, 'Driver profile not found');
+    if (req.user.role === 'broker' && driver.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your driver');
+
+    const referenced = await DriverProfileModel.isReferencedByBookings(req.params.id);
+    if (referenced) return errorResponse(res, 400, 'Cannot remove a driver with booking history — set its status instead');
+
+    await DriverProfileModel.remove(req.params.id);
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'DRIVER_PROFILE_DELETED',
+      entity: 'driver_profiles',
+      entityId: req.params.id,
+      ipAddress: req.ip,
+    });
+
+    return successResponse(res, 200, 'Driver removed');
+  } catch (err) {
+    next(err);
+  }
+};
+
 // PATCH /api/vehicles/drivers/me/location
 // Pinged periodically by the driver's own app while online, even before a trip starts.
 const updateDriverLocation = async (req, res, next) => {
@@ -329,5 +358,5 @@ const updateDriverLocation = async (req, res, next) => {
 
 module.exports = {
   createTruck, listTrucks, getTruck, updateTruck, deleteTruck,
-  lookupDriverByPhone, createDriver, listDrivers, getDriver, updateDriver, updateDriverLocation,
+  lookupDriverByPhone, createDriver, listDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
 };
