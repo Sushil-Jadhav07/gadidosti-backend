@@ -14,12 +14,22 @@ const projectIncident = (row) => ({
   driverPhone: row.driver_phone || null,
   brokerId: row.broker_id || null,
   brokerName: row.broker_name || null,
+  brokerPhone: row.broker_phone || null,
   reason: row.reason,
   notes: row.notes,
   status: row.status,
   reportedAt: row.reported_at,
   resolvedAt: row.resolved_at,
   resolution: row.resolution,
+  // Only populated for reason='breakdown' — mechanic dispatch/assignment sub-workflow.
+  mechanicRequest: row.mechanic_request_id ? {
+    id: row.mechanic_request_id,
+    status: row.mechanic_status,
+    mechanicName: row.mechanic_name,
+    mechanicPhone: row.mechanic_phone,
+    notes: row.mechanic_notes,
+    updatedAt: row.mechanic_updated_at,
+  } : null,
 });
 
 // ─── GET /api/admin/dashboard ─────────────────────────────────────────────────

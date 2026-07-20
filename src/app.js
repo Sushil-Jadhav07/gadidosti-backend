@@ -23,6 +23,7 @@ const tripRoutes    = require('./routes/trip.routes');
 const paymentRoutes = require('./routes/payment.routes');
 const disputeRoutes = require('./routes/dispute.routes');
 const adminRoutes   = require('./routes/admin.routes');
+const chatRoutes    = require('./routes/chat.routes');
 const errorHandler  = require('./middleware/errorHandler.middleware');
 const logger        = require('./utils/logger');
 
@@ -111,6 +112,7 @@ app.use('/api', tripRoutes);
 app.use('/api', paymentRoutes);
 app.use('/api', disputeRoutes);
 app.use('/api', adminRoutes);
+app.use('/api', chatRoutes);
 
 // 404 handler
 app.use((req, res) => {

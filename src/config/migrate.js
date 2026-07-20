@@ -650,6 +650,70 @@ const runMigrations = async (client) => {
       CREATE INDEX IF NOT EXISTS idx_kyc_files_user_id ON kyc_files(user_id);
     `);
 
+    // ── NEGOTIATION OFFERS (bid/counter-offer pricing, mirrors db/18negotiation_offers.sql) ──
+    // 'countered' sits between 'pending' (awaiting broker) and 'accepted'/'declined' — a
+    // job_request flips pending -> countered when a broker counters, and countered -> pending
+    // when the client counters back, so the two sides take turns responding. Own client.query
+    // call so the ADD VALUE runs in its own implicit transaction (same as 'assigned' above).
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TYPE job_status ADD VALUE IF NOT EXISTS 'countered' AFTER 'pending';
+      EXCEPTION WHEN others THEN NULL; END $$;
+    `);
+
+    await client.query(`
+      ALTER TABLE job_requests ADD COLUMN IF NOT EXISTS offer_history JSONB NOT NULL DEFAULT '[]'::jsonb;
+    `);
+
+    // ── MECHANIC REQUESTS (breakdown assistance workflow, mirrors db/19mechanic_requests.sql) ──
+    await client.query(`
+      DO $$ BEGIN
+        CREATE TYPE mechanic_request_status AS ENUM ('requested', 'mechanic_assigned', 'in_progress', 'resolved');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+      CREATE TABLE IF NOT EXISTS mechanic_requests (
+        id                UUID                        PRIMARY KEY DEFAULT uuid_generate_v4(),
+        trip_incident_id  UUID                        NOT NULL UNIQUE REFERENCES trip_incidents(id) ON DELETE CASCADE,
+        status            mechanic_request_status     NOT NULL DEFAULT 'requested',
+        mechanic_name     TEXT,
+        mechanic_phone    TEXT,
+        notes             TEXT,
+        created_at        TIMESTAMPTZ                 NOT NULL DEFAULT NOW(),
+        updated_at        TIMESTAMPTZ                 NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_mechanic_requests_incident ON mechanic_requests(trip_incident_id);
+      CREATE INDEX IF NOT EXISTS idx_mechanic_requests_status   ON mechanic_requests(status);
+
+      DROP TRIGGER IF EXISTS update_mechanic_requests_updated_at ON mechanic_requests;
+      CREATE TRIGGER update_mechanic_requests_updated_at
+        BEFORE UPDATE ON mechanic_requests
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `);
+
+    // ── LIVE CHAT (chat_threads + chat_messages, mirrors db/20chat.sql) ──
+    // One thread per booking; participants (client/broker/driver) are derived live from
+    // bookings.client_id/broker_id/driver_id at access-check time, not duplicated here.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS chat_threads (
+        id          UUID          PRIMARY KEY DEFAULT uuid_generate_v4(),
+        booking_id  UUID          NOT NULL UNIQUE REFERENCES bookings(id) ON DELETE CASCADE,
+        created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id          UUID          PRIMARY KEY DEFAULT uuid_generate_v4(),
+        thread_id   UUID          NOT NULL REFERENCES chat_threads(id) ON DELETE CASCADE,
+        sender_id   UUID          NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        message     TEXT          NOT NULL,
+        read_at     TIMESTAMPTZ,
+        created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_thread  ON chat_messages(thread_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_unread  ON chat_messages(thread_id, read_at) WHERE read_at IS NULL;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

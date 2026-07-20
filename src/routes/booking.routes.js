@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, listBookings, getBooking, trackBooking, updateBookingStatus, cancelBooking, payBooking, rateBooking, estimatePricing } = require('../controllers/booking.controller');
+const { createBooking, listBookings, getBooking, trackBooking, listBookingOffers, updateBookingStatus, cancelBooking, payBooking, rateBooking, estimatePricing } = require('../controllers/booking.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
@@ -208,6 +208,45 @@ router.get('/bookings/:id', authenticate, getBooking);
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/bookings/:id/track', authenticate, trackBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/offers:
+ *   get:
+ *     tags: [Bookings]
+ *     summary: List negotiation offers for a booking (client/admin)
+ *     description: Every broker who received this booking's job_request shows up here with their current amount, status (pending/countered/accepted/declined), and full offer_history. Meant to be polled every few seconds while the booking is still `pending` so the client sees incoming/updated offers live.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: Booking UUID or booking_number
+ *         schema: { type: string, example: 'BKG-202412-001' }
+ *     responses:
+ *       200:
+ *         description: Offers fetched
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         bookingId:     { type: string, format: uuid }
+ *                         bookingStatus: { type: string }
+ *                         offers:        { type: array, items: { $ref: '#/components/schemas/BookingOffer' } }
+ *       403:
+ *         description: No access to this booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/bookings/:id/offers', authenticate, authorize('client', 'admin'), listBookingOffers);
 
 /**
  * @swagger

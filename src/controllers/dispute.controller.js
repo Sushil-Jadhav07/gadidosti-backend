@@ -5,20 +5,36 @@ const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
-const projectDispute = (row) => ({
-  id: row.id,
-  disputeNumber: row.dispute_number,
-  bookingId: row.booking_id,
-  bookingNumber: row.booking_number,
-  raisedBy: row.raised_by_role,
-  raisedByName: row.raised_by_name,
-  issueType: row.issue_type,
-  description: row.description,
-  status: row.status,
-  resolution: row.resolution,
-  date: row.created_at,
-  updatedAt: row.updated_at,
-});
+const projectDispute = (row, role) => {
+  const base = {
+    id: row.id,
+    disputeNumber: row.dispute_number,
+    bookingId: row.booking_id,
+    bookingNumber: row.booking_number,
+    raisedBy: row.raised_by_role,
+    raisedByName: row.raised_by_name,
+    raisedByPhone: row.raised_by_phone,
+    issueType: row.issue_type,
+    description: row.description,
+    status: row.status,
+    resolution: row.resolution,
+    date: row.created_at,
+    updatedAt: row.updated_at,
+  };
+
+  // Contact numbers for every party on the booking — admin-only, so support can call whoever's
+  // relevant mid-dispute without needing to look up the booking separately.
+  if (role === 'admin') {
+    base.clientName = row.client_name;
+    base.clientPhone = row.client_phone;
+    base.brokerName = row.broker_name;
+    base.brokerPhone = row.broker_phone;
+    base.driverName = row.driver_name;
+    base.driverPhone = row.driver_phone;
+  }
+
+  return base;
+};
 
 // ─── POST /api/disputes ───────────────────────────────────────────────────────
 const createDispute = async (req, res, next) => {
@@ -55,7 +71,7 @@ const createDispute = async (req, res, next) => {
 
     logger.info(`Dispute raised: ${dispute.id} on booking ${booking_id} by ${req.user.id}`);
     const full = await DisputeModel.findById(dispute.id);
-    return successResponse(res, 201, 'Dispute raised', { dispute: projectDispute(full) });
+    return successResponse(res, 201, 'Dispute raised', { dispute: projectDispute(full, req.user.role) });
   } catch (err) {
     next(err);
   }
@@ -74,7 +90,7 @@ const listDisputes = async (req, res, next) => {
       limit: Math.min(parseInt(limit), 100),
     });
 
-    return successResponse(res, 200, 'Disputes fetched', { ...result, disputes: result.disputes.map(projectDispute) });
+    return successResponse(res, 200, 'Disputes fetched', { ...result, disputes: result.disputes.map((d) => projectDispute(d, req.user.role)) });
   } catch (err) {
     next(err);
   }
@@ -89,7 +105,7 @@ const getDispute = async (req, res, next) => {
       return errorResponse(res, 403, 'You do not have access to this dispute');
     }
 
-    return successResponse(res, 200, 'Dispute fetched', { dispute: projectDispute(dispute) });
+    return successResponse(res, 200, 'Dispute fetched', { dispute: projectDispute(dispute, req.user.role) });
   } catch (err) {
     next(err);
   }
@@ -126,7 +142,7 @@ const resolveDispute = async (req, res, next) => {
 
     logger.info(`Dispute ${id} resolved by admin ${req.user.id}`);
     const full = await DisputeModel.findById(id);
-    return successResponse(res, 200, 'Dispute resolved', { dispute: projectDispute(full || updated) });
+    return successResponse(res, 200, 'Dispute resolved', { dispute: projectDispute(full || updated, req.user.role) });
   } catch (err) {
     next(err);
   }

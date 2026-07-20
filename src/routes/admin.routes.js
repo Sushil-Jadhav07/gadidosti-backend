@@ -20,7 +20,17 @@ const { updateSettingsValidation } = require('../validations/admin.validation');
  *         description: Dashboard stats fetched
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       allOf:
+ *                         - $ref: '#/components/schemas/DashboardStats'
+ *                         - type: object
+ *                           properties:
+ *                             openIncidents: { type: integer, description: 'Count of unresolved trip_incidents platform-wide — see GET /api/admin/incidents for the full list' }
  */
 router.get('/admin/dashboard', authenticate, authorize('admin'), getDashboard);
 
@@ -30,7 +40,7 @@ router.get('/admin/dashboard', authenticate, authorize('admin'), getDashboard);
  *   get:
  *     tags: [Admin Analytics]
  *     summary: List open (unresolved) trip incidents platform-wide (admin only)
- *     description: Unlike GET /api/trips/{id}/incidents (scoped to one known trip), this surfaces every open incident with its trip/booking/driver/broker context so admin can discover problems without already knowing a trip ID. Resolve via the existing PATCH /api/trips/{id}/incidents/{incidentId}/resolve.
+ *     description: Unlike GET /api/trips/{id}/incidents (scoped to one known trip), this surfaces every open incident with its trip/booking/driver/broker context (including click-to-call phone numbers) so admin can discover problems without already knowing a trip ID. Breakdown incidents include the nested mechanicRequest dispatch status. Resolve via the existing PATCH /api/trips/{id}/incidents/{incidentId}/resolve, or update mechanic dispatch progress via PATCH /api/trips/{id}/incidents/{incidentId}/mechanic.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -45,7 +55,19 @@ router.get('/admin/dashboard', authenticate, authorize('admin'), getDashboard);
  *         description: Open incidents fetched
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         incidents:   { type: array, items: { $ref: '#/components/schemas/TripIncident' } }
+ *                         total:       { type: integer }
+ *                         page:        { type: integer }
+ *                         limit:       { type: integer }
+ *                         total_pages: { type: integer }
  */
 router.get('/admin/incidents', authenticate, authorize('admin'), listOpenIncidents);
 

@@ -1,8 +1,10 @@
 require('dotenv').config();
+const http   = require('http');
 const app    = require('./app');
 const logger = require('./utils/logger');
 const pool   = require('./config/db');
 const { runMigrations } = require('./config/migrate');
+const { initSocket } = require('./realtime/socket');
 
 const PORT = process.env.PORT || 5000;
 
@@ -25,9 +27,17 @@ const runStartupMigrations = async () => {
 
 const startServer = async () => {
   await runStartupMigrations();
-  const server = app.listen(PORT, () => {
+
+  // Wrapped in a plain http.Server (instead of app.listen directly) so socket.io can attach
+  // to the same server and share its port — the REST API and the chat websocket both live at
+  // http://localhost:PORT, just on different protocols upgraded from the same connection.
+  const server = http.createServer(app);
+  initSocket(server);
+
+  server.listen(PORT, () => {
     logger.info(`🚀 SSK Logistics Auth API running on port ${PORT}`);
     logger.info(`📖 Swagger docs: http://localhost:${PORT}/api-docs`);
+    logger.info(`💬 Socket.io ready for live chat`);
     logger.info(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   });
 

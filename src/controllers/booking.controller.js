@@ -66,6 +66,7 @@ const projectBooking = (row, timeline, role) => {
     base.clientPhone = row.client_phone;
     base.clientEmail = row.client_email;
     base.driverPhone = row.driver_phone;
+    base.brokerPhone = row.broker_phone;
   }
 
   return base;
@@ -265,8 +266,38 @@ const trackBooking = async (req, res, next) => {
         notes: incident.notes,
         status: incident.status,
         reportedAt: incident.reported_at,
+        // Only set for reason='breakdown' — lets the client see "mechanic on the way" instead
+        // of just a generic "we're on it" message.
+        mechanicStatus: incident.mechanic_status || null,
       } : null,
     });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/bookings/:id/offers — negotiation offers for a booking (client/admin) ──────────
+const listBookingOffers = async (req, res, next) => {
+  try {
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (req.user.role !== 'admin' && booking.client_id !== req.user.id) {
+      return errorResponse(res, 403, 'You do not have access to this booking');
+    }
+
+    const requests = await JobRequestModel.findByBookingId(booking.id);
+    const offers = requests.map((row) => ({
+      id: row.id,
+      brokerId: row.broker_id,
+      brokerName: row.broker_name,
+      brokerPhone: row.broker_phone,
+      amount: row.amount,
+      status: row.status,
+      offerHistory: row.offer_history || [],
+      createdAt: row.created_at,
+    }));
+
+    return successResponse(res, 200, 'Offers fetched', { bookingId: booking.id, bookingStatus: booking.status, offers });
   } catch (err) {
     next(err);
   }
@@ -479,5 +510,5 @@ const estimatePricing = async (req, res, next) => {
 };
 
 module.exports = {
-  createBooking, listBookings, getBooking, trackBooking, updateBookingStatus, cancelBooking, payBooking, rateBooking, estimatePricing,
+  createBooking, listBookings, getBooking, trackBooking, listBookingOffers, updateBookingStatus, cancelBooking, payBooking, rateBooking, estimatePricing,
 };

@@ -3,7 +3,7 @@ const router = express.Router();
 
 const {
   listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, declineTrip, updateTripLocation,
-  reportIssue, listIncidents, resolveIncident, uploadPod, getPodFile,
+  reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, getPodFile,
 } = require('../controllers/trip.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -11,6 +11,7 @@ const idempotent = require('../middleware/idempotency.middleware');
 const upload = require('../middleware/upload.middleware');
 const {
   updateTripStatusValidation, updateTripLocationValidation, reportIssueValidation, resolveIncidentValidation,
+  updateMechanicRequestValidation,
 } = require('../validations/trip.validation');
 
 /**
@@ -345,6 +346,66 @@ router.get('/trips/:id/incidents', authenticate, listIncidents);
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/trips/:id/incidents/:incidentId/resolve', authenticate, authorize('broker', 'admin'), resolveIncidentValidation, validate, resolveIncident);
+
+/**
+ * @swagger
+ * /api/trips/{id}/incidents/{incidentId}/mechanic:
+ *   patch:
+ *     tags: [Trips]
+ *     summary: Update the mechanic dispatch status for a breakdown incident (broker or admin only)
+ *     description: |
+ *       Only valid for incidents reported with reason='breakdown' — every such incident gets a linked
+ *       mechanic_requests row automatically when the driver reports it. Lets the broker track "mechanic
+ *       arranged" / "in progress" before fully closing the incident. Setting status to 'resolved' here
+ *       also resolves the underlying trip_incidents row, same as the generic resolve endpoint above.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: incidentId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               status:         { type: string, enum: [requested, mechanic_assigned, in_progress, resolved] }
+ *               mechanicName:   { type: string, nullable: true }
+ *               mechanicPhone:  { type: string, nullable: true }
+ *               notes:          { type: string, nullable: true, description: "Broker's dispatch notes — separate from the driver's original report notes" }
+ *     responses:
+ *       200:
+ *         description: Mechanic request updated — returns the full incident (with the updated mechanicRequest nested inside)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         incident: { $ref: '#/components/schemas/TripIncident' }
+ *       400:
+ *         description: This incident has no linked mechanic request (not a breakdown)
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Incident not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/trips/:id/incidents/:incidentId/mechanic', authenticate, authorize('broker', 'admin'), updateMechanicRequestValidation, validate, updateMechanicRequest);
 
 /**
  * @swagger

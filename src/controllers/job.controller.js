@@ -27,6 +27,8 @@ const projectJobRequest = (row) => ({
   bookingNumber: row.booking_number,
   clientName: row.client_name,
   clientPhone: row.client_phone,
+  brokerName: row.broker_name,
+  brokerPhone: row.broker_phone,
   pickup: row.pickup,
   drop: row.drop_location,
   distance: row.distance,
@@ -34,6 +36,8 @@ const projectJobRequest = (row) => ({
   weight: row.weight ? `${row.weight} ${row.weight_unit || ''}`.trim() : null,
   amount: row.amount,
   status: row.status,
+  // Negotiation back-and-forth: [{ by: 'client'|'broker', amount, note, at }], oldest first.
+  offerHistory: row.offer_history || [],
   timestamp: timeAgo(row.created_at),
 });
 
@@ -77,6 +81,12 @@ const acceptJobRequest = async (req, res, next) => {
       // Another broker already got this booking first — undo our claim and bail out.
       await JobRequestModel.setStatus(id, 'declined');
       return errorResponse(res, 409, 'This booking has already been accepted by another broker');
+    }
+
+    // Negotiation may have moved the price away from the booking's original ask (e.g. the
+    // client countered and this broker is accepting the negotiated amount) — keep them in sync.
+    if (claimed.amount != null && Number(booking.amount) !== Number(claimed.amount)) {
+      await BookingModel.update(booking.id, { amount: claimed.amount });
     }
 
     await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
@@ -267,4 +277,176 @@ const declineJobRequest = async (req, res, next) => {
   }
 };
 
-module.exports = { listJobRequests, acceptJobRequest, assignDriver, declineJobRequest };
+// ─── PATCH /api/jobs/requests/:id/counter — broker submits a counter-offer ────────────────────
+const counterJobRequest = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { amount, note } = req.body;
+
+    const jobRequest = await JobRequestModel.findById(id);
+    if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
+    if (jobRequest.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your job request');
+    if (jobRequest.status !== 'pending') return errorResponse(res, 400, `Job request is not awaiting your response (${jobRequest.status})`);
+
+    const updated = await JobRequestModel.brokerCounter(id, { amount, note });
+    if (!updated) return errorResponse(res, 400, 'Job request is already actioned');
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'JOB_REQUEST_COUNTERED',
+      entity: 'job_requests',
+      entityId: id,
+      meta: { booking_id: jobRequest.booking_id, amount },
+      ipAddress: req.ip,
+    });
+
+    await NotificationModel.create({
+      userId: jobRequest.client_id,
+      title: 'New Counter-Offer',
+      message: `A broker countered with ₹${amount} for your booking (${jobRequest.pickup} to ${jobRequest.drop}).`,
+      type: 'booking',
+      meta: { booking_id: jobRequest.booking_id, job_request_id: id },
+    });
+
+    const full = await JobRequestModel.findById(id);
+    return successResponse(res, 200, 'Counter-offer sent', { request: projectJobRequest(full) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/jobs/requests/:id/client-accept — client accepts a broker's counter-offer ─────
+const clientAcceptOffer = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const jobRequest = await JobRequestModel.findById(id);
+    if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
+    if (jobRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (jobRequest.status !== 'countered') return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
+
+    // Same compare-and-swap shape as the broker's acceptJobRequest above — claim the offer
+    // first, then the booking, so a second concurrent action on this booking can't both win.
+    const claimed = await JobRequestModel.clientAcceptIfCountered(id);
+    if (!claimed) return errorResponse(res, 400, 'Offer is already actioned');
+
+    const booking = await BookingModel.advanceStatusIfCurrent(jobRequest.booking_id, 'pending', {
+      status: 'confirmed',
+      currentStep: 1,
+      brokerId: jobRequest.broker_id,
+    });
+
+    if (!booking) {
+      await JobRequestModel.setStatus(id, 'declined');
+      return errorResponse(res, 409, 'This booking is no longer available');
+    }
+
+    if (claimed.amount != null && Number(booking.amount) !== Number(claimed.amount)) {
+      await BookingModel.update(booking.id, { amount: claimed.amount });
+    }
+
+    await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
+    await JobRequestModel.declineOthersForBooking(booking.id, id);
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'JOB_REQUEST_CLIENT_ACCEPTED',
+      entity: 'job_requests',
+      entityId: id,
+      meta: { booking_id: booking.id, amount: claimed.amount },
+      ipAddress: req.ip,
+    });
+
+    await NotificationModel.create({
+      userId: jobRequest.broker_id,
+      title: 'Offer Accepted',
+      message: `Your offer of ₹${claimed.amount} was accepted. The booking is now confirmed.`,
+      type: 'booking',
+      meta: { booking_id: booking.id },
+    });
+
+    logger.info(`Job request ${id} accepted by client ${req.user.id}`);
+    return successResponse(res, 200, 'Offer accepted', { booking: { id: booking.id, status: booking.status, brokerId: booking.broker_id, amount: booking.amount } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/jobs/requests/:id/client-reject — client rejects a broker's counter-offer ─────
+const clientRejectOffer = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const jobRequest = await JobRequestModel.findById(id);
+    if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
+    if (jobRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (jobRequest.status !== 'countered') return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
+
+    const updated = await JobRequestModel.clientRejectIfCountered(id);
+    if (!updated) return errorResponse(res, 400, 'Offer is already actioned');
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'JOB_REQUEST_CLIENT_REJECTED',
+      entity: 'job_requests',
+      entityId: id,
+      meta: { booking_id: jobRequest.booking_id },
+      ipAddress: req.ip,
+    });
+
+    await NotificationModel.create({
+      userId: jobRequest.broker_id,
+      title: 'Offer Declined',
+      message: `Your offer for booking ${jobRequest.pickup} to ${jobRequest.drop} was declined by the client.`,
+      type: 'booking',
+      meta: { booking_id: jobRequest.booking_id },
+    });
+
+    return successResponse(res, 200, 'Offer declined', { request: updated });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/jobs/requests/:id/client-counter — client counters a broker's offer back ──────
+const clientCounterOffer = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { amount, note } = req.body;
+
+    const jobRequest = await JobRequestModel.findById(id);
+    if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
+    if (jobRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (jobRequest.status !== 'countered') return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
+
+    const updated = await JobRequestModel.clientCounter(id, { amount, note });
+    if (!updated) return errorResponse(res, 400, 'Offer is already actioned');
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'JOB_REQUEST_CLIENT_COUNTERED',
+      entity: 'job_requests',
+      entityId: id,
+      meta: { booking_id: jobRequest.booking_id, amount },
+      ipAddress: req.ip,
+    });
+
+    await NotificationModel.create({
+      userId: jobRequest.broker_id,
+      title: 'Client Countered Your Offer',
+      message: `The client countered with ₹${amount} for booking ${jobRequest.pickup} to ${jobRequest.drop}.`,
+      type: 'booking',
+      meta: { booking_id: jobRequest.booking_id, job_request_id: id },
+    });
+
+    const full = await JobRequestModel.findById(id);
+    return successResponse(res, 200, 'Counter-offer sent', { request: projectJobRequest(full) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = {
+  listJobRequests, acceptJobRequest, assignDriver, declineJobRequest,
+  counterJobRequest, clientAcceptOffer, clientRejectOffer, clientCounterOffer,
+};

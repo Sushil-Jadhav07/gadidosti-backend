@@ -5,6 +5,10 @@ const TRUCK_CATEGORIES = ['small', 'medium', 'large', 'part'];
 const REGISTRATION_REGEX = /^[A-Z]{2}[-\s]?\d{1,2}[-\s]?[A-Z]{1,3}[-\s]?\d{1,4}$/i;
 const CURRENT_YEAR = new Date().getFullYear();
 
+// Only meaningful when the caller is an admin (a broker's own id is always used regardless of
+// what's in the body) — see resolveBrokerId in vehicle.controller.js.
+const brokerIdValidation = body('broker_id').optional({ nullable: true, checkFalsy: true }).isUUID().withMessage('broker_id must be a valid UUID');
+
 const createTruckValidation = [
   body('registration').trim().notEmpty().withMessage('Registration number is required')
     .matches(REGISTRATION_REGEX).withMessage('Registration number looks invalid, e.g. MH-12-AB-1234'),
@@ -15,6 +19,7 @@ const createTruckValidation = [
   body('make').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 60 }),
   body('year').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1990, max: CURRENT_YEAR + 1 }).withMessage(`Year must be between 1990 and ${CURRENT_YEAR + 1}`),
   body('insurance_expiry').optional({ nullable: true, checkFalsy: true }).isISO8601().withMessage('Insurance expiry must be a valid date'),
+  brokerIdValidation,
 ];
 
 const updateTruckValidation = [
@@ -28,7 +33,7 @@ const updateTruckValidation = [
   body('status').optional({ nullable: true, checkFalsy: true }).isIn(['available', 'on_trip', 'maintenance']).withMessage('Invalid status'),
 ];
 
-const createDriverValidation = [];
+const createDriverValidation = [brokerIdValidation];
 
 const updateDriverValidation = [
   body('license_no').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 20 }),
@@ -45,6 +50,7 @@ const registerDriverValidation = [
   body('license_no').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 20 }),
   body('license_expiry').optional({ nullable: true, checkFalsy: true }).isISO8601().withMessage('License expiry must be a valid date'),
   body('aadhaar').optional({ nullable: true, checkFalsy: true }).trim().matches(/^\d{12}$/).withMessage('Aadhaar must be 12 digits'),
+  brokerIdValidation,
 ];
 
 const updateDriverLocationValidation = [

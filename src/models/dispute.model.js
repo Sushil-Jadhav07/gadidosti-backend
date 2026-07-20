@@ -1,10 +1,19 @@
 const pool = require('../config/db');
 
+// Joins in every party's contact info tied to the booking (not just whoever raised the dispute)
+// so admin can call any of them from the dispute detail view without hopping to Bookings/Drivers.
 const SELECT_WITH_JOINS = `
-  SELECT d.*, u.name AS raised_by_name, b.booking_number
+  SELECT d.*, u.name AS raised_by_name, u.phone AS raised_by_phone,
+         b.booking_number, b.client_id, b.broker_id, b.driver_id,
+         client.name AS client_name, client.phone AS client_phone,
+         broker.name AS broker_name, broker.phone AS broker_phone,
+         driver.name AS driver_name, driver.phone AS driver_phone
   FROM disputes d
   JOIN users u ON u.id = d.raised_by_user_id
   JOIN bookings b ON b.id = d.booking_id
+  LEFT JOIN users client ON client.id = b.client_id
+  LEFT JOIN users broker ON broker.id = b.broker_id
+  LEFT JOIN users driver ON driver.id = b.driver_id
 `;
 
 class DisputeModel {

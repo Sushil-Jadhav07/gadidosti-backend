@@ -5,6 +5,7 @@ const DriverProfileModel = require('../models/driverProfile.model');
 const TruckModel = require('../models/truck.model');
 const SettlementModel = require('../models/settlement.model');
 const TripIncidentModel = require('../models/tripIncident.model');
+const MechanicRequestModel = require('../models/mechanicRequest.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -88,6 +89,15 @@ const assertCanViewIncidents = (trip, user) => {
   return false;
 };
 
+const projectMechanicRequest = (row) => (row.mechanic_request_id ? {
+  id: row.mechanic_request_id,
+  status: row.mechanic_status,
+  mechanicName: row.mechanic_name,
+  mechanicPhone: row.mechanic_phone,
+  notes: row.mechanic_notes,
+  updatedAt: row.mechanic_updated_at,
+} : null);
+
 const projectIncident = (row) => ({
   id: row.id,
   tripId: row.trip_id,
@@ -98,6 +108,8 @@ const projectIncident = (row) => ({
   reportedAt: row.reported_at,
   resolvedAt: row.resolved_at,
   resolution: row.resolution,
+  // Only populated for reason='breakdown' — the mechanic dispatch/assignment sub-workflow.
+  mechanicRequest: projectMechanicRequest(row),
 });
 
 const listTrips = async (req, res, next) => {
@@ -330,11 +342,19 @@ const reportIssue = async (req, res, next) => {
     const incident = await TripIncidentModel.create({ tripId: id, driverId: req.user.id, reason, notes });
     const reasonLabel = reason.replace(/_/g, ' ');
 
+    // Breakdown reports get a linked mechanic_requests row so the broker can track
+    // dispatch/assignment progress separately from the incident's own resolved/unresolved state.
+    if (reason === 'breakdown') {
+      await MechanicRequestModel.create({ tripIncidentId: incident.id });
+    }
+
     if (trip.broker_id) {
       await NotificationModel.create({
         userId: trip.broker_id,
-        title: 'Trip Incident Reported',
-        message: `Your driver reported a ${reasonLabel} on trip ${trip.booking_number || id}. The trip may be delayed or need reassignment.`,
+        title: reason === 'breakdown' ? 'Driver Needs a Mechanic' : 'Trip Incident Reported',
+        message: reason === 'breakdown'
+          ? `Your driver reported a breakdown on trip ${trip.booking_number || id} and needs a mechanic arranged.`
+          : `Your driver reported a ${reasonLabel} on trip ${trip.booking_number || id}. The trip may be delayed or need reassignment.`,
         type: 'incident',
         meta: { trip_id: id, incident_id: incident.id, reason },
       });
@@ -360,7 +380,9 @@ const reportIssue = async (req, res, next) => {
     });
 
     logger.info(`Trip incident reported: trip ${id} reason=${reason} by driver ${req.user.id}`);
-    return successResponse(res, 201, 'Incident reported. Broker and client have been notified.', { incident: projectIncident(incident) });
+    // Re-fetch so the response includes the joined mechanic_requests row created above.
+    const full = await TripIncidentModel.findById(incident.id);
+    return successResponse(res, 201, 'Incident reported. Broker and client have been notified.', { incident: projectIncident(full) });
   } catch (err) {
     next(err);
   }
@@ -394,7 +416,14 @@ const resolveIncident = async (req, res, next) => {
     if (!incident || incident.trip_id !== id) return errorResponse(res, 404, 'Incident not found');
     if (incident.status === 'resolved') return errorResponse(res, 409, 'Incident already resolved');
 
-    const updated = await TripIncidentModel.resolve(incidentId, resolution);
+    await TripIncidentModel.resolve(incidentId, resolution);
+
+    // Keep the linked mechanic request in sync — resolving the incident from this generic
+    // flow (not the dedicated mechanic-status endpoint) should still close out the mechanic
+    // workflow, otherwise the broker/admin mechanic-status view would be stuck open forever.
+    if (incident.mechanic_request_id && incident.mechanic_status !== 'resolved') {
+      await MechanicRequestModel.update(incident.mechanic_request_id, { status: 'resolved' });
+    }
 
     await AuditLogModel.log({
       userId: req.user.id,
@@ -416,7 +445,66 @@ const resolveIncident = async (req, res, next) => {
     }
 
     logger.info(`Trip incident ${incidentId} resolved by ${req.user.id}`);
-    return successResponse(res, 200, 'Incident resolved', { incident: projectIncident(updated) });
+    const full = await TripIncidentModel.findById(incidentId);
+    return successResponse(res, 200, 'Incident resolved', { incident: projectIncident(full) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const MECHANIC_STATUS_MESSAGES = {
+  mechanic_assigned: (mr) => `A mechanic${mr.mechanic_name ? ` (${mr.mechanic_name}${mr.mechanic_phone ? `, ${mr.mechanic_phone}` : ''})` : ''} has been arranged for your breakdown.`,
+  in_progress: () => 'The mechanic is now working on your vehicle.',
+  resolved: () => 'Your breakdown has been resolved — you can resume the trip.',
+};
+
+// ─── PATCH /api/trips/:id/incidents/:incidentId/mechanic ─────────────────────
+// Broker/admin dispatch workflow for a breakdown — separate from the generic resolve above so
+// the broker can track "mechanic on the way" / "in progress" progress before the incident itself
+// is closed out. Marking this 'resolved' also resolves the underlying trip_incidents row.
+const updateMechanicRequest = async (req, res, next) => {
+  try {
+    const { id, incidentId } = req.params;
+    const { status, mechanicName, mechanicPhone, notes } = req.body;
+
+    const trip = await TripModel.findById(id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (req.user.role === 'broker' && trip.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your trip');
+
+    const incident = await TripIncidentModel.findById(incidentId);
+    if (!incident || incident.trip_id !== id) return errorResponse(res, 404, 'Incident not found');
+    if (incident.reason !== 'breakdown' || !incident.mechanic_request_id) {
+      return errorResponse(res, 400, 'This incident has no linked mechanic request');
+    }
+
+    const updated = await MechanicRequestModel.update(incident.mechanic_request_id, { status, mechanicName, mechanicPhone, notes });
+
+    if (status === 'resolved' && incident.status !== 'resolved') {
+      await TripIncidentModel.resolve(incidentId, notes || 'Resolved via mechanic assignment.');
+    }
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'MECHANIC_REQUEST_UPDATED',
+      entity: 'mechanic_requests',
+      entityId: updated.id,
+      meta: { trip_id: id, incident_id: incidentId, status },
+      ipAddress: req.ip,
+    });
+
+    if (trip.driver_id && status && MECHANIC_STATUS_MESSAGES[status]) {
+      await NotificationModel.create({
+        userId: trip.driver_id,
+        title: 'Mechanic Update',
+        message: MECHANIC_STATUS_MESSAGES[status](updated),
+        type: 'incident',
+        meta: { trip_id: id, incident_id: incidentId },
+      });
+    }
+
+    logger.info(`Mechanic request ${updated.id} updated by ${req.user.id} (status=${status || 'unchanged'})`);
+    const full = await TripIncidentModel.findById(incidentId);
+    return successResponse(res, 200, 'Mechanic request updated', { incident: projectIncident(full) });
   } catch (err) {
     next(err);
   }
@@ -497,5 +585,5 @@ const getPodFile = async (req, res, next) => {
 
 module.exports = {
   listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, declineTrip, updateTripLocation,
-  reportIssue, listIncidents, resolveIncident, uploadPod, getPodFile,
+  reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, getPodFile,
 };

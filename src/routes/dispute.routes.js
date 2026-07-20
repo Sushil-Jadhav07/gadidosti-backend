@@ -24,7 +24,15 @@ const { createDisputeValidation, resolveDisputeValidation } = require('../valida
  *         description: Dispute raised
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         dispute: { $ref: '#/components/schemas/Dispute' }
  *       403:
  *         description: Not your booking
  *         content:
@@ -44,6 +52,7 @@ router.post('/disputes', authenticate, authorize('client', 'broker'), createDisp
  *   get:
  *     tags: [Disputes]
  *     summary: List disputes (admin -> all with filters, client/broker -> own)
+ *     description: Admin's projection also includes clientName/clientPhone/brokerName/brokerPhone/driverName/driverPhone for every party on the underlying booking — not just whoever raised the dispute — so support can call anyone relevant without leaving this view.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -64,7 +73,19 @@ router.post('/disputes', authenticate, authorize('client', 'broker'), createDisp
  *         description: Disputes fetched
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         disputes:    { type: array, items: { $ref: '#/components/schemas/Dispute' } }
+ *                         total:       { type: integer }
+ *                         page:        { type: integer }
+ *                         limit:       { type: integer }
+ *                         total_pages: { type: integer }
  */
 router.get('/disputes', authenticate, listDisputes);
 
@@ -86,7 +107,15 @@ router.get('/disputes', authenticate, listDisputes);
  *         description: Dispute fetched
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         dispute: { $ref: '#/components/schemas/Dispute' }
  *       404:
  *         description: Dispute not found
  *         content:
@@ -122,7 +151,15 @@ router.get('/disputes/:id', authenticate, getDispute);
  *         description: Dispute resolved
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         dispute: { $ref: '#/components/schemas/Dispute' }
  *       400:
  *         description: Already resolved
  *         content:

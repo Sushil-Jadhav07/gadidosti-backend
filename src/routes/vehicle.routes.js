@@ -19,7 +19,8 @@ const {
  * /api/vehicles/trucks:
  *   post:
  *     tags: [Vehicles]
- *     summary: Add a truck (broker)
+ *     summary: Add a truck (broker, or admin on behalf of a chosen broker)
+ *     description: A broker always adds to their own fleet. An admin must pass broker_id explicitly (trucks.broker_id is NOT NULL) — see CreateTruckRequest.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -33,18 +34,23 @@ const {
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: (Admin caller only) broker_id doesn't match an existing broker
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  *       409:
  *         description: Registration already exists
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  *       422:
- *         description: Validation errors — registration/type/category/capacity are required
+ *         description: Validation errors — registration/type/category/capacity are required, or (admin caller) broker_id is missing
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/vehicles/trucks', authenticate, authorize('broker'), createTruckValidation, validate, createTruck);
+router.post('/vehicles/trucks', authenticate, authorize('broker', 'admin'), createTruckValidation, validate, createTruck);
 
 /**
  * @swagger
@@ -177,8 +183,8 @@ router.delete('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin')
  * /api/vehicles/drivers/lookup:
  *   get:
  *     tags: [Vehicles]
- *     summary: Look up a driver-role user by phone number (broker)
- *     description: Used by the "Add Driver" flow so the broker can find a driver by phone instead of needing their raw user ID. Returns 404 if no driver-role account has that phone, 409 if that driver already has a profile (linked to a broker).
+ *     summary: Look up a driver-role user by phone number (broker, or admin)
+ *     description: Used by the "Add Driver" flow so the caller can find a driver by phone instead of needing their raw user ID. Returns 404 if no driver-role account has that phone, 409 if that driver already has a profile (linked to a broker).
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -208,14 +214,15 @@ router.delete('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin')
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/vehicles/drivers/lookup', authenticate, authorize('broker'), lookupDriverByPhone);
+router.get('/vehicles/drivers/lookup', authenticate, authorize('broker', 'admin'), lookupDriverByPhone);
 
 /**
  * @swagger
  * /api/vehicles/drivers:
  *   post:
  *     tags: [Vehicles]
- *     summary: Create a driver profile for an existing driver-role user (broker)
+ *     summary: Create a driver profile for an existing driver-role user (broker, or admin on behalf of a chosen broker)
+ *     description: A broker always adds to their own fleet. An admin must pass broker_id explicitly (driver_profiles.broker_id is NOT NULL) — see CreateDriverRequest.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -230,7 +237,7 @@ router.get('/vehicles/drivers/lookup', authenticate, authorize('broker'), lookup
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  *       404:
- *         description: User not found
+ *         description: User not found, or (admin caller) broker_id doesn't match an existing broker
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -239,51 +246,51 @@ router.get('/vehicles/drivers/lookup', authenticate, authorize('broker'), lookup
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: (Admin caller) broker_id is missing
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/vehicles/drivers', authenticate, authorize('broker'), createDriverValidation, validate, createDriver);
+router.post('/vehicles/drivers', authenticate, authorize('broker', 'admin'), createDriverValidation, validate, createDriver);
 
 /**
  * @swagger
  * /api/vehicles/drivers/register:
  *   post:
  *     tags: [Vehicles]
- *     summary: Register a brand-new driver account and add them to the broker's fleet
- *     description: Unlike POST /api/vehicles/drivers (which links an existing driver-role account found via phone lookup), this creates the users row itself — for the common case where the driver hasn't signed up on their own. A temporary password is generated and returned once in the response so the broker can relay it to the driver; login is email + password (see SSK broker-driver/app/src/pages/Login.jsx).
+ *     summary: Register a brand-new driver account and add them to a fleet (broker, or admin on behalf of a chosen broker)
+ *     description: Unlike POST /api/vehicles/drivers (which links an existing driver-role account found via phone lookup), this creates the users row itself — for the common case where the driver hasn't signed up on their own. A temporary password is generated and returned once in the response so the caller can relay it to the driver; login is email + password (see SSK broker-driver/app/src/pages/Login.jsx and admin-dashboard/app/src/pages/Drivers.jsx). A broker always adds to their own fleet; an admin must pass broker_id explicitly.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
- *           schema:
- *             type: object
- *             required: [name, phone, email]
- *             properties:
- *               name:  { type: string, example: 'Ramesh Kumar' }
- *               phone: { type: string, example: '9876543210' }
- *               email: { type: string, example: 'ramesh.driver@gmail.com' }
- *               license_no: { type: string, nullable: true }
- *               license_expiry: { type: string, format: date, nullable: true }
- *               aadhaar: { type: string, nullable: true, description: '12 digits' }
- *               truck_id: { type: string, format: uuid, nullable: true }
+ *           schema: { $ref: '#/components/schemas/RegisterDriverRequest' }
  *     responses:
  *       201:
  *         description: Driver registered and added to fleet — response includes a one-time tempPassword
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: (Admin caller only) broker_id doesn't match an existing broker
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  *       409:
  *         description: Phone or email already registered
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  *       422:
- *         description: Validation errors
+ *         description: Validation errors, or (admin caller) broker_id is missing
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/vehicles/drivers/register', authenticate, authorize('broker'), registerDriverValidation, validate, registerDriver);
+router.post('/vehicles/drivers/register', authenticate, authorize('broker', 'admin'), registerDriverValidation, validate, registerDriver);
 
 /**
  * @swagger

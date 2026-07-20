@@ -367,6 +367,7 @@ const options = {
             clientPhone:    { type: 'string', nullable: true, description: 'Admin projection only' },
             clientEmail:    { type: 'string', nullable: true, description: 'Admin projection only' },
             driverPhone:    { type: 'string', nullable: true, description: 'Admin projection only' },
+            brokerPhone:    { type: 'string', nullable: true, description: 'Admin projection only — click-to-call on the admin dashboard' },
             createdAt:      { type: 'string', format: 'date-time' },
             updatedAt:      { type: 'string', format: 'date-time' },
           },
@@ -460,6 +461,7 @@ const options = {
             make:             { type: 'string', nullable: true },
             year:             { type: 'integer', nullable: true },
             insurance_expiry: { type: 'string', format: 'date', nullable: true },
+            broker_id:        { type: 'string', format: 'uuid', nullable: true, description: "Required when called by an admin (trucks.broker_id is NOT NULL) — the broker whose fleet this truck is added to. Ignored for a broker caller, who always adds to their own fleet regardless of what's sent here." },
           },
         },
 
@@ -510,6 +512,23 @@ const options = {
             aadhaar:        { type: 'string', nullable: true },
             truck_id:       { type: 'string', format: 'uuid', nullable: true },
             avatar:         { type: 'string', nullable: true },
+            broker_id:      { type: 'string', format: 'uuid', nullable: true, description: "Required when called by an admin (driver_profiles.broker_id is NOT NULL) — the broker whose fleet this driver joins. Ignored for a broker caller, who always adds to their own fleet regardless of what's sent here." },
+          },
+        },
+
+        RegisterDriverRequest: {
+          type: 'object',
+          required: ['name', 'phone', 'email'],
+          description: 'Creates a brand-new driver users row and links it to a fleet in one step — unlike CreateDriverRequest, which requires the driver to already have an account.',
+          properties: {
+            name:           { type: 'string', example: 'Ramesh Kumar' },
+            phone:          { type: 'string', example: '9876543210' },
+            email:          { type: 'string', format: 'email', example: 'ramesh.driver@gmail.com' },
+            license_no:     { type: 'string', nullable: true },
+            license_expiry: { type: 'string', format: 'date', nullable: true },
+            aadhaar:        { type: 'string', nullable: true, description: '12 digits' },
+            truck_id:       { type: 'string', format: 'uuid', nullable: true },
+            broker_id:      { type: 'string', format: 'uuid', nullable: true, description: 'Required when called by an admin — the broker whose fleet this driver joins. Ignored for a broker caller.' },
           },
         },
 
@@ -537,21 +556,57 @@ const options = {
         // ── Jobs / Trips ────────────────────────────────────────────────────
         JobRequest: {
           type: 'object',
+          description: "A single broker's offer on a booking. Job requests never expire on their own — 'pending' means it's that side's turn to respond (see status description).",
           properties: {
             id:            { type: 'string', format: 'uuid' },
             bookingId:     { type: 'string', format: 'uuid' },
             bookingNumber: { type: 'string', example: 'BKG-202412-003', description: 'Short human-readable reference for display' },
             clientName:  { type: 'string' },
             clientPhone: { type: 'string' },
+            brokerName:  { type: 'string', nullable: true },
+            brokerPhone: { type: 'string', nullable: true },
             pickup:      { type: 'string' },
             drop:        { type: 'string' },
             distance:    { type: 'number', nullable: true },
             truckType:   { type: 'string', nullable: true },
             weight:      { type: 'string', nullable: true, example: '3.5 tons' },
-            amount:      { type: 'number', nullable: true },
-            status:      { type: 'string', enum: ['pending', 'accepted', 'expired', 'declined'] },
-            expiresIn:   { type: 'integer', example: 12, description: 'Minutes remaining, clamped at 0' },
+            amount:      { type: 'number', nullable: true, description: 'The latest offer amount — matches the most recent entry in offerHistory' },
+            status: {
+              type: 'string',
+              enum: ['pending', 'countered', 'accepted', 'expired', 'declined'],
+              description: "pending = awaiting the broker's response (fresh broadcast, or the client just countered back); countered = the broker countered and it's awaiting the client's response; accepted/declined are terminal.",
+            },
+            offerHistory: {
+              type: 'array',
+              description: 'Full negotiation back-and-forth, oldest first — not just the latest number.',
+              items: { $ref: '#/components/schemas/OfferHistoryEntry' },
+            },
             timestamp:   { type: 'string', example: '2 min ago' },
+          },
+        },
+
+        OfferHistoryEntry: {
+          type: 'object',
+          properties: {
+            by:     { type: 'string', enum: ['client', 'broker'] },
+            amount: { type: 'number' },
+            note:   { type: 'string', nullable: true },
+            at:     { type: 'string', format: 'date-time' },
+          },
+        },
+
+        BookingOffer: {
+          type: 'object',
+          description: "One broker's negotiation offer on a booking — the booking-scoped view of a JobRequest, returned by GET /api/bookings/{id}/offers.",
+          properties: {
+            id:           { type: 'string', format: 'uuid', description: 'The underlying job_request id — used with the /api/jobs/requests/{id}/... negotiation endpoints' },
+            brokerId:     { type: 'string', format: 'uuid' },
+            brokerName:   { type: 'string', nullable: true },
+            brokerPhone:  { type: 'string', nullable: true },
+            amount:       { type: 'number', nullable: true },
+            status:       { type: 'string', enum: ['pending', 'countered', 'accepted', 'expired', 'declined'] },
+            offerHistory: { type: 'array', items: { $ref: '#/components/schemas/OfferHistoryEntry' } },
+            createdAt:    { type: 'string', format: 'date-time' },
           },
         },
 
@@ -615,6 +670,31 @@ const options = {
             reportedAt: { type: 'string', format: 'date-time' },
             resolvedAt: { type: 'string', format: 'date-time', nullable: true },
             resolution: { type: 'string', nullable: true, description: 'Set only once status is resolved' },
+            mechanicRequest: {
+              allOf: [{ $ref: '#/components/schemas/MechanicRequest' }],
+              nullable: true,
+              description: "Only populated when reason='breakdown' — every breakdown report gets one of these automatically. Null for every other reason.",
+            },
+            bookingId:     { type: 'string', format: 'uuid', description: 'GET /api/admin/incidents only' },
+            bookingNumber: { type: 'string', example: 'BKG-202412-003', description: 'GET /api/admin/incidents only' },
+            driverName:    { type: 'string', nullable: true, description: 'GET /api/admin/incidents only' },
+            driverPhone:   { type: 'string', nullable: true, description: 'GET /api/admin/incidents only — click-to-call on the admin dashboard' },
+            brokerId:      { type: 'string', format: 'uuid', nullable: true, description: 'GET /api/admin/incidents only' },
+            brokerName:    { type: 'string', nullable: true, description: 'GET /api/admin/incidents only' },
+            brokerPhone:   { type: 'string', nullable: true, description: 'GET /api/admin/incidents only — click-to-call on the admin dashboard' },
+          },
+        },
+
+        MechanicRequest: {
+          type: 'object',
+          description: 'Breakdown-assistance dispatch sub-workflow, one per breakdown trip_incident. Simple text fields for the mechanic — not a full mechanic user role.',
+          properties: {
+            id:             { type: 'string', format: 'uuid' },
+            status:         { type: 'string', enum: ['requested', 'mechanic_assigned', 'in_progress', 'resolved'] },
+            mechanicName:   { type: 'string', nullable: true },
+            mechanicPhone:  { type: 'string', nullable: true },
+            notes:          { type: 'string', nullable: true, description: "Broker's dispatch notes — separate from the driver's original report notes on the parent incident" },
+            updatedAt:      { type: 'string', format: 'date-time' },
           },
         },
 
@@ -662,11 +742,18 @@ const options = {
             bookingNumber: { type: 'string', example: 'BKG-202412-003', description: 'Short human-readable reference for display' },
             raisedBy:     { type: 'string', enum: ['client', 'broker'] },
             raisedByName: { type: 'string' },
+            raisedByPhone: { type: 'string', nullable: true },
             issueType:    { type: 'string' },
             description:  { type: 'string' },
             status:       { type: 'string', enum: ['open', 'under_review', 'resolved'] },
             resolution:   { type: 'string', nullable: true },
             date:         { type: 'string', format: 'date-time' },
+            clientName:   { type: 'string', nullable: true, description: 'Admin projection only — every party on the underlying booking, not just whoever raised the dispute' },
+            clientPhone:  { type: 'string', nullable: true, description: 'Admin projection only — click-to-call on the admin dashboard' },
+            brokerName:   { type: 'string', nullable: true, description: 'Admin projection only' },
+            brokerPhone:  { type: 'string', nullable: true, description: 'Admin projection only — click-to-call on the admin dashboard' },
+            driverName:   { type: 'string', nullable: true, description: 'Admin projection only' },
+            driverPhone:  { type: 'string', nullable: true, description: 'Admin projection only — click-to-call on the admin dashboard' },
           },
         },
 
@@ -694,6 +781,31 @@ const options = {
             email_alerts:       { type: 'boolean' },
             sms_alerts:         { type: 'boolean' },
             push_notifications: { type: 'boolean' },
+          },
+        },
+
+        // ── Chat ──────────────────────────────────────────────────────────────
+        ChatThread: {
+          type: 'object',
+          description: "One per booking, created lazily on first access. Participants (client + assigned broker + assigned driver) are derived live from the booking, not stored here — a driver reassignment changes who can see the thread automatically. Real-time delivery/typing/read-receipts happen over socket.io (not documented here); see the 'join-thread', 'send-message', 'typing', and 'read' events.",
+          properties: {
+            id:            { type: 'string', format: 'uuid' },
+            bookingId:     { type: 'string', format: 'uuid' },
+            bookingNumber: { type: 'string', example: 'BKG-202412-003', nullable: true },
+          },
+        },
+
+        ChatMessage: {
+          type: 'object',
+          properties: {
+            id:         { type: 'string', format: 'uuid' },
+            threadId:   { type: 'string', format: 'uuid' },
+            senderId:   { type: 'string', format: 'uuid' },
+            senderName: { type: 'string' },
+            senderRole: { type: 'string', enum: ['client', 'broker', 'driver', 'admin'] },
+            message:    { type: 'string', maxLength: 2000 },
+            readAt:     { type: 'string', format: 'date-time', nullable: true },
+            createdAt:  { type: 'string', format: 'date-time' },
           },
         },
       },
@@ -730,7 +842,7 @@ const options = {
       },
       {
         name: 'Bookings',
-        description: 'Client booking lifecycle: create, list (role-scoped), view, and advance status through the delivery pipeline.',
+        description: 'Client booking lifecycle: create (system price or a client-proposed price), list (role-scoped), view, live-track, advance status through the delivery pipeline, and view incoming broker negotiation offers.',
       },
       {
         name: 'Pricing',
@@ -738,7 +850,7 @@ const options = {
       },
       {
         name: 'Vehicles',
-        description: 'Broker fleet management: trucks and driver profiles.',
+        description: 'Fleet management: trucks and driver profiles. Brokers manage their own fleet; admin can also register a truck/driver directly on behalf of a chosen broker (broker_id required in that case).',
       },
       {
         name: 'Broker',
@@ -746,11 +858,11 @@ const options = {
       },
       {
         name: 'Jobs',
-        description: 'Broker job requests generated from bookings — accept/decline, with a TTL-based expiry.',
+        description: "Broker job requests generated from bookings, plus the inDrive-style negotiation on top of them — brokers can accept/decline/counter, and the client can accept/reject/counter back via the linked booking offers (GET /api/bookings/{bookingId}/offers). Job requests never auto-expire; 'pending' vs 'countered' tracks whose turn it is to respond.",
       },
       {
         name: 'Trips',
-        description: 'Active trip tracking for brokers/drivers: status, live location, and proof of delivery.',
+        description: 'Active trip tracking for brokers/drivers: status, live location, proof of delivery, incident reporting (including the breakdown/mechanic-dispatch sub-workflow), and incident resolution.',
       },
       {
         name: 'Payments',
@@ -763,6 +875,10 @@ const options = {
       {
         name: 'Admin Analytics',
         description: 'Admin dashboard stats, platform-wide analytics, and platform settings.',
+      },
+      {
+        name: 'Chat',
+        description: "Live per-booking chat between the client, assigned broker, and assigned driver. REST here is the source of truth/history (get-or-create thread, paginated message list, send, mark-read, unread count); real-time delivery is over socket.io — see 'join-thread'/'leave-thread', 'send-message', 'typing', and 'read' events (JWT auth via the socket handshake, same access token as the REST API). Admin can view any thread read-only.",
       },
     ],
   },

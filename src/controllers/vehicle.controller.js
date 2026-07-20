@@ -51,16 +51,34 @@ const projectDriver = (row) => ({
 
 // ─── TRUCKS ───────────────────────────────────────────────────────────────────
 
+// Resolves which broker a truck/driver being created belongs to — a broker can only ever
+// add to their own fleet, but trucks.broker_id / driver_profiles.broker_id are NOT NULL, so
+// an admin must explicitly pick a broker to assign the new record to.
+const resolveBrokerId = async (req) => {
+  if (req.user.role !== 'admin') return { brokerId: req.user.id };
+
+  const brokerId = req.body.broker_id;
+  if (!brokerId) return { error: 'broker_id is required when an admin creates this on behalf of a broker' };
+
+  const brokerUser = await UserModel.findById(brokerId);
+  if (!brokerUser || brokerUser.role !== 'broker') return { error: 'Broker not found' };
+
+  return { brokerId };
+};
+
 // POST /api/vehicles/trucks
 const createTruck = async (req, res, next) => {
   try {
     const { driver_id, registration, type, category, capacity, make, year, insurance_expiry } = req.body;
 
+    const { brokerId, error } = await resolveBrokerId(req);
+    if (error) return errorResponse(res, error === 'Broker not found' ? 404 : 422, error);
+
     const existing = await TruckModel.findByRegistration(registration);
     if (existing) return errorResponse(res, 409, 'A truck with this registration already exists');
 
     const truck = await TruckModel.create({
-      brokerId: req.user.id,
+      brokerId,
       driverId: driver_id,
       registration,
       type,
@@ -207,6 +225,9 @@ const createDriver = async (req, res, next) => {
   try {
     const { user_id, license_no, license_expiry, aadhaar, truck_id, avatar } = req.body;
 
+    const { brokerId, error } = await resolveBrokerId(req);
+    if (error) return errorResponse(res, error === 'Broker not found' ? 404 : 422, error);
+
     const targetUser = await UserModel.findById(user_id);
     if (!targetUser) return errorResponse(res, 404, 'User not found');
     if (targetUser.role !== 'driver') return errorResponse(res, 400, 'Target user must have the driver role');
@@ -217,7 +238,7 @@ const createDriver = async (req, res, next) => {
 
     const profile = await DriverProfileModel.create({
       userId: user_id,
-      brokerId: req.user.id,
+      brokerId,
       licenseNo: license_no,
       licenseExpiry: license_expiry,
       aadhaar,
@@ -258,6 +279,9 @@ const registerDriver = async (req, res, next) => {
   try {
     const { name, phone, email, license_no, license_expiry, aadhaar, truck_id, avatar } = req.body;
 
+    const { brokerId, error } = await resolveBrokerId(req);
+    if (error) return errorResponse(res, error === 'Broker not found' ? 404 : 422, error);
+
     const existingPhone = await UserModel.findByPhone(phone);
     if (existingPhone) return errorResponse(res, 409, 'A user with this phone number already exists — use "Link Existing Driver" instead');
 
@@ -270,7 +294,7 @@ const registerDriver = async (req, res, next) => {
 
     const profile = await DriverProfileModel.create({
       userId: user.id,
-      brokerId: req.user.id,
+      brokerId,
       licenseNo: license_no,
       licenseExpiry: license_expiry,
       aadhaar,

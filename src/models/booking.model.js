@@ -8,6 +8,7 @@ const pool = require('../config/db');
 const SELECT_WITH_JOINS = `
   SELECT b.*,
          broker.name  AS broker_name,
+         broker.phone AS broker_phone,
          client.name  AS client_name,
          client.phone AS client_phone,
          client.email AS client_email,
