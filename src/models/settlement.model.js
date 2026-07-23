@@ -14,9 +14,13 @@ const SELECT_WITH_JOINS = `
 
 class SettlementModel {
   static async create({ bookingId, brokerId, driverId, amount, platformFee, status = 'pending' }) {
+    // $6 is cast explicitly in both spots — used once against the enum column (status) and
+    // once against a plain string literal (CASE WHEN) in the same query, and without an
+    // explicit cast Postgres can't unify a single placeholder to two different inferred
+    // types ("inconsistent types deduced for parameter $6").
     const result = await pool.query(
       `INSERT INTO settlements (booking_id, broker_id, driver_id, amount, platform_fee, status, settled_at)
-       VALUES ($1,$2,$3,$4,$5,$6, CASE WHEN $6 = 'paid' THEN NOW() ELSE NULL END)
+       VALUES ($1,$2,$3,$4,$5,$6::settlement_status, CASE WHEN $6::text = 'paid' THEN NOW() ELSE NULL END)
        RETURNING *`,
       [bookingId, brokerId || null, driverId || null, amount, platformFee || 0, status]
     );

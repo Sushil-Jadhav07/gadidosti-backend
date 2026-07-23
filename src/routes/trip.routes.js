@@ -3,7 +3,7 @@ const router = express.Router();
 
 const {
   listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, declineTrip, updateTripLocation,
-  reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, getPodFile,
+  reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
 } = require('../controllers/trip.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -11,8 +11,9 @@ const idempotent = require('../middleware/idempotency.middleware');
 const upload = require('../middleware/upload.middleware');
 const {
   updateTripStatusValidation, updateTripLocationValidation, reportIssueValidation, resolveIncidentValidation,
-  updateMechanicRequestValidation,
+  updateMechanicRequestValidation, collectPaymentValidation,
 } = require('../validations/trip.validation');
+const TripPodPhotoModel = require('../models/tripPodPhoto.model');
 
 /**
  * @swagger
@@ -412,8 +413,8 @@ router.patch('/trips/:id/incidents/:incidentId/mechanic', authenticate, authoriz
  * /api/trips/{id}/pod:
  *   post:
  *     tags: [Trips]
- *     summary: Upload proof of delivery (driver only)
- *     description: Multipart upload — same pattern as POST /api/kyc/documents/upload. Only the assigned driver may upload, and only while the trip is in_transit or delivered. The stored file's URL is saved on trips.pod_url.
+ *     summary: Upload proof-of-delivery photos (driver only)
+ *     description: Multipart upload, up to 6 photos per trip (across all calls combined) — same pattern as POST /api/kyc/documents/upload. Only the assigned driver may upload, and only while the trip is in_transit or delivered. Each file becomes its own trip_pod_photos row; trips.pod_url is set once, from the first photo ever uploaded.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -428,7 +429,7 @@ router.patch('/trips/:id/incidents/:incidentId/mechanic', authenticate, authoriz
  *           schema:
  *             type: object
  *             properties:
- *               file: { type: string, format: binary }
+ *               files: { type: array, items: { type: string, format: binary } }
  *     responses:
  *       200:
  *         description: Proof of delivery uploaded
@@ -446,12 +447,54 @@ router.patch('/trips/:id/incidents/:incidentId/mechanic', authenticate, authoriz
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  *       422:
- *         description: No file uploaded
+ *         description: No files uploaded, or the trip already has (or this call would exceed) 6 photos
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/trips/:id/pod', authenticate, authorize('driver'), upload.single('file'), uploadPod);
+router.post('/trips/:id/pod', authenticate, authorize('driver'), upload.array('files', TripPodPhotoModel.MAX_PHOTOS_PER_TRIP), uploadPod);
+
+/**
+ * @swagger
+ * /api/trips/{id}/collect-payment:
+ *   patch:
+ *     tags: [Trips]
+ *     summary: Record how COD payment was collected (driver only)
+ *     description: Only valid while the linked booking's payment_status is still 'pending' — flips it to 'paid', records payment_mode and paid_at, and notifies the client and broker.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [mode]
+ *             properties:
+ *               mode: { type: string, enum: [upi, cash] }
+ *     responses:
+ *       200:
+ *         description: Payment recorded
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your trip
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Payment already recorded for this booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/trips/:id/collect-payment', authenticate, authorize('driver'), collectPaymentValidation, validate, collectPayment);
 
 /**
  * @swagger

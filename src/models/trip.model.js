@@ -5,13 +5,16 @@ const SELECT_WITH_JOINS = `
          broker.name  AS broker_name,  broker.phone  AS broker_phone,
          driver.name  AS driver_name,  driver.phone  AS driver_phone,
          client.id    AS client_id,    client.name  AS client_name, client.phone AS client_phone,
-         b.truck_id, b.booking_number, t.registration AS truck_reg
+         b.truck_id, b.booking_number, t.registration AS truck_reg,
+         b.payment_status AS booking_payment_status, b.amount AS booking_amount,
+         dp.payment_qr_url
   FROM trips tr
   JOIN bookings b       ON b.id = tr.booking_id
   JOIN users client     ON client.id = b.client_id
   LEFT JOIN users broker ON broker.id = tr.broker_id
   LEFT JOIN users driver ON driver.id = tr.driver_id
   LEFT JOIN trucks t     ON t.id = b.truck_id
+  LEFT JOIN driver_profiles dp ON dp.user_id = tr.driver_id
 `;
 
 class TripModel {
@@ -151,9 +154,13 @@ class TripModel {
   }
 
   static async updateStatus(id, status) {
+    // $1 is cast explicitly in both spots — used once against the enum column (status =) and
+    // once against plain string literals (NOT IN) in the same query, and without an explicit
+    // cast Postgres can't unify a single placeholder to two different inferred types
+    // ("inconsistent types deduced for parameter $1").
     const result = await pool.query(
-      `UPDATE trips SET status = $1,
-              started_at = CASE WHEN started_at IS NULL AND $1 NOT IN ('confirmed', 'pending') THEN NOW() ELSE started_at END,
+      `UPDATE trips SET status = $1::booking_status,
+              started_at = CASE WHEN started_at IS NULL AND $1::text NOT IN ('confirmed', 'pending') THEN NOW() ELSE started_at END,
               updated_at = NOW()
        WHERE id = $2 RETURNING *`,
       [status, id]

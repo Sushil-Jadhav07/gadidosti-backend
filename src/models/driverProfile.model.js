@@ -150,6 +150,16 @@ class DriverProfileModel {
     return this.findById(userId);
   }
 
+  // Driver's personal UPI QR — uploaded once via POST /api/driver/payment-qr, reused across
+  // every trip they deliver (shown on the Payments step of the delivery-completion flow).
+  static async updatePaymentQr(userId, url) {
+    const result = await pool.query(
+      `UPDATE driver_profiles SET payment_qr_url = $1, updated_at = NOW() WHERE user_id = $2 RETURNING user_id, payment_qr_url`,
+      [url, userId]
+    );
+    return result.rows[0] || null;
+  }
+
   static async incrementTotalTrips(userId) {
     await pool.query(`UPDATE driver_profiles SET total_trips = total_trips + 1, updated_at = NOW() WHERE user_id = $1`, [userId]);
   }

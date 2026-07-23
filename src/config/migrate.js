@@ -714,6 +714,23 @@ const runMigrations = async (client) => {
       CREATE INDEX IF NOT EXISTS idx_chat_messages_unread  ON chat_messages(thread_id, read_at) WHERE read_at IS NULL;
     `);
 
+    // ── DELIVERY COMPLETION (multi-photo POD + driver QR + COD tracking, mirrors db/21delivery_completion.sql) ──
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS trip_pod_photos (
+        id            UUID            PRIMARY KEY DEFAULT uuid_generate_v4(),
+        trip_id       UUID            NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+        url           TEXT            NOT NULL,
+        uploaded_at   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_trip_pod_photos_trip ON trip_pod_photos(trip_id);
+
+      ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS payment_qr_url TEXT;
+
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_mode TEXT;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

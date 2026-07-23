@@ -21,7 +21,11 @@ const updateMechanicRequestValidation = [
   body('notes').optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 1000 }).withMessage('notes must be 1000 characters or fewer'),
 ];
 
+const collectPaymentValidation = [
+  body('mode').isIn(['upi', 'cash']).withMessage('mode must be either "upi" or "cash"'),
+];
+
 module.exports = {
   updateTripStatusValidation, updateTripLocationValidation, reportIssueValidation, resolveIncidentValidation,
-  updateMechanicRequestValidation,
+  updateMechanicRequestValidation, collectPaymentValidation,
 };

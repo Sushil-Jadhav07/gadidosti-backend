@@ -12,6 +12,7 @@
  *
  * @typedef {Object} DistanceResult
  * @property {number} distanceKm
+ * @property {number} [durationMin]
  */
 class LocationProvider {
   /**
@@ -28,6 +29,17 @@ class LocationProvider {
    */
   async getDistance(params) {
     throw new Error('LocationProvider.getDistance not implemented');
+  }
+
+  /**
+   * Full driving route between two points, including an encoded polyline — for callers that
+   * need more than a distance figure (e.g. drawing the route on a map). Optional: not every
+   * provider can support this (FakeLocationProvider returns null), so callers must handle null.
+   * @param {DistanceParams} params
+   * @returns {Promise<{distanceKm: number, durationMin: number, polyline: string}|null>}
+   */
+  async getRoute(params) {
+    return null;
   }
 }
 

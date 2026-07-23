@@ -40,7 +40,7 @@ const getDistance = async (req, res, next) => {
     const { pickup, drop } = req.body;
     const result = await locationProvider.getDistance({ from: pickup, to: drop });
     if (!result) {
-      return errorResponse(res, 404, `Distance unavailable for ${pickup} -> ${drop}. This city pair isn't in our lookup table yet.`);
+      return errorResponse(res, 404, `Distance unavailable for ${pickup} -> ${drop}. Please check the spelling or try a different location.`);
     }
     return successResponse(res, 200, 'Distance fetched', { distance: result.distanceKm });
   } catch (err) {

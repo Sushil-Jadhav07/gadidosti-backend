@@ -6,6 +6,7 @@ const TruckModel = require('../models/truck.model');
 const SettlementModel = require('../models/settlement.model');
 const TripIncidentModel = require('../models/tripIncident.model');
 const MechanicRequestModel = require('../models/mechanicRequest.model');
+const TripPodPhotoModel = require('../models/tripPodPhoto.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -23,7 +24,9 @@ const ACTIVE_TRIP_STATUSES = ['confirmed', 'en_route_pickup', 'picked_up', 'in_t
 // Subset of the booking status stepper that applies once a trip exists.
 const TRIP_STEPS = ['confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
 
-const projectTrip = (row, timeline) => ({
+const projectTrip = async (row, timeline) => {
+  const podPhotos = await TripPodPhotoModel.findByTrip(row.id);
+  return {
   id: row.id,
   bookingId: row.booking_id,
   bookingNumber: row.booking_number,
@@ -68,10 +71,18 @@ const projectTrip = (row, timeline) => ({
   startedAt: row.started_at,
   currentLocation: { lat: row.current_lat, lng: row.current_lng },
   podUrl: row.pod_url,
+  podPhotos: podPhotos.map((p) => p.url),
+  // Drives the driver app's delivery-completion flow: whether the Payments step is needed
+  // at all (paymentStatus), what to show on it (amountToCollect), and the driver's saved
+  // UPI QR to display for the client to scan (driverQrUrl — null until they've uploaded one).
+  paymentStatus: row.booking_payment_status,
+  amountToCollect: row.booking_amount != null ? Number(row.booking_amount) : null,
+  driverQrUrl: row.payment_qr_url || null,
   timeline: timeline.map((t) => ({ step: t.step, done: t.done, time: t.occurred_at })),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
-});
+  };
+};
 
 const assertCanView = (trip, user) => {
   if (user.role === 'admin') return true;
@@ -125,7 +136,7 @@ const listTrips = async (req, res, next) => {
 
     const trips = await Promise.all(result.trips.map(async (row) => {
       const timeline = await TripModel.getTimeline(row.id);
-      return projectTrip(row, timeline);
+      return await projectTrip(row, timeline);
     }));
 
     return successResponse(res, 200, 'Trips fetched', { ...result, trips });
@@ -141,7 +152,7 @@ const getActiveTrip = async (req, res, next) => {
     if (!trip) return successResponse(res, 200, 'No active trip', { trip: null });
 
     const timeline = await TripModel.getTimeline(trip.id);
-    return successResponse(res, 200, 'Active trip fetched', { trip: projectTrip(trip, timeline) });
+    return successResponse(res, 200, 'Active trip fetched', { trip: await projectTrip(trip, timeline) });
   } catch (err) {
     next(err);
   }
@@ -158,7 +169,7 @@ const getUpcomingTrip = async (req, res, next) => {
     if (!trip) return successResponse(res, 200, 'No upcoming trip', { trip: null });
 
     const timeline = await TripModel.getTimeline(trip.id);
-    return successResponse(res, 200, 'Upcoming trip fetched', { trip: projectTrip(trip, timeline) });
+    return successResponse(res, 200, 'Upcoming trip fetched', { trip: await projectTrip(trip, timeline) });
   } catch (err) {
     next(err);
   }
@@ -172,7 +183,7 @@ const getTrip = async (req, res, next) => {
     if (!assertCanView(trip, req.user)) return errorResponse(res, 403, 'You do not have access to this trip');
 
     const timeline = await TripModel.getTimeline(trip.id);
-    return successResponse(res, 200, 'Trip fetched', { trip: projectTrip(trip, timeline) });
+    return successResponse(res, 200, 'Trip fetched', { trip: await projectTrip(trip, timeline) });
   } catch (err) {
     next(err);
   }
@@ -200,7 +211,7 @@ const updateTripStatus = async (req, res, next) => {
         // Already completed — idempotent no-op, don't re-run timeline/booking sync or settlement.
         const full = await TripModel.findById(id);
         const timeline = await TripModel.getTimeline(id);
-        return successResponse(res, 200, 'Trip already completed', { trip: projectTrip(full, timeline) });
+        return successResponse(res, 200, 'Trip already completed', { trip: await projectTrip(full, timeline) });
       }
       isNewCompletion = true;
     } else {
@@ -249,7 +260,7 @@ const updateTripStatus = async (req, res, next) => {
     logger.info(`Trip ${id} status -> ${status} by ${req.user.id}`);
     const full = await TripModel.findById(id);
     const timeline = await TripModel.getTimeline(id);
-    return successResponse(res, 200, 'Trip status updated', { trip: projectTrip(full || trip, timeline) });
+    return successResponse(res, 200, 'Trip status updated', { trip: await projectTrip(full || trip, timeline) });
   } catch (err) {
     next(err);
   }
@@ -511,10 +522,12 @@ const updateMechanicRequest = async (req, res, next) => {
 };
 
 // ─── POST /api/trips/:id/pod ──────────────────────────────────────────────────
-// Same pattern as kyc.controller.js's uploadKycDocument — multipart file handed to the
-// active StorageProvider (upload.middleware.js, multer memory storage), then the
-// returned URL is stored on the trip. Only the assigned driver may upload, and only
-// while the trip is in_transit or already delivered (POD is captured as part of the
+// Same pattern as kyc.controller.js's uploadKycDocument — multipart files handed to the
+// active StorageProvider (upload.middleware.js, multer memory storage), then each returned
+// URL becomes its own trip_pod_photos row. trips.pod_url (kept for any older code that only
+// reads that single column) is only ever set once, from whichever photo happens to be the
+// trip's first — later uploads never overwrite it. Only the assigned driver may upload, and
+// only while the trip is in_transit or already delivered (POD is captured as part of the
 // "Mark Delivered" step, before the driver advances the trip to completed).
 const uploadPod = async (req, res, next) => {
   try {
@@ -526,30 +539,103 @@ const uploadPod = async (req, res, next) => {
     if (!['in_transit', 'delivered'].includes(trip.status)) {
       return errorResponse(res, 409, 'Proof of delivery can only be uploaded while the trip is in transit or delivered');
     }
-    if (!req.file) return errorResponse(res, 422, 'No file uploaded — attach it as multipart form field "file"');
+    const files = req.files || [];
+    if (!files.length) return errorResponse(res, 422, 'No files uploaded — attach them as multipart form field "files"');
 
-    const { url } = await storageProvider.upload({
-      buffer: req.file.buffer,
-      filename: req.file.originalname,
-      mimeType: req.file.mimetype,
-      folder: `pod/${id}`,
-      resource: 'pod',
-      resourceId: id,
-    });
-    const absoluteUrl = toAbsoluteUrl(req, url);
+    const existingCount = await TripPodPhotoModel.countByTrip(id);
+    if (existingCount + files.length > TripPodPhotoModel.MAX_PHOTOS_PER_TRIP) {
+      return errorResponse(
+        res, 422,
+        `Maximum ${TripPodPhotoModel.MAX_PHOTOS_PER_TRIP} photos allowed per trip — ${existingCount} already uploaded, ${files.length} more would exceed that.`
+      );
+    }
 
-    const updated = await TripModel.updatePodUrl(id, absoluteUrl);
+    const uploadedUrls = [];
+    for (const file of files) {
+      const { url } = await storageProvider.upload({
+        buffer: file.buffer,
+        filename: file.originalname,
+        mimeType: file.mimetype,
+        folder: `pod/${id}`,
+        resource: 'pod',
+        resourceId: id,
+      });
+      const absoluteUrl = toAbsoluteUrl(req, url);
+      await TripPodPhotoModel.create(id, absoluteUrl);
+      uploadedUrls.push(absoluteUrl);
+    }
+
+    if (!trip.pod_url) {
+      await TripModel.updatePodUrl(id, uploadedUrls[0]);
+    }
 
     await AuditLogModel.log({
       userId: req.user.id,
       action: 'TRIP_POD_UPLOADED',
       entity: 'trips',
       entityId: id,
+      meta: { count: uploadedUrls.length },
       ipAddress: req.ip,
     });
 
-    logger.info(`POD uploaded for trip ${id} by driver ${req.user.id}`);
-    return successResponse(res, 200, 'Proof of delivery uploaded', { podUrl: updated.pod_url });
+    logger.info(`${uploadedUrls.length} POD photo(s) uploaded for trip ${id} by driver ${req.user.id}`);
+    const allPhotos = await TripPodPhotoModel.findByTrip(id);
+    return successResponse(res, 200, 'Proof of delivery uploaded', { podPhotos: allPhotos.map((p) => p.url) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/trips/:id/collect-payment ─────────────────────────────────────
+// Last step of the driver's delivery-completion flow when the booking was paid_status=
+// 'pending' (i.e. COD, not paid up front at booking time) — records how the driver actually
+// collected it (UPI via their saved QR, or cash). Only valid once, going pending -> paid;
+// re-running it on an already-paid booking 409s rather than silently overwriting mode/paid_at.
+const collectPayment = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { mode } = req.body;
+
+    const trip = await TripModel.findById(id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (trip.driver_id !== req.user.id) return errorResponse(res, 403, 'Not your trip');
+    if (trip.booking_payment_status !== 'pending') {
+      return errorResponse(res, 409, 'Payment has already been recorded for this booking');
+    }
+
+    await BookingModel.update(trip.booking_id, { payment_status: 'paid', payment_mode: mode, paid_at: new Date() });
+
+    const modeLabel = mode === 'upi' ? 'UPI' : 'cash';
+    if (trip.client_id) {
+      await NotificationModel.create({
+        userId: trip.client_id,
+        title: 'Payment Received',
+        message: `Your payment for ${trip.booking_number || 'your booking'} was collected by the driver via ${modeLabel}.`,
+        type: 'payment',
+        meta: { trip_id: id, booking_id: trip.booking_id, mode },
+      });
+    }
+    if (trip.broker_id) {
+      await NotificationModel.create({
+        userId: trip.broker_id,
+        title: 'Payment Collected',
+        message: `Driver ${trip.driver_name || ''} collected payment for ${trip.booking_number || 'a booking'} via ${modeLabel}.`,
+        type: 'payment',
+        meta: { trip_id: id, booking_id: trip.booking_id, mode },
+      });
+    }
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'TRIP_PAYMENT_COLLECTED',
+      entity: 'bookings',
+      entityId: trip.booking_id,
+      meta: { trip_id: id, mode },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Payment collected for trip ${id} via ${mode} by driver ${req.user.id}`);
+    return successResponse(res, 200, 'Payment recorded', { paymentStatus: 'paid', paymentMode: mode });
   } catch (err) {
     next(err);
   }
@@ -585,5 +671,5 @@ const getPodFile = async (req, res, next) => {
 
 module.exports = {
   listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, declineTrip, updateTripLocation,
-  reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, getPodFile,
+  reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
 };
