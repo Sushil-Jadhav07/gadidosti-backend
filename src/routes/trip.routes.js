@@ -435,7 +435,18 @@ router.patch('/trips/:id/incidents/:incidentId/mechanic', authenticate, authoriz
  *         description: Proof of delivery uploaded
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         podPhotos:
+ *                           type: array
+ *                           items: { type: string }
+ *                           description: Every photo URL uploaded for this trip so far (including ones from earlier calls), not just this call's.
  *       403:
  *         description: Not your trip
  *         content:
@@ -482,7 +493,16 @@ router.post('/trips/:id/pod', authenticate, authorize('driver'), upload.array('f
  *         description: Payment recorded
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         paymentStatus: { type: string, enum: [paid] }
+ *                         paymentMode: { type: string, enum: [upi, cash] }
  *       403:
  *         description: Not your trip
  *         content:

@@ -392,7 +392,15 @@ router.patch('/vehicles/drivers/me/location', authenticate, authorize('driver'),
  *         description: Payment QR uploaded
  *         content:
  *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         paymentQrUrl: { type: string }
  *       404:
  *         description: Driver profile not found
  *         content:

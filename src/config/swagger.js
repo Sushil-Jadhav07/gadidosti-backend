@@ -619,8 +619,13 @@ const options = {
             status:         { type: 'string' },
             broker:         { type: 'string', nullable: true },
             brokerPhone:    { type: 'string', nullable: true },
+            driverId:       { type: 'string', format: 'uuid', nullable: true },
+            driverName:     { type: 'string', nullable: true },
+            driverPhone:    { type: 'string', nullable: true },
             clientName:     { type: 'string' },
             clientPhone:    { type: 'string' },
+            truckId:        { type: 'string', format: 'uuid', nullable: true },
+            truckReg:       { type: 'string', nullable: true },
             pickup: {
               type: 'object',
               properties: {
@@ -650,11 +655,20 @@ const options = {
             earnings:       { type: 'number', nullable: true },
             startedAt:      { type: 'string', format: 'date-time', nullable: true },
             currentLocation: { type: 'object', properties: { lat: { type: 'number', nullable: true }, lng: { type: 'number', nullable: true } } },
-            podUrl:         { type: 'string', nullable: true },
+            podUrl:         { type: 'string', nullable: true, description: "First proof-of-delivery photo's URL — set once from the first entry in podPhotos, kept for any older code that only reads this single field." },
+            podPhotos: {
+              type: 'array', items: { type: 'string' },
+              description: 'All proof-of-delivery photo URLs for this trip (up to 6), uploaded via POST /api/trips/{id}/pod.',
+            },
+            paymentStatus:  { type: 'string', enum: ['paid', 'pending', 'refunded'], description: "The linked booking's payment_status — drives whether the driver app's delivery-completion flow needs its Payments step." },
+            amountToCollect: { type: 'number', nullable: true, description: "The linked booking's amount — what to show on the driver app's Payments step." },
+            driverQrUrl:    { type: 'string', nullable: true, description: "The assigned driver's saved UPI QR image URL (driver_profiles.payment_qr_url), set via POST /api/vehicles/drivers/me/payment-qr. Null until they've uploaded one." },
             timeline: {
               type: 'array',
               items: { type: 'object', properties: { step: { type: 'string' }, done: { type: 'boolean' }, time: { type: 'string', format: 'date-time', nullable: true } } },
             },
+            createdAt:      { type: 'string', format: 'date-time' },
+            updatedAt:      { type: 'string', format: 'date-time' },
           },
         },
 
