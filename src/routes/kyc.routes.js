@@ -56,9 +56,9 @@ const {
  *           example:
  *             documents:
  *               pan_number: "ABCDE1234F"
- *               pan_photo_url: "https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>"
+ *               pan_photo_url: "https://apigadidosti.asynk.in/api/kyc/documents/file/<id>"
  *               aadhaar_number: "XXXX-XXXX-1234"
- *               aadhaar_photo_url: "https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>"
+ *               aadhaar_photo_url: "https://apigadidosti.asynk.in/api/kyc/documents/file/<id>"
  *               gst_number: "27ABCDE1234F1Z5"
  *               bank_account_number: "1234567890123"
  *               business_registration_number: "U12345MH2020PTC123456"
@@ -114,9 +114,9 @@ router.post('/kyc/broker', authenticate, authorize('broker'), submitBrokerKycVal
  *           example:
  *             documents:
  *               license_number: "MH-2020123456789"
- *               license_photo_url: "https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>"
+ *               license_photo_url: "https://apigadidosti.asynk.in/api/kyc/documents/file/<id>"
  *               aadhaar_number: "XXXX-XXXX-1234"
- *               aadhaar_photo_url: "https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>"
+ *               aadhaar_photo_url: "https://apigadidosti.asynk.in/api/kyc/documents/file/<id>"
  *               vehicle_registration_number: "MH-12-CD-5678"
  *               vehicle_insurance_number: "INS-2024-567890"
  *     responses:
@@ -198,7 +198,7 @@ router.post('/kyc/driver', authenticate, authorize('driver'), submitDriverKycVal
  *                             id:            { type: string, format: uuid, nullable: true }
  *                             user_id:       { type: string, format: uuid }
  *                             document_type: { type: string, example: 'pan_photo' }
- *                             url:           { type: string, example: 'https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>' }
+ *                             url:           { type: string, example: 'https://apigadidosti.asynk.in/api/kyc/documents/file/<id>' }
  *       422:
  *         description: Missing file, or document_key missing/not valid for this role
  *         content:
@@ -253,7 +253,7 @@ router.post(
  *                               mime_type:     { type: string }
  *                               size_bytes:    { type: integer }
  *                               uploaded_at:   { type: string, format: date-time }
- *                               url:           { type: string, example: 'https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>' }
+ *                               url:           { type: string, example: 'https://apigadidosti.asynk.in/api/kyc/documents/file/<id>' }
  */
 router.get('/kyc/documents', authenticate, authorize('broker', 'driver'), listMyKycDocuments);
 

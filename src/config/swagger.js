@@ -15,7 +15,7 @@ const options = {
       process.env.NODE_ENV === 'production'
         ? [
             {
-              url: 'https://gadidosti-backend.onrender.com',
+              url: 'https://apigadidosti.asynk.in',
               description: 'Production Server',
             },
           ]
@@ -25,7 +25,7 @@ const options = {
               description: 'Development Server',
             },
             {
-              url: 'https://gadidosti-backend.onrender.com',
+              url: 'https://apigadidosti.asynk.in',
               description: 'Production Server',
             },
           ],
@@ -82,7 +82,7 @@ const options = {
           properties: {
             id:               { type: 'string', format: 'uuid' },
             user_id:          { type: 'string', format: 'uuid' },
-            documents:        { type: 'object', additionalProperties: { type: 'string' }, example: { license_number: 'MH-2020123456789', license_photo_url: 'https://gadidosti-backend.onrender.com/api/kyc/documents/file/<id>', vehicle_registration_number: 'MH-12-CD-5678' } },
+            documents:        { type: 'object', additionalProperties: { type: 'string' }, example: { license_number: 'MH-2020123456789', license_photo_url: 'https://apigadidosti.asynk.in/api/kyc/documents/file/<id>', vehicle_registration_number: 'MH-12-CD-5678' } },
             rejection_reason: { type: 'string', nullable: true, example: 'Aadhaar number does not match uploaded name' },
             reviewed_at:      { type: 'string', format: 'date-time', nullable: true },
             submitted_at:     { type: 'string', format: 'date-time' },
