@@ -64,19 +64,30 @@ class GoogleMapsLocationProvider extends LocationProvider {
   // Distance + duration between two points (city names or full addresses both work — the
   // API resolves free-text). Used by the pricing engine (config.controller.js's getDistance)
   // and Part Truck capacity/route matching.
+  //
+  // departure_time=now makes Google also return duration_in_traffic (current live-traffic
+  // ETA) alongside the normal traffic-free duration — durationInTrafficMin/durationMin's
+  // ratio is what PricingModel.estimate() uses to apply its traffic surge multiplier.
   async getDistance({ from, to }) {
     if (!from || !to) return null;
     try {
-      const url = `${DISTANCE_MATRIX_URL}?origins=${encodeURIComponent(from)}&destinations=${encodeURIComponent(to)}&key=${this.apiKey}`;
+      const url = `${DISTANCE_MATRIX_URL}?origins=${encodeURIComponent(from)}&destinations=${encodeURIComponent(to)}&departure_time=now&key=${this.apiKey}`;
       const data = await getJson(url);
       const element = data.rows?.[0]?.elements?.[0];
       if (data.status !== 'OK' || !element || element.status !== 'OK') {
         logger.warn(`Distance Matrix API: "${from}" -> "${to}" => ${element?.status || data.status}${data.error_message ? ` (${data.error_message})` : ''}`);
         return null;
       }
+      const durationMin = Math.round(element.duration.value / 60);
+      // duration_in_traffic can be absent (e.g. transit_mode without traffic data) — fall
+      // back to durationMin (ratio 1.0, no surge) rather than leaving it undefined.
+      const durationInTrafficMin = element.duration_in_traffic
+        ? Math.round(element.duration_in_traffic.value / 60)
+        : durationMin;
       return {
         distanceKm: Math.round((element.distance.value / 1000) * 10) / 10,
-        durationMin: Math.round(element.duration.value / 60),
+        durationMin,
+        durationInTrafficMin,
       };
     } catch (err) {
       logger.error(`Distance Matrix API request failed for "${from}" -> "${to}": ${err.message}`);

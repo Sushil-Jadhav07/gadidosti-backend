@@ -107,6 +107,10 @@ router.get('/config/cities', listCities);
  *       Public, no auth required. Backed by the active LocationProvider (LOCATION_PROVIDER env var);
  *       the default fake provider uses a static city-pair distance table (no Google Maps integration).
  *       Returns 404 for any pair not in the table instead of guessing a distance.
+ *
+ *       durationMin/durationInTrafficMin are pass-through fields from the LocationProvider — feed
+ *       them straight into POST /api/pricing/estimate (or /api/bookings/quote) as duration_min /
+ *       duration_in_traffic_min to have the traffic surge multiplier applied to the quote.
  *     requestBody:
  *       required: true
  *       content:
@@ -131,6 +135,8 @@ router.get('/config/cities', listCities);
  *                       type: object
  *                       properties:
  *                         distance: { type: number, example: 150, description: 'Distance in km' }
+ *                         durationMin: { type: number, nullable: true, example: 165, description: 'Traffic-free ETA in minutes' }
+ *                         durationInTrafficMin: { type: number, nullable: true, example: 210, description: 'Live-traffic ETA in minutes' }
  *       404:
  *         description: Distance unavailable for this city pair
  *         content:

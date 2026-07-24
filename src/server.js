@@ -13,15 +13,22 @@ const PORT = process.env.PORT || 5000;
 // migration source (config/migrate.js), so a new module can never be live locally
 // (migrated by hand) but missing in production (never migrated at all).
 const runStartupMigrations = async () => {
-  const client = await pool.connect();
+  let client;
   try {
     logger.info('🔄 Running DB migrations...');
+    // Acquiring the client is now inside the try — if the DB is unreachable (wrong host,
+    // database deleted/suspended, etc.) this throws too, and previously did so *before*
+    // the try block even started, bypassing the catch below entirely. That turned a DB
+    // outage into an unhandled rejection that stopped startServer() dead before it ever
+    // reached server.listen() — the process stayed alive but bound no port, which is why
+    // Render's deploy logs show "No open ports detected" instead of a clear DB error.
+    client = await pool.connect();
     await runMigrations(client);
     logger.info('✅ DB migrations complete');
   } catch (err) {
     logger.error(`❌ Migration error: ${err.message}`);
   } finally {
-    client.release();
+    if (client) client.release();
   }
 };
 

@@ -26,7 +26,12 @@ class FakeLocationProvider extends LocationProvider {
   async getDistance({ from, to }) {
     const key = `${from}|${to}`;
     if (!(key in DISTANCE_MAP)) return null;
-    return { distanceKm: DISTANCE_MAP[key] };
+    const distanceKm = DISTANCE_MAP[key];
+    // No real duration data to fake — approximate at a flat 50 km/h so durationMin exists
+    // at all (GoogleMapsLocationProvider always returns one), and durationInTrafficMin
+    // just equals it (no traffic surge in dev/test, since there's nothing real to base one on).
+    const durationMin = Math.round((distanceKm / 50) * 60);
+    return { distanceKm, durationMin, durationInTrafficMin: durationMin };
   }
 
   // No routing engine here — inherits LocationProvider's default (returns null).

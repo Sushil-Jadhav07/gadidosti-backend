@@ -13,6 +13,7 @@
  * @typedef {Object} DistanceResult
  * @property {number} distanceKm
  * @property {number} [durationMin]
+ * @property {number} [durationInTrafficMin] - live-traffic ETA; equals durationMin when no real traffic data is available
  */
 class LocationProvider {
   /**

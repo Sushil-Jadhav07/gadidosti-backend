@@ -42,7 +42,14 @@ const getDistance = async (req, res, next) => {
     if (!result) {
       return errorResponse(res, 404, `Distance unavailable for ${pickup} -> ${drop}. Please check the spelling or try a different location.`);
     }
-    return successResponse(res, 200, 'Distance fetched', { distance: result.distanceKm });
+    // durationMin/durationInTrafficMin are surfaced here so the client can pass them
+    // straight through to POST /api/pricing/estimate — that's what drives the traffic
+    // surge multiplier in PricingModel.estimate().
+    return successResponse(res, 200, 'Distance fetched', {
+      distance: result.distanceKm,
+      durationMin: result.durationMin,
+      durationInTrafficMin: result.durationInTrafficMin,
+    });
   } catch (err) {
     next(err);
   }

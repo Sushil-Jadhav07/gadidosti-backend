@@ -86,7 +86,7 @@ const createBooking = async (req, res, next) => {
     const {
       pickup_location, pickup_lat, pickup_lng, drop_location, drop_lat, drop_lng,
       truck_type, truck_category, weight, weight_unit, quantity, material,
-      transport_type = 'intra', scheduled_date, distance,
+      transport_type = 'intra', scheduled_date, distance, duration_min, duration_in_traffic_min,
       amount: providedAmount, payment_status,
     } = req.body;
 
@@ -95,7 +95,13 @@ const createBooking = async (req, res, next) => {
     let platformFee = null;
 
     if (distance != null) {
-      pricingBreakdown = await PricingModel.estimate({ truckCategory: truck_category, transportType: transport_type, distance });
+      pricingBreakdown = await PricingModel.estimate({
+        truckCategory: truck_category,
+        transportType: transport_type,
+        distance,
+        durationMin: duration_min,
+        durationInTrafficMin: duration_in_traffic_min,
+      });
       amount = amount != null ? amount : pricingBreakdown.total;
       platformFee = pricingBreakdown.platformFee;
     }
@@ -487,13 +493,15 @@ const rateBooking = async (req, res, next) => {
 // ─── POST /api/pricing/estimate, POST /api/bookings/quote ────────────────────
 const estimatePricing = async (req, res, next) => {
   try {
-    const { truck_category, transport_type = 'intra', distance, capacity_used_pct } = req.body;
+    const { truck_category, transport_type = 'intra', distance, capacity_used_pct, duration_min, duration_in_traffic_min } = req.body;
 
     const breakdown = await PricingModel.estimate({
       truckCategory: truck_category,
       transportType: transport_type,
       distance,
       capacityUsedPct: capacity_used_pct,
+      durationMin: duration_min,
+      durationInTrafficMin: duration_in_traffic_min,
     });
 
     // Admin gets the fuel/toll breakdown for inter-city; everyone else gets the

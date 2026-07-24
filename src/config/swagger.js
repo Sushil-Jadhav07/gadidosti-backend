@@ -375,7 +375,7 @@ const options = {
 
         PricingBreakdown: {
           type: 'object',
-          description: 'Shape varies — intra/inter-city client view uses baseFare/distanceFare/subtotal; inter-city admin view adds fuel/toll; part-load uses totalTruckCost/capacityUsedPct.',
+          description: 'Shape varies — intra/inter-city client view uses baseFare/distanceFare/subtotal; inter-city admin view adds fuel/toll; part-load uses totalTruckCost/capacityUsedPct. trafficMultiplier/trafficSurcharge are present on every shape whenever duration_min/duration_in_traffic_min were supplied to the estimate (1.0/0 otherwise — no surge).',
           properties: {
             baseFare:         { type: 'number', nullable: true },
             distance:         { type: 'number' },
@@ -385,6 +385,8 @@ const options = {
             toll:             { type: 'number', nullable: true },
             totalTruckCost:   { type: 'number', nullable: true },
             capacityUsedPct:  { type: 'number', nullable: true },
+            trafficMultiplier: { type: 'number', example: 1.15, description: 'Traffic surge multiplier applied to the subtotal before platformFee — 1.0 means no surge' },
+            trafficSurcharge:  { type: 'number', example: 45.5, description: 'Rupee amount added by trafficMultiplier' },
             platformFee:      { type: 'number' },
             total:            { type: 'number' },
           },

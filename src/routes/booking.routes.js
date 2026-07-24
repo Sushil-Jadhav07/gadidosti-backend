@@ -110,6 +110,8 @@ router.get('/bookings', authenticate, listBookings);
  *               transport_type: { type: string, enum: [intra, inter], default: intra }
  *               distance: { type: number }
  *               capacity_used_pct: { type: number, description: "Only used for truck_category=part" }
+ *               duration_min: { type: number, nullable: true, description: "Traffic-free ETA in minutes, from GET /api/config/distance — enables the traffic surge multiplier when given together with duration_in_traffic_min" }
+ *               duration_in_traffic_min: { type: number, nullable: true, description: "Live-traffic ETA in minutes, from GET /api/config/distance" }
  *     responses:
  *       200:
  *         description: Pricing estimate calculated
@@ -446,6 +448,8 @@ router.post('/bookings/:id/rate', authenticate, authorize('client'), rateBooking
  *               transport_type: { type: string, enum: [intra, inter], default: intra }
  *               distance: { type: number }
  *               capacity_used_pct: { type: number, description: "Only used for truck_category=part" }
+ *               duration_min: { type: number, nullable: true, description: "Traffic-free ETA in minutes, from GET /api/config/distance — enables the traffic surge multiplier when given together with duration_in_traffic_min" }
+ *               duration_in_traffic_min: { type: number, nullable: true, description: "Live-traffic ETA in minutes, from GET /api/config/distance" }
  *     responses:
  *       200:
  *         description: Pricing estimate calculated
