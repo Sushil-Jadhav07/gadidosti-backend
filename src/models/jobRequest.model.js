@@ -100,25 +100,31 @@ class JobRequestModel {
     return result.rows[0] || null;
   }
 
-  // Client counters a specific broker's offer back — only while awaiting the client's response
-  // ('countered'). Flips back to 'pending' so that broker sees it and can respond again.
+  // Client proposes a new amount to one specific broker — either responding to that broker's
+  // own counter ('countered'), or proactively renegotiating before the broker has replied at
+  // all ('pending', e.g. tapping "Negotiate" on a still-open offer). Either way this leaves it
+  // 'pending' — the broker owes a response either way, whether it's their first look at this
+  // request or a reply to the client's new number.
   static async clientCounter(id, { amount, note }) {
     const entry = JSON.stringify([{ by: 'client', amount, note: note || null, at: new Date().toISOString() }]);
     const result = await pool.query(
       `UPDATE job_requests
        SET amount = $1, status = 'pending', offer_history = offer_history || $2::jsonb
-       WHERE id = $3 AND status = 'countered'
+       WHERE id = $3 AND status IN ('pending', 'countered')
        RETURNING *`,
       [amount, entry, id]
     );
     return result.rows[0] || null;
   }
 
-  // Client accepts a broker's counter-offer — atomic compare-and-swap from 'countered', mirrors
-  // acceptIfPending's role on the broker side.
+  // Client locks in a broker — atomic compare-and-swap, mirrors acceptIfPending's role on the
+  // broker side. Works from either 'pending' (client accepts the broker's still-open offer at
+  // the original asking price, no counter needed) or 'countered' (client accepts what the
+  // broker countered with) — the two are the same action from the client's side, just at
+  // whatever amount is currently on the request.
   static async clientAcceptIfCountered(id) {
     const result = await pool.query(
-      `UPDATE job_requests SET status = 'accepted' WHERE id = $1 AND status = 'countered' RETURNING *`,
+      `UPDATE job_requests SET status = 'accepted' WHERE id = $1 AND status IN ('pending', 'countered') RETURNING *`,
       [id]
     );
     return result.rows[0] || null;

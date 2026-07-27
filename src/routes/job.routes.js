@@ -230,8 +230,8 @@ router.patch('/jobs/requests/:id/counter', authenticate, authorize('broker'), co
  * /api/jobs/requests/{id}/client-accept:
  *   patch:
  *     tags: [Jobs]
- *     summary: Client accepts a broker's counter-offer
- *     description: Only allowed while status is `countered`. Confirms the booking with this broker at the negotiated amount and auto-declines every other pending/countered offer for the same booking — same compare-and-swap guarantee as the broker-side accept.
+ *     summary: Client locks in a broker (accepts their current offer, countered or not)
+ *     description: Allowed while status is `pending` (accept the broker's still-open offer at the original asking price — no negotiation needed) or `countered` (accept what the broker last countered with). Confirms the booking with this broker at whichever amount is currently on the request and auto-declines every other pending/countered offer for the same booking — same compare-and-swap guarantee as the broker-side accept.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -245,8 +245,23 @@ router.patch('/jobs/requests/:id/counter', authenticate, authorize('broker'), co
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       400:
+ *         description: Not awaiting your response (already accepted/declined elsewhere), or the compare-and-swap lost a race
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Job request not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  *       409:
- *         description: Booking is no longer available
+ *         description: Booking is no longer available (another offer already won it)
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -289,8 +304,8 @@ router.patch('/jobs/requests/:id/client-reject', authenticate, authorize('client
  * /api/jobs/requests/{id}/client-counter:
  *   patch:
  *     tags: [Jobs]
- *     summary: Client counters a broker's offer back
- *     description: Only allowed while status is `countered`. Sets the request's amount to the client's counter, appends it to offer_history, and flips status back to `pending` so that broker can accept/decline/counter again.
+ *     summary: Client proposes a new amount to one broker
+ *     description: Allowed while status is `pending` (proactively renegotiating with a broker who hasn't responded yet) or `countered` (responding to that broker's own counter). Sets the request's amount to the client's number, appends it to offer_history, and leaves status `pending` so that broker owes a response.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -322,6 +337,26 @@ router.patch('/jobs/requests/:id/client-reject', authenticate, authorize('client
  *                       type: object
  *                       properties:
  *                         request: { $ref: '#/components/schemas/JobRequest' }
+ *       400:
+ *         description: Not awaiting your response (already accepted/declined elsewhere)
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Job request not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Validation errors — amount is required and must be a positive number
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/jobs/requests/:id/client-counter', authenticate, authorize('client'), counterOfferValidation, validate, clientCounterOffer);
 

@@ -315,7 +315,10 @@ const counterJobRequest = async (req, res, next) => {
   }
 };
 
-// ─── PATCH /api/jobs/requests/:id/client-accept — client accepts a broker's counter-offer ─────
+// ─── PATCH /api/jobs/requests/:id/client-accept — client locks in a broker ─────────────────────
+// Works whether the broker has countered yet or not: 'pending' means the client is accepting
+// the broker's still-open offer at the original asking price (no negotiation needed); 'countered'
+// means the client is accepting whatever the broker last countered with. Same action either way.
 const clientAcceptOffer = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -323,7 +326,7 @@ const clientAcceptOffer = async (req, res, next) => {
     const jobRequest = await JobRequestModel.findById(id);
     if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
     if (jobRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
-    if (jobRequest.status !== 'countered') return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
+    if (!['pending', 'countered'].includes(jobRequest.status)) return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
 
     // Same compare-and-swap shape as the broker's acceptJobRequest above — claim the offer
     // first, then the booking, so a second concurrent action on this booking can't both win.
@@ -408,7 +411,10 @@ const clientRejectOffer = async (req, res, next) => {
   }
 };
 
-// ─── PATCH /api/jobs/requests/:id/client-counter — client counters a broker's offer back ──────
+// ─── PATCH /api/jobs/requests/:id/client-counter — client proposes a new amount to one broker ──
+// Works from 'pending' (proactively renegotiating before the broker has responded at all —
+// e.g. the client taps "Negotiate" on a still-open offer) or 'countered' (responding to that
+// broker's own counter). Either way, leaves it 'pending' so the broker owes a response.
 const clientCounterOffer = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -417,7 +423,7 @@ const clientCounterOffer = async (req, res, next) => {
     const jobRequest = await JobRequestModel.findById(id);
     if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
     if (jobRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
-    if (jobRequest.status !== 'countered') return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
+    if (!['pending', 'countered'].includes(jobRequest.status)) return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
 
     const updated = await JobRequestModel.clientCounter(id, { amount, note });
     if (!updated) return errorResponse(res, 400, 'Offer is already actioned');
