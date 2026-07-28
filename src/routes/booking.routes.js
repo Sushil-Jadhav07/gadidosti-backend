@@ -14,7 +14,7 @@ const { estimatePricingValidation } = require('../validations/pricing.validation
  *   post:
  *     tags: [Bookings]
  *     summary: Create a booking (client)
- *     description: No broker or truck is assigned at creation — the booking is broadcast as a job_request to every KYC-verified, active broker. Whichever broker accepts first (PATCH /api/jobs/requests/{id}/accept) wins it; everyone else's request is auto-declined. The winning broker then assigns a driver + truck themselves via POST /api/jobs/{id}/assign-driver.
+ *     description: No broker or truck is assigned at creation — the booking is broadcast as a job_request to every KYC-verified, active broker. Brokers may counter or decline (GET /api/bookings/{bookingId}/offers to see all of them); the client picks one via PATCH /api/jobs/requests/{id}/client-accept, which confirms the booking and auto-declines every other offer. The winning broker then assigns a driver + truck via POST /api/jobs/{id}/assign-driver.
  *     security:
  *       - BearerAuth: []
  *     requestBody:

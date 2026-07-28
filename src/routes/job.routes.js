@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const {
-  listJobRequests, acceptJobRequest, assignDriver, declineJobRequest,
+  listJobRequests, assignDriver, declineJobRequest,
   counterJobRequest, clientAcceptOffer, clientRejectOffer, clientCounterOffer,
 } = require('../controllers/job.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
@@ -15,7 +15,7 @@ const { assignDriverValidation, counterOfferValidation } = require('../validatio
  *   get:
  *     tags: [Jobs]
  *     summary: List the broker's job requests
- *     description: Job requests never expire — they stay pending until the broker accepts or declines. Each item includes a "N min ago" timestamp.
+ *     description: Job requests never expire — they stay pending until the client picks a broker (or this broker declines). Each item includes a "N min ago" timestamp.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -48,47 +48,12 @@ router.get('/jobs/requests', authenticate, authorize('broker'), listJobRequests)
 
 /**
  * @swagger
- * /api/jobs/requests/{id}/accept:
- *   patch:
- *     tags: [Jobs]
- *     summary: Accept a job request
- *     description: |
- *       Advances the booking to confirmed and notifies the client. Does NOT assign a driver/truck or create the trip yet — call POST /api/jobs/{id}/assign-driver next for that.
- *       Every new booking is broadcast to all verified brokers as a separate job_request row, so accepting is a compare-and-swap: the first broker to accept wins, and every other broker's pending request for the same booking is automatically declined. If another broker won the race a split second earlier, this returns 409.
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     responses:
- *       200:
- *         description: Job request accepted
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
- *       400:
- *         description: Already actioned or expired
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- *       409:
- *         description: Another broker already accepted this booking first
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- */
-router.patch('/jobs/requests/:id/accept', authenticate, authorize('broker'), acceptJobRequest);
-
-/**
- * @swagger
  * /api/jobs/{id}/assign-driver:
  *   post:
  *     tags: [Jobs]
  *     summary: Assign a driver + truck to an accepted job request
  *     description: |
- *       Job request must belong to this broker and already be in `accepted` status (call accept first).
+ *       Job request must belong to this broker and already be in `accepted` status — which only happens once the client has picked this broker via PATCH /api/jobs/requests/{id}/client-accept. Brokers cannot accept their own job request directly.
  *       driverId must be a driver_profiles row owned by this broker; truckId must be a truck owned by this
  *       broker and currently `available`. On success: booking -> status `assigned` (+ timeline entry),
  *       truck -> `on_trip`, a trips row is created with the booking's pickup/drop/cargo details,

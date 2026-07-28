@@ -841,9 +841,9 @@ PATCH /api/broker/availability
 
 ---
 
-## 8. Jobs (offer/accept flow) — `/api/jobs/*`
+## 8. Jobs (negotiation flow) — `/api/jobs/*`
 
-**In plain English:** When a booking is created, every eligible broker gets one "job request" row each — think of it as their personal copy of "here's a job, do you want it?" Job requests **never expire** — they sit as `pending` until a broker explicitly accepts or declines. (There used to be a 30-minute auto-expiry with a background sweep; that's been removed. If you're wondering "what happens if nobody ever responds" — the admin dashboard surfaces a `stalePendingBookings` count for bookings sitting unaccepted for 2+ hours, so it's visible, but nothing happens to the booking automatically.)
+**In plain English:** When a booking is created, every eligible broker gets one "job request" row each — think of it as their personal copy of "here's a job, want it?" Job requests **never expire** — they sit as `pending` until something changes. A broker can only counter or decline; brokers **cannot** unilaterally accept a job request. The **client** is the sole party who confirms a broker — they compare offers via `GET /api/bookings/:bookingId/offers` and confirm one via `PATCH /api/jobs/requests/:id/client-accept` (or negotiate first via `.../client-counter`), which auto-declines every other broker's pending/countered offer on that booking. (There used to be a 30-minute auto-expiry with a background sweep; that's been removed. If you're wondering "what happens if nobody ever responds" — the admin dashboard surfaces a `stalePendingBookings` count for bookings sitting unconfirmed for 2+ hours, so it's visible, but nothing happens to the booking automatically.)
 
 ### `GET /api/jobs/requests`
 **Who can call it:** Broker
@@ -853,15 +853,6 @@ PATCH /api/broker/availability
 { "success": true, "message": "Job requests fetched",
   "data": { "requests": [ { "id": "uuid-here", "bookingId": "uuid-here", "bookingNumber": "BKG-202608-012", "clientName": "Priya Sharma", "pickup": "Pune", "drop": "Mumbai", "distance": 150, "truckType": "Medium Truck", "amount": 6982.5, "status": "pending", "timestamp": "5 min ago" } ], "total": 2, "page": 1, "limit": 10 } }
 ```
-
-### `PATCH /api/jobs/requests/:id/accept`
-**Who can call it:** Broker
-**In plain English:** Take the job. First broker to accept wins it — every other broker's request for the same booking is automatically declined the moment one broker wins.
-```json
-{ "success": true, "message": "Job request accepted",
-  "data": { "booking": { "id": "uuid-here", "status": "confirmed", "brokerId": "uuid-here", "driverId": null, "truckId": null, "timeline": ["pending", "confirmed"], "currentStep": 1 } } }
-```
-**Good to know:** This is a race by design (broadcast bookings go to everyone at once) — it's handled atomically so two brokers accepting at the exact same instant can't both "win" the same booking. If you lose the race, you get a clear 409 error instead of silently succeeding into a broken state.
 
 ### `PATCH /api/jobs/requests/:id/decline`
 **Who can call it:** Broker
@@ -1186,7 +1177,7 @@ Putting it all together, here's a real booking's life cycle across every module 
 
 1. **Client** fills out the booking form → frontend calls `POST /config/distance` → `POST /pricing/estimate` (live price preview, now traffic-aware) → `POST /bookings` (creates it for real).
 2. Every eligible **broker** gets a `job_request` (section 8) — no expiry, sits pending until someone acts.
-3. First broker to `PATCH /jobs/requests/:id/accept` wins it; everyone else auto-declines.
+3. Brokers can only counter (`PATCH /jobs/requests/:id/counter`) or decline; the **client** compares offers via `GET /bookings/:bookingId/offers` and confirms one via `PATCH /jobs/requests/:id/client-accept` — every other broker's offer on that booking auto-declines the moment the client picks one.
 4. That broker calls `POST /jobs/:id/assign-driver` → this creates the actual **trip** record.
 5. The **driver** works the trip forward via repeated `PATCH /trips/:id/status` calls (matching the driver app's status button), pinging `PATCH /trips/:id/location` along the way, and the **client** watches it live via `GET /bookings/:id/track`.
 6. If something goes wrong mid-trip, the driver calls `POST /trips/:id/report-issue`; the broker/admin resolves it via the incidents endpoints.

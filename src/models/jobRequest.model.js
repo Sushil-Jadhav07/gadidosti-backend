@@ -67,16 +67,6 @@ class JobRequestModel {
     return result.rows[0] || null;
   }
 
-  // Atomic compare-and-swap — only flips pending -> accepted, so two brokers racing on
-  // *their own* job_request row for the same booking can't both "win" it.
-  static async acceptIfPending(id) {
-    const result = await pool.query(
-      `UPDATE job_requests SET status = 'accepted' WHERE id = $1 AND status = 'pending' RETURNING *`,
-      [id]
-    );
-    return result.rows[0] || null;
-  }
-
   // Declines every other still-open (pending or mid-negotiation) request for the same booking
   // once one broker has won it.
   static async declineOthersForBooking(bookingId, exceptJobRequestId) {
@@ -117,9 +107,10 @@ class JobRequestModel {
     return result.rows[0] || null;
   }
 
-  // Client locks in a broker — atomic compare-and-swap, mirrors acceptIfPending's role on the
-  // broker side. Works from either 'pending' (client accepts the broker's still-open offer at
-  // the original asking price, no counter needed) or 'countered' (client accepts what the
+  // Client locks in a broker — the only way a booking gets confirmed now (brokers can no
+  // longer unilaterally accept). Atomic compare-and-swap so two concurrent client actions
+  // can't both win. Works from either 'pending' (client accepts the broker's still-open offer
+  // at the original asking price, no counter needed) or 'countered' (client accepts what the
   // broker countered with) — the two are the same action from the client's side, just at
   // whatever amount is currently on the request.
   static async clientAcceptIfCountered(id) {

@@ -57,77 +57,6 @@ const listJobRequests = async (req, res, next) => {
   }
 };
 
-// ─── PATCH /api/jobs/requests/:id/accept ──────────────────────────────────────
-const acceptJobRequest = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const jobRequest = await JobRequestModel.findById(id);
-    if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
-    if (jobRequest.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your job request');
-    if (jobRequest.status !== 'pending') return errorResponse(res, 400, `Job request is already ${jobRequest.status}`);
-
-    // Broadcast bookings go to every broker at once — claim this specific request atomically
-    // first, then the booking itself, so two brokers racing on the same booking can't both win.
-    const claimed = await JobRequestModel.acceptIfPending(id);
-    if (!claimed) return errorResponse(res, 400, 'Job request is already actioned');
-
-    const booking = await BookingModel.advanceStatusIfCurrent(jobRequest.booking_id, 'pending', {
-      status: 'confirmed',
-      currentStep: 1,
-      brokerId: req.user.id,
-    });
-
-    if (!booking) {
-      // Another broker already got this booking first — undo our claim and bail out.
-      await JobRequestModel.setStatus(id, 'declined');
-      return errorResponse(res, 409, 'This booking has already been accepted by another broker');
-    }
-
-    // Negotiation may have moved the price away from the booking's original ask (e.g. the
-    // client countered and this broker is accepting the negotiated amount) — keep them in sync.
-    if (claimed.amount != null && Number(booking.amount) !== Number(claimed.amount)) {
-      await BookingModel.update(booking.id, { amount: claimed.amount });
-    }
-
-    await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
-    await JobRequestModel.declineOthersForBooking(booking.id, id);
-
-    await AuditLogModel.log({
-      userId: req.user.id,
-      action: 'JOB_REQUEST_ACCEPTED',
-      entity: 'job_requests',
-      entityId: id,
-      meta: { booking_id: booking.id },
-      ipAddress: req.ip,
-    });
-
-    await NotificationModel.create({
-      userId: booking.client_id,
-      title: 'Booking Confirmed',
-      message: `Your booking has been accepted by a broker and is now confirmed.`,
-      type: 'booking',
-      meta: { booking_id: booking.id },
-    });
-
-    logger.info(`Job request ${id} accepted by broker ${req.user.id}`);
-    const full = await BookingModel.findById(booking.id);
-    const timeline = await BookingModel.getTimeline(booking.id);
-    return successResponse(res, 200, 'Job request accepted', { booking: {
-      id: full.id,
-      status: full.status,
-      brokerId: full.broker_id,
-      driverId: full.driver_id,
-      truckId: full.truck_id,
-      pickup: full.pickup_location,
-      drop: full.drop_location,
-      timeline: timeline.map((item) => item.step),
-      currentStep: full.current_step,
-    } });
-  } catch (err) {
-    next(err);
-  }
-};
-
 const assignDriver = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -453,6 +382,6 @@ const clientCounterOffer = async (req, res, next) => {
 };
 
 module.exports = {
-  listJobRequests, acceptJobRequest, assignDriver, declineJobRequest,
+  listJobRequests, assignDriver, declineJobRequest,
   counterJobRequest, clientAcceptOffer, clientRejectOffer, clientCounterOffer,
 };

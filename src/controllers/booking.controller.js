@@ -134,10 +134,10 @@ const createBooking = async (req, res, next) => {
     await BookingModel.addTimelineStep(booking.id, { step: 'pending', position: 0 });
 
     // Broadcast to verified, active, online brokers whose service_city matches the pickup
-    // location — whichever one accepts first gets the job (acceptJobRequest() auto-declines
-    // the sibling requests once someone takes it). Falls back to every active broker if zero
-    // brokers are zoned for this city, so a booking never silently gets zero offers just
-    // because no broker has set up a matching service_city yet.
+    // location — each gets their own job_request row and can counter/decline, but only the
+    // client can confirm one via client-accept (which auto-declines the sibling requests).
+    // Falls back to every active broker if zero brokers are zoned for this city, so a booking
+    // never silently gets zero offers just because no broker has set up a matching service_city yet.
     // Caveat: this is a straightforward string-equality match against pickup_location, which
     // is freeform text — pairs best with an exact city name. A real geocoding LocationProvider
     // (src/providers/location) would be a more robust way to derive the city from an address.
