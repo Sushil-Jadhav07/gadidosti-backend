@@ -729,6 +729,11 @@ const runMigrations = async (client) => {
 
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_mode TEXT;
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
+
+      -- Free-text notes the client leaves at booking time (special instructions, requested
+      -- add-on services like "Helper Required") — previously only lived in the client app's
+      -- form state and was never actually sent to or stored by the API.
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS notes TEXT;
     `);
 
     console.log('✅ Migrations complete!');

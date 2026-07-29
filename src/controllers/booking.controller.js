@@ -40,6 +40,7 @@ const projectBooking = (row, timeline, role) => {
     weightUnit: row.weight_unit,
     quantity: row.quantity,
     material: row.material,
+    notes: row.notes || null,
     transportType: row.transport_type,
     date: row.scheduled_date,
     amount: row.amount,
@@ -87,7 +88,7 @@ const createBooking = async (req, res, next) => {
       pickup_location, pickup_lat, pickup_lng, drop_location, drop_lat, drop_lng,
       truck_type, truck_category, weight, weight_unit, quantity, material,
       transport_type = 'intra', scheduled_date, distance, duration_min, duration_in_traffic_min,
-      amount: providedAmount, payment_status,
+      amount: providedAmount, payment_status, notes,
     } = req.body;
 
     let amount = providedAmount;
@@ -129,6 +130,7 @@ const createBooking = async (req, res, next) => {
       distance,
       platformFee,
       paymentStatus: payment_status,
+      notes,
     });
 
     await BookingModel.addTimelineStep(booking.id, { step: 'pending', position: 0 });
