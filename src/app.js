@@ -26,6 +26,7 @@ const adminRoutes   = require('./routes/admin.routes');
 const chatRoutes    = require('./routes/chat.routes');
 const errorHandler  = require('./middleware/errorHandler.middleware');
 const logger        = require('./utils/logger');
+const allowedOrigins = require('./config/corsOrigins');
 
 const app = express();
 
@@ -40,7 +41,7 @@ app.use(helmet({
   crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
 }));
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+  origin: allowedOrigins,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));

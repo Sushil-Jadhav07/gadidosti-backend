@@ -4,6 +4,7 @@ const UserModel = require('../models/user.model');
 const ChatMessageModel = require('../models/chatMessage.model');
 const chatService = require('./chatService');
 const logger = require('../utils/logger');
+const allowedOrigins = require('../config/corsOrigins');
 
 let io = null;
 
@@ -14,7 +15,7 @@ let io = null;
 const initSocket = (server) => {
   io = new Server(server, {
     cors: {
-      origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+      origin: allowedOrigins,
       methods: ['GET', 'POST'],
     },
   });
