@@ -113,6 +113,44 @@ class DriverProfileModel {
     };
   }
 
+  // Platform-wide (not scoped to a broker's own fleet, unlike findAll) — every driver whose
+  // status isn't 'offline', together with their truck's full columns rather than just the
+  // registration findAll's join returns. Built for driver-picker style UIs any role can call.
+  static async findAllActiveWithTruck({ page = 1, limit = 10 } = {}) {
+    const offset = (page - 1) * limit;
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM driver_profiles dp WHERE dp.status != 'offline'`
+    );
+    const total = parseInt(countResult.rows[0].count);
+
+    const rows = await pool.query(
+      `SELECT dp.user_id, dp.broker_id, dp.status AS driver_status, dp.total_trips, dp.avatar,
+              dp.current_lat, dp.current_lng, dp.last_location_at, dp.created_at, dp.updated_at,
+              u.name, u.phone, u.kyc_status,
+              broker.name AS broker_name,
+              t.id AS truck_id, t.registration AS truck_registration, t.type AS truck_type,
+              t.category AS truck_category, t.capacity AS truck_capacity, t.make AS truck_make,
+              t.year AS truck_year, t.insurance_expiry AS truck_insurance_expiry, t.status AS truck_status
+       FROM driver_profiles dp
+       JOIN users u ON u.id = dp.user_id
+       LEFT JOIN users broker ON broker.id = dp.broker_id
+       LEFT JOIN trucks t ON t.id = dp.truck_id
+       WHERE dp.status != 'offline'
+       ORDER BY (dp.status = 'available') DESC, dp.updated_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+
+    return {
+      drivers: rows.rows,
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total_pages: Math.ceil(total / limit) || 0,
+    };
+  }
+
   static async updateLocation(userId, { lat, lng }) {
     const result = await pool.query(
       `UPDATE driver_profiles

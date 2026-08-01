@@ -90,6 +90,28 @@ class TruckModel {
     return result.rows[0] || null;
   }
 
+  // Links a driver to this truck, keeping trucks.driver_id and driver_profiles.truck_id in
+  // sync — every other write path here only ever touches one side of that pair. If the driver
+  // is already on a different truck, or this truck already has a different driver, the old
+  // link is cleared first so neither ever ends up assigned on both sides at once.
+  static async assignDriver(truckId, driverId) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`UPDATE driver_profiles SET truck_id = NULL, updated_at = NOW() WHERE truck_id = $1`, [truckId]);
+      await client.query(`UPDATE trucks SET driver_id = NULL, updated_at = NOW() WHERE driver_id = $1`, [driverId]);
+      await client.query(`UPDATE trucks SET driver_id = $1, updated_at = NOW() WHERE id = $2`, [driverId, truckId]);
+      await client.query(`UPDATE driver_profiles SET truck_id = $1, updated_at = NOW() WHERE user_id = $2`, [truckId, driverId]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+    return this.findById(truckId);
+  }
+
   // Hard delete — safe only when no booking references this truck (enforced in controller).
   static async remove(id) {
     await pool.query(`DELETE FROM trucks WHERE id = $1`, [id]);

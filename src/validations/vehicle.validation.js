@@ -58,7 +58,11 @@ const updateDriverLocationValidation = [
   body('lng').isFloat({ min: -180, max: 180 }).withMessage('lng must be a valid longitude'),
 ];
 
+const assignDriverValidation = [
+  body('driver_id').notEmpty().withMessage('driver_id is required').isUUID().withMessage('driver_id must be a valid UUID'),
+];
+
 module.exports = {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
-  registerDriverValidation, updateDriverLocationValidation,
+  registerDriverValidation, updateDriverLocationValidation, assignDriverValidation,
 };

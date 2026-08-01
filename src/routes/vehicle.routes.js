@@ -2,8 +2,8 @@ const express = require('express');
 const router = express.Router();
 
 const {
-  createTruck, listTrucks, getTruck, updateTruck, deleteTruck,
-  lookupDriverByPhone, createDriver, registerDriver, listDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
+  createTruck, listTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
+  lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
   uploadPaymentQr,
 } = require('../controllers/vehicle.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
@@ -11,7 +11,7 @@ const validate = require('../middleware/validate.middleware');
 const upload = require('../middleware/upload.middleware');
 const {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
-  registerDriverValidation, updateDriverLocationValidation,
+  registerDriverValidation, updateDriverLocationValidation, assignDriverValidation,
 } = require('../validations/vehicle.validation');
 
 // ─── TRUCKS ───────────────────────────────────────────────────────────────────
@@ -144,6 +144,53 @@ router.get('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin'), g
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin'), updateTruckValidation, validate, updateTruck);
+
+/**
+ * @swagger
+ * /api/vehicles/trucks/{id}/assign-driver:
+ *   post:
+ *     tags: [Vehicles]
+ *     summary: Assign a driver to an existing truck (broker, or admin)
+ *     description: Links driver_id on the truck and truck_id on the driver profile together in one step. If the driver is already on a different truck, or this truck already has a different driver, the old link is cleared automatically so neither ever ends up double-assigned.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [driver_id]
+ *             properties:
+ *               driver_id: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Driver assigned to truck
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your truck
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Truck or driver not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Driver and truck belong to different brokers
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/vehicles/trucks/:id/assign-driver', authenticate, authorize('broker', 'admin'), assignDriverValidation, validate, assignDriverToTruck);
 
 /**
  * @swagger
@@ -331,6 +378,31 @@ router.post('/vehicles/drivers/register', authenticate, authorize('broker', 'adm
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.get('/vehicles/drivers', authenticate, authorize('broker', 'admin'), listDrivers);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/active:
+ *   get:
+ *     tags: [Vehicles]
+ *     summary: List active drivers with full truck details (any authenticated role)
+ *     description: Platform-wide, not scoped to a broker's own fleet — returns every driver whose status isn't 'offline', together with their assigned truck's full details (or null if unassigned). Intended for driver-picker style UIs.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 10, maximum: 100 }
+ *     responses:
+ *       200:
+ *         description: Active drivers fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ */
+router.get('/vehicles/drivers/active', authenticate, listActiveDrivers);
 
 /**
  * @swagger

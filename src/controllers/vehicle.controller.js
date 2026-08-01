@@ -30,6 +30,34 @@ const projectTruck = (row) => ({
   updatedAt: row.updated_at,
 });
 
+const projectActiveDriver = (row) => ({
+  id: row.user_id,
+  name: row.name,
+  phone: row.phone,
+  brokerId: row.broker_id,
+  brokerName: row.broker_name || null,
+  status: row.driver_status,
+  totalTrips: row.total_trips,
+  avatar: row.avatar,
+  kycStatus: row.kyc_status,
+  currentLat: row.current_lat != null ? Number(row.current_lat) : null,
+  currentLng: row.current_lng != null ? Number(row.current_lng) : null,
+  lastLocationAt: row.last_location_at || null,
+  truck: row.truck_id ? {
+    id: row.truck_id,
+    registration: row.truck_registration,
+    type: row.truck_type,
+    category: row.truck_category,
+    capacity: row.truck_capacity,
+    make: row.truck_make,
+    year: row.truck_year,
+    insuranceExpiry: row.truck_insurance_expiry,
+    status: row.truck_status,
+  } : null,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
 const projectDriver = (row) => ({
   id: row.user_id,
   name: row.name,
@@ -164,6 +192,51 @@ const updateTruck = async (req, res, next) => {
 
     const full = await TruckModel.findById(updated.id);
     return successResponse(res, 200, 'Truck updated', { truck: projectTruck(full) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/vehicles/trucks/:id/assign-driver
+// Dedicated link step for the common "truck exists, no driver on it yet" case — unlike
+// PATCH /api/vehicles/trucks/:id (which only ever set trucks.driver_id), this also keeps
+// driver_profiles.truck_id in sync, and auto-unassigns either side's previous link so a
+// driver/truck can never end up double-assigned.
+const assignDriverToTruck = async (req, res, next) => {
+  try {
+    const { driver_id } = req.body;
+
+    const truck = await TruckModel.findById(req.params.id);
+    if (!truck) return errorResponse(res, 404, 'Truck not found');
+    if (req.user.role === 'broker' && truck.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your truck');
+
+    const driver = await DriverProfileModel.findById(driver_id);
+    if (!driver) return errorResponse(res, 404, 'Driver not found');
+    if (driver.broker_id !== truck.broker_id) return errorResponse(res, 422, 'Driver and truck must belong to the same broker');
+
+    if (driver.truck_id === truck.id) {
+      return successResponse(res, 200, 'Driver already assigned to this truck', { truck: projectTruck(truck) });
+    }
+
+    const updated = await TruckModel.assignDriver(truck.id, driver_id);
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'TRUCK_DRIVER_ASSIGNED',
+      entity: 'trucks',
+      entityId: truck.id,
+      meta: { driverId: driver_id },
+      ipAddress: req.ip,
+    });
+
+    await NotificationModel.create({
+      userId: driver_id,
+      title: 'Truck Assigned',
+      message: `You have been assigned to truck ${truck.registration}.`,
+      type: 'general',
+    });
+
+    return successResponse(res, 200, 'Driver assigned to truck', { truck: projectTruck(updated) });
   } catch (err) {
     next(err);
   }
@@ -354,6 +427,26 @@ const listDrivers = async (req, res, next) => {
   }
 };
 
+// GET /api/vehicles/drivers/active
+// Platform-wide (not scoped to the caller's own fleet like GET /api/vehicles/drivers) —
+// open to every role, returning every non-offline driver with their truck's full details.
+// Built for driver-picker style UIs (e.g. client/booking flows) that need to browse the
+// whole active fleet rather than just one broker's.
+const listActiveDrivers = async (req, res, next) => {
+  try {
+    const { page = 1, limit = 10 } = req.query;
+
+    const result = await DriverProfileModel.findAllActiveWithTruck({
+      page: parseInt(page),
+      limit: Math.min(parseInt(limit), 100),
+    });
+
+    return successResponse(res, 200, 'Active drivers fetched', { ...result, drivers: result.drivers.map(projectActiveDriver) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // GET /api/vehicles/drivers/:id
 const getDriver = async (req, res, next) => {
   try {
@@ -480,7 +573,7 @@ const uploadPaymentQr = async (req, res, next) => {
 };
 
 module.exports = {
-  createTruck, listTrucks, getTruck, updateTruck, deleteTruck,
-  lookupDriverByPhone, createDriver, registerDriver, listDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
+  createTruck, listTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
+  lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
   uploadPaymentQr,
 };
