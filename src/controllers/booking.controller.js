@@ -60,6 +60,16 @@ const projectBooking = (row, timeline, role) => {
   return base;
 };
 
+// ─── POST /api/bookings/validate-location ────────────────────────────────────
+// Lets the frontend gate progress past the Locations step before the user fills in Load
+// Info / Truck / Review — runs the exact same pickup/drop/city rule as POST /api/bookings
+// (createBookingValidation, shared verbatim) but writes nothing. If this 200s, the same
+// payload's location fields are guaranteed to pass validation on the real POST /api/bookings
+// call later, since both routes run the identical validation chain.
+const validateLocation = async (req, res) => {
+  return successResponse(res, 200, 'Location is valid', { valid: true });
+};
+
 // ─── POST /api/bookings ──────────────────────────────────────────────────────
 const createBooking = async (req, res, next) => {
   try {
@@ -164,4 +174,4 @@ const createBooking = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking };
+module.exports = { createBooking, validateLocation };
