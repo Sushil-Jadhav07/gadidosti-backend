@@ -1,12 +1,11 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, listBookings, getBooking, trackBooking, listBookingOffers, updateBookingStatus, cancelBooking, payBooking, rateBooking, estimatePricing } = require('../controllers/booking.controller');
+const { createBooking } = require('../controllers/booking.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
-const { createBookingValidation, updateBookingStatusValidation, rateBookingValidation } = require('../validations/booking.validation');
-const { estimatePricingValidation } = require('../validations/pricing.validation');
+const { createBookingValidation } = require('../validations/booking.validation');
 
 /**
  * @swagger
@@ -14,7 +13,10 @@ const { estimatePricingValidation } = require('../validations/pricing.validation
  *   post:
  *     tags: [Bookings]
  *     summary: Create a booking (client)
- *     description: No broker or truck is assigned at creation — the booking is broadcast as a job_request to every KYC-verified, active broker. Brokers may counter or decline (GET /api/bookings/{bookingId}/offers to see all of them); the client picks one via PATCH /api/jobs/requests/{id}/client-accept, which confirms the booking and auto-declines every other offer. The winning broker then assigns a driver + truck via POST /api/jobs/{id}/assign-driver.
+ *     description: |
+ *       No broker or truck is assigned at creation — the booking is broadcast as a job_request to every KYC-verified, active broker. Brokers may counter or decline; the client picks one via PATCH /api/jobs/requests/{id}/client-accept, which confirms the booking and auto-declines every other offer. The winning broker then assigns a driver + truck via POST /api/jobs/{id}/assign-driver.
+ *
+ *       **transport_type / city rule:** for an **intra-city** booking (transport_type omitted or "intra"), `city` is required — the single city both `pickup_location` and `drop_location` must fall within (checked as a case-insensitive substring match, e.g. city="Indore" matches an address containing "...Indore, Madhya Pradesh..."). For an **inter-city** booking (transport_type "inter"), `city` does not apply and pickup/drop may be in different cities.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -31,15 +33,19 @@ const { estimatePricingValidation } = require('../validations/pricing.validation
  *               drop_location: { type: string }
  *               drop_lat: { type: number }
  *               drop_lng: { type: number }
+ *               transport_type: { type: string, enum: [intra, inter], default: intra }
+ *               city: { type: string, description: "Required when transport_type is intra (or omitted) — pickup_location and drop_location must both fall within this city. Not used for inter-city bookings." }
  *               truck_type: { type: string }
  *               truck_category: { type: string, enum: [small, medium, large, part] }
  *               weight: { type: number }
  *               weight_unit: { type: string, default: tons }
  *               quantity: { type: integer }
  *               material: { type: string }
- *               transport_type: { type: string, enum: [intra, inter], default: intra }
+ *               notes: { type: string }
  *               scheduled_date: { type: string, format: date-time }
  *               distance: { type: number, description: "If provided, pricing is auto-computed" }
+ *               duration_min: { type: number, nullable: true }
+ *               duration_in_traffic_min: { type: number, nullable: true }
  *               amount: { type: number, description: "Overrides the auto-computed total when provided" }
  *               payment_status: { type: string, enum: [paid, pending], default: pending, description: "'paid' for Pay Now, 'pending' for Pay Later — no real payment gateway is wired up, this just records the client's choice" }
  *     parameters:
@@ -55,408 +61,11 @@ const { estimatePricingValidation } = require('../validations/pricing.validation
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  *       422:
- *         description: Validation errors
+ *         description: Validation errors — pickup_location/drop_location missing, transport_type invalid, city missing for an intra-city booking, or pickup_location/drop_location not within the given city
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/bookings', authenticate, authorize('client'), idempotent('POST /bookings'), createBookingValidation, validate, createBooking);
-
-/**
- * @swagger
- * /api/bookings:
- *   get:
- *     tags: [Bookings]
- *     summary: List bookings (role-scoped)
- *     description: client -> own bookings, broker/driver -> assigned bookings, admin -> all bookings.
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: query
- *         name: status
- *         schema: { type: string, enum: [pending, confirmed, assigned, en_route_pickup, picked_up, in_transit, delivered, completed, cancelled, no_broker_available] }
- *       - in: query
- *         name: page
- *         schema: { type: integer, default: 1 }
- *       - in: query
- *         name: limit
- *         schema: { type: integer, default: 10, maximum: 100 }
- *     responses:
- *       200:
- *         description: Bookings fetched
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
- */
-router.get('/bookings', authenticate, listBookings);
-
-/**
- * @swagger
- * /api/bookings/quote:
- *   post:
- *     tags: [Bookings]
- *     summary: Quote a booking (alias of /api/pricing/estimate)
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [truck_category, distance]
- *             properties:
- *               truck_category: { type: string, enum: [small, medium, large, part] }
- *               transport_type: { type: string, enum: [intra, inter], default: intra }
- *               distance: { type: number }
- *               capacity_used_pct: { type: number, description: "Only used for truck_category=part" }
- *               duration_min: { type: number, nullable: true, description: "Traffic-free ETA in minutes, from GET /api/config/distance — enables the traffic surge multiplier when given together with duration_in_traffic_min" }
- *               duration_in_traffic_min: { type: number, nullable: true, description: "Live-traffic ETA in minutes, from GET /api/config/distance" }
- *     responses:
- *       200:
- *         description: Pricing estimate calculated
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
- */
-router.post('/bookings/quote', authenticate, estimatePricingValidation, validate, estimatePricing);
-
-/**
- * @swagger
- * /api/bookings/{id}:
- *   get:
- *     tags: [Bookings]
- *     summary: Get a booking by ID or booking number (role-appropriate projection)
- *     description: Admin gets extra fields (client, clientPhone, clientEmail, driverPhone) that other roles don't. Accepts either the raw UUID or the human-readable booking_number (e.g. "BKG-202412-001").
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         description: Booking UUID or booking_number
- *         schema: { type: string, example: 'BKG-202412-001' }
- *     responses:
- *       200:
- *         description: Booking fetched
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
- *       403:
- *         description: No access to this booking
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- *       404:
- *         description: Booking not found
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- */
-router.get('/bookings/:id', authenticate, getBooking);
-
-/**
- * @swagger
- * /api/bookings/{id}/track:
- *   get:
- *     tags: [Bookings]
- *     summary: Live-track a booking's assigned driver (client/broker/driver/admin)
- *     description: Meant to be polled every 5-10s, not pushed via WebSocket. Returns null location fields if no driver is assigned yet or no location has been reported yet. ETA is a straight-line estimate (no routing engine). Also surfaces the trip's latest unresolved incident, if any, so the client doesn't need a separate call to GET /api/trips/{id}/incidents.
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         description: Booking UUID or booking_number
- *         schema: { type: string, example: 'BKG-202412-001' }
- *     responses:
- *       200:
- *         description: Booking location fetched
- *         content:
- *           application/json:
- *             schema:
- *               allOf:
- *                 - $ref: '#/components/schemas/SuccessResponse'
- *                 - type: object
- *                   properties:
- *                     data:
- *                       type: object
- *                       properties:
- *                         status:               { type: string, enum: [pending, confirmed, assigned, en_route_pickup, picked_up, in_transit, delivered, completed, cancelled, no_broker_available] }
- *                         driverLat:            { type: number, nullable: true }
- *                         driverLng:            { type: number, nullable: true }
- *                         lastLocationAt:       { type: string, format: date-time, nullable: true }
- *                         distanceRemainingKm:  { type: number, nullable: true }
- *                         etaMinutes:           { type: integer, nullable: true }
- *                         incident:
- *                           type: object
- *                           nullable: true
- *                           description: The trip's latest unresolved incident, or null if there is none
- *                           properties:
- *                             reason:     { type: string, enum: [accident, breakdown, traffic_block, medical, other] }
- *                             notes:      { type: string, nullable: true }
- *                             status:     { type: string, enum: [reported, acknowledged, resolved] }
- *                             reportedAt: { type: string, format: date-time }
- *       403:
- *         description: No access to this booking
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- *       404:
- *         description: Booking not found
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- */
-router.get('/bookings/:id/track', authenticate, trackBooking);
-
-/**
- * @swagger
- * /api/bookings/{id}/offers:
- *   get:
- *     tags: [Bookings]
- *     summary: List negotiation offers for a booking (client/admin)
- *     description: Every broker who received this booking's job_request shows up here with their current amount, status (pending/countered/accepted/declined), and full offer_history. Meant to be polled every few seconds while the booking is still `pending` so the client sees incoming/updated offers live.
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         description: Booking UUID or booking_number
- *         schema: { type: string, example: 'BKG-202412-001' }
- *     responses:
- *       200:
- *         description: Offers fetched
- *         content:
- *           application/json:
- *             schema:
- *               allOf:
- *                 - $ref: '#/components/schemas/SuccessResponse'
- *                 - type: object
- *                   properties:
- *                     data:
- *                       type: object
- *                       properties:
- *                         bookingId:     { type: string, format: uuid }
- *                         bookingStatus: { type: string }
- *                         offers:        { type: array, items: { $ref: '#/components/schemas/BookingOffer' } }
- *       403:
- *         description: No access to this booking
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- */
-router.get('/bookings/:id/offers', authenticate, authorize('client', 'admin'), listBookingOffers);
-
-/**
- * @swagger
- * /api/bookings/{id}/status:
- *   patch:
- *     tags: [Bookings]
- *     summary: Manually override a booking's status (admin only — escape hatch, not normal flow)
- *     description: |
- *       Not called by any frontend under normal operation — PATCH /api/trips/{id}/status is what
- *       actually drives status progression day-to-day, and it keeps the booking in sync automatically.
- *       This exists purely as an admin escape hatch for fixing a booking that's stuck out of sync
- *       with reality. Also syncs the linked trip's status (if one exists) so the two can never disagree.
- *
- *       `completed` is **not** an allowed value here — that transition must go through
- *       PATCH /api/trips/{id}/status so its atomic completion guard and settlement side effects
- *       aren't bypassed.
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [status]
- *             properties:
- *               status: { type: string, enum: [pending, confirmed, assigned, en_route_pickup, picked_up, in_transit, delivered, cancelled, no_broker_available] }
- *               driver_id: { type: string, format: uuid }
- *               truck_id: { type: string, format: uuid }
- *     responses:
- *       200:
- *         description: Booking status updated
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
- *       403:
- *         description: Admin only
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- *       422:
- *         description: Validation errors — status must be one of the allowed values, 'completed' is rejected
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- */
-router.patch('/bookings/:id/status', authenticate, authorize('admin'), updateBookingStatusValidation, validate, updateBookingStatus);
-
-/**
- * @swagger
- * /api/bookings/{id}/cancel:
- *   patch:
- *     tags: [Bookings]
- *     summary: Cancel a booking (client/admin)
- *     description: Only allowed while status is pending/confirmed/assigned — otherwise responds 409. Sets status to cancelled and payment_status to refunded (no real refund is triggered — Razorpay integration is out of scope), and appends a cancelled timeline entry.
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     responses:
- *       200:
- *         description: Booking cancelled
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
- *       403:
- *         description: Not your booking
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- *       404:
- *         description: Booking not found
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- *       409:
- *         description: Booking is no longer cancellable (already past assigned)
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- */
-router.patch('/bookings/:id/cancel', authenticate, authorize('client', 'admin'), cancelBooking);
-
-/**
- * @swagger
- * /api/bookings/{id}/pay:
- *   patch:
- *     tags: [Bookings]
- *     summary: Settle a Pay Later booking (client)
- *     description: Marks payment_status as paid. Only allowed while payment_status is pending and the booking isn't cancelled. No real payment gateway is wired up — this just records that the client paid.
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         description: Booking UUID or booking_number
- *         schema: { type: string, example: 'BKG-202412-001' }
- *     responses:
- *       200:
- *         description: Payment recorded
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
- *       403:
- *         description: Not your booking
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- *       404:
- *         description: Booking not found
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- *       409:
- *         description: Booking is cancelled, or already paid/refunded
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- */
-router.patch('/bookings/:id/pay', authenticate, authorize('client'), payBooking);
-
-/**
- * @swagger
- * /api/bookings/{id}/rate:
- *   post:
- *     tags: [Bookings]
- *     summary: Client Rating — rate a completed booking
- *     description: Client Rating of a completed delivery (brokers/drivers are not rated anywhere in this system). Only allowed once the booking is delivered/completed. One rating per booking — a second attempt returns an error.
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [stars]
- *             properties:
- *               stars:  { type: integer, minimum: 1, maximum: 5, example: 5 }
- *               review: { type: string, nullable: true, example: 'Great service, on time delivery.' }
- *     responses:
- *       200:
- *         description: Booking rated
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
- *       403:
- *         description: Not your booking
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- *       409:
- *         description: Booking already rated, or not yet delivered/completed
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- *       422:
- *         description: Validation errors — stars must be 1-5
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- */
-router.post('/bookings/:id/rate', authenticate, authorize('client'), rateBookingValidation, validate, rateBooking);
-
-/**
- * @swagger
- * /api/pricing/estimate:
- *   post:
- *     tags: [Pricing]
- *     summary: Compute a price quote
- *     description: Returns a breakdown whose shape depends on transport_type/truck_category — see the gap-analysis doc §2.
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [truck_category, distance]
- *             properties:
- *               truck_category: { type: string, enum: [small, medium, large, part] }
- *               transport_type: { type: string, enum: [intra, inter], default: intra }
- *               distance: { type: number }
- *               capacity_used_pct: { type: number, description: "Only used for truck_category=part" }
- *               duration_min: { type: number, nullable: true, description: "Traffic-free ETA in minutes, from GET /api/config/distance — enables the traffic surge multiplier when given together with duration_in_traffic_min" }
- *               duration_in_traffic_min: { type: number, nullable: true, description: "Live-traffic ETA in minutes, from GET /api/config/distance" }
- *     responses:
- *       200:
- *         description: Pricing estimate calculated
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
- */
-router.post('/pricing/estimate', authenticate, estimatePricingValidation, validate, estimatePricing);
 
 module.exports = router;

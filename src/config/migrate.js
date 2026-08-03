@@ -736,6 +736,14 @@ const runMigrations = async (client) => {
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS notes TEXT;
     `);
 
+    // ── BOOKING CITY (mirrors db/22booking_city.sql) ──
+    // The single city both pickup_location and drop_location must fall within for an
+    // intra-city booking (enforced in booking.validation.js) — null for inter-city bookings,
+    // which cross city lines by definition and have no single "city" to record.
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS city TEXT;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
