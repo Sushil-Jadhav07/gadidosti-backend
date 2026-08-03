@@ -560,6 +560,26 @@ const deleteDriver = async (req, res, next) => {
   }
 };
 
+// GET /api/vehicles/drivers/me/truck
+// The driver's own current truck assignment — powers the driver dashboard's "your truck"
+// display. Single object (or null), since driver_profiles.truck_id is a single FK — a driver
+// is assigned to at most one truck at a time, never a list.
+const myAssignedTruck = async (req, res, next) => {
+  try {
+    const driver = await DriverProfileModel.findById(req.user.id);
+    if (!driver) return errorResponse(res, 404, 'Driver profile not found');
+
+    if (!driver.truck_id) {
+      return successResponse(res, 200, 'No truck assigned', { truck: null });
+    }
+
+    const truck = await TruckModel.findById(driver.truck_id);
+    return successResponse(res, 200, 'Assigned truck fetched', { truck: truck ? projectTruck(truck) : null });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // PATCH /api/vehicles/drivers/me/location
 // Pinged periodically by the driver's own app while online, even before a trip starts.
 const updateDriverLocation = async (req, res, next) => {
@@ -630,6 +650,6 @@ const uploadPaymentQr = async (req, res, next) => {
 
 module.exports = {
   createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
-  lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
-  uploadPaymentQr,
+  lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
+  myAssignedTruck, updateDriverLocation, uploadPaymentQr,
 };

@@ -3,8 +3,8 @@ const router = express.Router();
 
 const {
   createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
-  lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
-  uploadPaymentQr,
+  lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
+  myAssignedTruck, updateDriverLocation, uploadPaymentQr,
 } = require('../controllers/vehicle.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -455,6 +455,29 @@ router.get('/vehicles/drivers', authenticate, authorize('broker', 'admin'), list
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.get('/vehicles/drivers/active', authenticate, listActiveDrivers);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/me/truck:
+ *   get:
+ *     tags: [Vehicles]
+ *     summary: Get the authenticated driver's own assigned truck (driver)
+ *     description: Single truck object (or null if unassigned) — driver_profiles.truck_id is a single FK, a driver is assigned to at most one truck at a time. Same full truck shape as GET /api/vehicles/trucks/{id}.
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Assigned truck fetched (truck may be null)
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: Driver profile not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/vehicles/drivers/me/truck', authenticate, authorize('driver'), myAssignedTruck);
 
 /**
  * @swagger
