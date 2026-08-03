@@ -9,6 +9,7 @@ const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 const { getStorageProvider } = require('../providers/storage');
 const { toAbsoluteUrl } = require('../utils/fileUrl');
+const { getIO } = require('../realtime/socket');
 
 const storageProvider = getStorageProvider();
 
@@ -132,6 +133,49 @@ const createTruck = async (req, res, next) => {
 
     const full = await TruckModel.findById(truck.id);
     return successResponse(res, 201, 'Truck added', { truck: projectTruck(full) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const projectNearbyTruck = (row) => ({
+  id: row.id,
+  registration: row.registration,
+  type: row.type,
+  category: row.category,
+  capacity: row.capacity,
+  make: row.make,
+  year: row.year,
+  status: row.status,
+  distanceKm: row.distance_km != null ? Number(row.distance_km) : null,
+  currentLat: row.current_lat != null ? Number(row.current_lat) : null,
+  currentLng: row.current_lng != null ? Number(row.current_lng) : null,
+  lastLocationAt: row.last_location_at || null,
+});
+
+// GET /api/vehicles/trucks/nearby
+// Powers the Truck-selection step of booking creation — available trucks (with their
+// driver's live GPS position) near the client's pickup point, before any broker/driver is
+// assigned to this booking. No driver name/phone here since nobody's been assigned to this
+// client yet (see GET /api/vehicles/drivers/active for the fleet-browsing endpoint that does
+// include it). "Movement" isn't pushed live — no socket channel carries location updates
+// (PATCH /vehicles/drivers/me/location is DB-only) — the frontend should re-poll this every
+// few seconds while the user is on this step and animate trucks between positions.
+const listNearbyTrucks = async (req, res, next) => {
+  try {
+    const { pickup_lat, pickup_lng, truck_category, capacity, radius_km, page = 1, limit = 20 } = req.query;
+
+    const result = await TruckModel.findNearby({
+      lat: parseFloat(pickup_lat),
+      lng: parseFloat(pickup_lng),
+      category: truck_category,
+      capacity,
+      radiusKm: radius_km !== undefined ? parseFloat(radius_km) : undefined,
+      page: parseInt(page),
+      limit: Math.min(parseInt(limit), 100),
+    });
+
+    return successResponse(res, 200, 'Nearby trucks fetched', { ...result, trucks: result.trucks.map(projectNearbyTruck) });
   } catch (err) {
     next(err);
   }
@@ -525,6 +569,18 @@ const updateDriverLocation = async (req, res, next) => {
     const updated = await DriverProfileModel.updateLocation(req.user.id, { lat, lng });
     if (!updated) return errorResponse(res, 404, 'Driver profile not found');
 
+    // Pushes to anyone watching this truck via socket join-truck-tracking (e.g. a client on
+    // the booking Truck step) — no-op if nobody's joined that room, or if this driver has no
+    // truck assigned yet.
+    if (updated.truck_id) {
+      getIO()?.to(`truck:${updated.truck_id}`).emit('truck-location', {
+        truckId: updated.truck_id,
+        lat: Number(updated.current_lat),
+        lng: Number(updated.current_lng),
+        lastLocationAt: updated.last_location_at,
+      });
+    }
+
     return successResponse(res, 200, 'Location updated', {
       location: {
         lat: Number(updated.current_lat),
@@ -573,7 +629,7 @@ const uploadPaymentQr = async (req, res, next) => {
 };
 
 module.exports = {
-  createTruck, listTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
+  createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
   uploadPaymentQr,
 };

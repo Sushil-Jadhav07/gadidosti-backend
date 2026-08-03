@@ -156,7 +156,7 @@ class DriverProfileModel {
       `UPDATE driver_profiles
        SET current_lat = $1, current_lng = $2, last_location_at = NOW(), updated_at = NOW()
        WHERE user_id = $3
-       RETURNING user_id, current_lat, current_lng, last_location_at`,
+       RETURNING user_id, truck_id, current_lat, current_lng, last_location_at`,
       [lat, lng, userId]
     );
     return result.rows[0] || null;

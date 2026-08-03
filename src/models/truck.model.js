@@ -112,6 +112,84 @@ class TruckModel {
     return this.findById(truckId);
   }
 
+  // Available trucks (with an available, located, KYC-verified driver) near a point — powers
+  // the Truck step of booking creation, before any broker/driver is assigned to the booking.
+  // Requires the truck<->driver link to actually exist on both sides (t.driver_id = dp.user_id,
+  // not just the join condition) since assignDriver keeps them in sync but nothing stops other
+  // code paths writing just one side. Only trucks whose driver has ever reported a location are
+  // considered (nothing to plot on a map otherwise), unlike the broker-fleet near-search in
+  // driverProfile.model.js's findAll, which deliberately keeps location-unknown drivers in the
+  // results (sorted last) since a broker still needs to see their whole fleet regardless of GPS
+  // freshness.
+  static async findNearby({ lat, lng, category, capacity, radiusKm, page = 1, limit = 20 } = {}) {
+    const offset = (page - 1) * limit;
+    const conditions = [
+      `t.status = 'available'`,
+      `t.driver_id IS NOT NULL`,
+      `t.driver_id = dp.user_id`,
+      `dp.status = 'available'`,
+      `dp.current_lat IS NOT NULL`,
+      `dp.current_lng IS NOT NULL`,
+      `driver.kyc_status = 'verified'`,
+    ];
+    const params = [lat, lng];
+    let idx = 3;
+
+    if (category) {
+      conditions.push(`t.category = $${idx++}`);
+      params.push(category);
+    }
+
+    if (capacity) {
+      conditions.push(`LOWER(t.capacity) = LOWER($${idx++})`);
+      params.push(capacity);
+    }
+
+    // Haversine great-circle distance in km; clamp the acos() argument to [-1, 1] to guard
+    // against floating-point drift pushing it just outside that domain (same formula as
+    // driverProfile.model.js's near-search).
+    const distanceExpr = `
+      6371 * acos(LEAST(1, GREATEST(-1,
+        cos(radians($1)) * cos(radians(dp.current_lat)) * cos(radians(dp.current_lng) - radians($2))
+        + sin(radians($1)) * sin(radians(dp.current_lat))
+      )))
+    `;
+
+    if (radiusKm != null) {
+      conditions.push(`(${distanceExpr}) <= $${idx++}`);
+      params.push(radiusKm);
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+    const joins = `JOIN driver_profiles dp ON dp.truck_id = t.id JOIN users driver ON driver.id = dp.user_id`;
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM trucks t ${joins} ${where}`,
+      params
+    );
+    const total = parseInt(countResult.rows[0].count);
+
+    const rows = await pool.query(
+      `SELECT t.id, t.registration, t.type, t.category, t.capacity, t.make, t.year, t.status,
+              dp.current_lat, dp.current_lng, dp.last_location_at,
+              (${distanceExpr}) AS distance_km
+       FROM trucks t
+       ${joins}
+       ${where}
+       ORDER BY distance_km ASC
+       LIMIT $${idx} OFFSET $${idx + 1}`,
+      [...params, limit, offset]
+    );
+
+    return {
+      trucks: rows.rows,
+      total,
+      page: parseInt(page),
+      limit: parseInt(limit),
+      total_pages: Math.ceil(total / limit) || 0,
+    };
+  }
+
   // Hard delete — safe only when no booking references this truck (enforced in controller).
   static async remove(id) {
     await pool.query(`DELETE FROM trucks WHERE id = $1`, [id]);

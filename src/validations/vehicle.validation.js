@@ -1,4 +1,4 @@
-const { body } = require('express-validator');
+const { body, query } = require('express-validator');
 
 const TRUCK_CATEGORIES = ['small', 'medium', 'large', 'part'];
 // Loose Indian vehicle-registration format, e.g. "MH12AB1234" or "MH-12-AB-1234".
@@ -62,7 +62,16 @@ const assignDriverValidation = [
   body('driver_id').notEmpty().withMessage('driver_id is required').isUUID().withMessage('driver_id must be a valid UUID'),
 ];
 
+const nearbyTrucksValidation = [
+  query('pickup_lat').isFloat({ min: -90, max: 90 }).withMessage('pickup_lat must be a valid latitude'),
+  query('pickup_lng').isFloat({ min: -180, max: 180 }).withMessage('pickup_lng must be a valid longitude'),
+  query('truck_category').optional({ nullable: true, checkFalsy: true })
+    .isIn(TRUCK_CATEGORIES).withMessage(`truck_category must be one of: ${TRUCK_CATEGORIES.join(', ')}`),
+  query('capacity').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 60 }),
+  query('radius_km').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('radius_km must be a positive number'),
+];
+
 module.exports = {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
-  registerDriverValidation, updateDriverLocationValidation, assignDriverValidation,
+  registerDriverValidation, updateDriverLocationValidation, assignDriverValidation, nearbyTrucksValidation,
 };

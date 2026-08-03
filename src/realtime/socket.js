@@ -84,6 +84,23 @@ const initSocket = (server) => {
       socket.to(`thread:${threadId}`).emit('typing', { threadId, userId: socket.user.id, isTyping: !!isTyping });
     });
 
+    // ─── join-truck-tracking / leave-truck-tracking — live GPS during the Truck-selection step
+    // of booking creation. No permission check beyond being an authenticated socket: the same
+    // live position is already exposed to any authenticated role via
+    // GET /api/vehicles/trucks/nearby, so joining this room leaks nothing that endpoint doesn't
+    // already. Location updates are pushed in by vehicle.controller.js's updateDriverLocation
+    // (the PATCH /vehicles/drivers/me/location handler) via getIO() — same
+    // REST-write-triggers-socket-broadcast pattern chat.controller.js uses for messages.
+    socket.on('join-truck-tracking', ({ truckId } = {}, ack) => {
+      if (!truckId) return ack?.({ success: false, message: 'truckId is required' });
+      socket.join(`truck:${truckId}`);
+      ack?.({ success: true });
+    });
+
+    socket.on('leave-truck-tracking', ({ truckId } = {}) => {
+      if (truckId) socket.leave(`truck:${truckId}`);
+    });
+
     // ─── read receipts ──────────────────────────────────────────────────────────────────────────
     socket.on('read', async ({ threadId } = {}, ack) => {
       try {

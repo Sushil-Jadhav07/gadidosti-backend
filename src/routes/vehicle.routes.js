@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const {
-  createTruck, listTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
+  createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver, updateDriverLocation,
   uploadPaymentQr,
 } = require('../controllers/vehicle.controller');
@@ -11,7 +11,7 @@ const validate = require('../middleware/validate.middleware');
 const upload = require('../middleware/upload.middleware');
 const {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
-  registerDriverValidation, updateDriverLocationValidation, assignDriverValidation,
+  registerDriverValidation, updateDriverLocationValidation, assignDriverValidation, nearbyTrucksValidation,
 } = require('../validations/vehicle.validation');
 
 // ─── TRUCKS ───────────────────────────────────────────────────────────────────
@@ -80,6 +80,58 @@ router.post('/vehicles/trucks', authenticate, authorize('broker', 'admin'), crea
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.get('/vehicles/trucks', authenticate, authorize('broker', 'admin'), listTrucks);
+
+/**
+ * @swagger
+ * /api/vehicles/trucks/nearby:
+ *   get:
+ *     tags: [Vehicles]
+ *     summary: Available trucks near a pickup point, with driver live GPS (any authenticated role)
+ *     description: |
+ *       Powers the Truck-selection step of booking creation — shows available trucks (status=available, with an available, KYC-verified driver actually assigned to it, who has reported a location) near the client's pickup point, before any broker/driver is assigned to the booking. Platform-wide, not scoped to one broker.
+ *
+ *       No driver name/phone is included — nobody has been assigned to this client's booking yet. Each result includes the driver's live current_lat/current_lng and last_location_at so the frontend can plot it on a map; there's no push/socket channel for movement — join the `truck:{truckId}` Socket.IO room (event `join-truck-tracking`) for each returned truck to get live `truck-location` push updates instead of polling.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: pickup_lat
+ *         required: true
+ *         schema: { type: number, example: 19.076 }
+ *       - in: query
+ *         name: pickup_lng
+ *         required: true
+ *         schema: { type: number, example: 72.8777 }
+ *       - in: query
+ *         name: truck_category
+ *         schema: { type: string, enum: [small, medium, large, part] }
+ *       - in: query
+ *         name: capacity
+ *         description: Matches the truck's freeform capacity field exactly (case-insensitive) — pass whatever the user picked on the Truck step (e.g. "5" or "5 Tons"), matching the value shown on the category card.
+ *         schema: { type: string, example: "5 Tons" }
+ *       - in: query
+ *         name: radius_km
+ *         description: Only trucks within this many km of the pickup point are returned. Omit for no radius cap (still sorted nearest-first).
+ *         schema: { type: number }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20, maximum: 100 }
+ *     responses:
+ *       200:
+ *         description: Nearby trucks fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       422:
+ *         description: pickup_lat/pickup_lng missing or invalid
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/vehicles/trucks/nearby', authenticate, nearbyTrucksValidation, validate, listNearbyTrucks);
 
 /**
  * @swagger
