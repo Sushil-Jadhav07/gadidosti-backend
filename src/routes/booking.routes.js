@@ -14,21 +14,20 @@ const { createBookingValidation } = require('../validations/booking.validation')
  *     tags: [Bookings]
  *     summary: Check the Locations step before letting the user continue (client)
  *     description: |
- *       Stateless — creates nothing. Runs the exact same pickup_location/drop_location/transport_type/city rule as POST /api/bookings (see that endpoint's description), so a 200 here guarantees these same location fields will pass validation on the real POST /api/bookings call later. Call this right after the user fills in the Locations step, and only let them continue to Load Info if it 200s.
+ *       Stateless — creates nothing. Runs the exact same pickup_location/drop_location/transport_type/city rule as POST /api/bookings (see that endpoint's description), so a 200 here guarantees these same location fields will pass validation on the real POST /api/bookings call later. Call this right after the user fills in the Locations step. Nothing here is required — an empty body is valid too; this only rejects when city is given with transport_type=intra and pickup_location/drop_location don't fall within it.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
- *       required: true
+ *       required: false
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required: [pickup_location, drop_location]
  *             properties:
  *               pickup_location: { type: string }
  *               drop_location: { type: string }
  *               transport_type: { type: string, enum: [intra, inter], default: intra }
- *               city: { type: string, description: "Required when transport_type is intra (or omitted)." }
+ *               city: { type: string, description: "Not required. When given together with transport_type=intra (or omitted) and pickup_location/drop_location, both must fall within it." }
  *     responses:
  *       200:
  *         description: Location is valid
@@ -52,16 +51,17 @@ router.post('/bookings/validate-location', authenticate, authorize('client'), cr
  *     description: |
  *       No broker or truck is assigned at creation — the booking is broadcast as a job_request to every KYC-verified, active broker. Brokers may counter or decline; the client picks one via PATCH /api/jobs/requests/{id}/client-accept, which confirms the booking and auto-declines every other offer. The winning broker then assigns a driver + truck via POST /api/jobs/{id}/assign-driver.
  *
- *       **transport_type / city rule:** for an **intra-city** booking (transport_type omitted or "intra"), `city` is required — the single city both `pickup_location` and `drop_location` must fall within (checked as a case-insensitive substring match, e.g. city="Indore" matches an address containing "...Indore, Madhya Pradesh..."). For an **inter-city** booking (transport_type "inter"), `city` does not apply and pickup/drop may be in different cities.
+ *       **Nothing in this request body is required** — an empty body creates a booking with every field null/default. This is intentional: the frontend wizard collects fields across several steps, and the client may submit before every step is filled in.
+ *
+ *       **transport_type / city rule (only checked when the relevant fields are present):** for an **intra-city** booking (transport_type omitted or "intra"), if both `city` and `pickup_location`/`drop_location` are given, the locations must fall within that city (checked as a case-insensitive substring match, e.g. city="Indore" matches an address containing "...Indore, Madhya Pradesh..."). For an **inter-city** booking (transport_type "inter"), `city` does not apply.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
- *       required: true
+ *       required: false
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required: [pickup_location, drop_location]
  *             properties:
  *               pickup_location: { type: string }
  *               pickup_lat: { type: number }
@@ -70,7 +70,25 @@ router.post('/bookings/validate-location', authenticate, authorize('client'), cr
  *               drop_lat: { type: number }
  *               drop_lng: { type: number }
  *               transport_type: { type: string, enum: [intra, inter], default: intra }
- *               city: { type: string, description: "Required when transport_type is intra (or omitted) — pickup_location and drop_location must both fall within this city. Not used for inter-city bookings." }
+ *               city: { type: string, description: "Not required. When given together with transport_type=intra (or omitted) and pickup_location/drop_location, both must fall within it." }
+ *               add_loading_location:
+ *                 type: array
+ *                 description: Extra pickup stops beyond pickup_location, e.g. collecting from more than one warehouse before heading to drop.
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     location: { type: string }
+ *                     lat: { type: number }
+ *                     lng: { type: number }
+ *               add_unloading_location:
+ *                 type: array
+ *                 description: Extra drop stops beyond drop_location, e.g. unloading part of the load at more than one point.
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     location: { type: string }
+ *                     lat: { type: number }
+ *                     lng: { type: number }
  *               truck_type: { type: string }
  *               truck_category: { type: string, enum: [small, medium, large, part] }
  *               weight: { type: number }
@@ -97,7 +115,7 @@ router.post('/bookings/validate-location', authenticate, authorize('client'), cr
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  *       422:
- *         description: Validation errors — pickup_location/drop_location missing, transport_type invalid, city missing for an intra-city booking, or pickup_location/drop_location not within the given city
+ *         description: Validation errors — an invalid (not missing) transport_type/lat/lng/array shape, or pickup_location/drop_location not within the given city when city is present
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }

@@ -24,6 +24,8 @@ const projectBooking = (row, timeline, role) => {
     dropLat: row.drop_lat,
     dropLng: row.drop_lng,
     city: row.city,
+    loadingLocations: row.loading_locations || [],
+    unloadingLocations: row.unloading_locations || [],
     truckType: row.truck_type,
     truckCategory: row.truck_category,
     weight: row.weight,
@@ -78,7 +80,14 @@ const createBooking = async (req, res, next) => {
       truck_type, truck_category, weight, weight_unit, quantity, material,
       transport_type = 'intra', city, scheduled_date, distance, duration_min, duration_in_traffic_min,
       amount: providedAmount, payment_status, notes,
+      add_loading_location, add_unloading_location,
     } = req.body;
+
+    // Nothing here is required (see booking.validation.js) — pickup_location/drop_location
+    // can be missing, so every place that builds human-readable text from them needs a
+    // fallback rather than printing "undefined".
+    const pickupText = pickup_location || 'an unspecified pickup point';
+    const dropText = drop_location || 'an unspecified drop point';
 
     let amount = providedAmount;
     let pricingBreakdown = null;
@@ -123,6 +132,8 @@ const createBooking = async (req, res, next) => {
       platformFee,
       paymentStatus: payment_status,
       notes,
+      loadingLocations: add_loading_location,
+      unloadingLocations: add_unloading_location,
     });
 
     await BookingModel.addTimelineStep(booking.id, { step: 'pending', position: 0 });
@@ -138,7 +149,7 @@ const createBooking = async (req, res, next) => {
     let brokerIds = await BrokerProfileModel.findEligibleBrokers({ city: city || pickup_location });
     if (!brokerIds.length) {
       brokerIds = await UserModel.findActiveBrokers();
-      logger.warn(`No brokers zoned for pickup city "${city || pickup_location}" — falling back to broadcasting to all ${brokerIds.length} active brokers`);
+      logger.warn(`No brokers zoned for pickup city "${city || pickupText}" — falling back to broadcasting to all ${brokerIds.length} active brokers`);
     }
     await Promise.all(brokerIds.map(async (brokerId) => {
       const jobRequest = await JobRequestModel.create({
@@ -150,7 +161,7 @@ const createBooking = async (req, res, next) => {
       await NotificationModel.create({
         userId: brokerId,
         title: 'New Job Request',
-        message: `A new booking (${pickup_location} to ${drop_location}) is awaiting your response.`,
+        message: `A new booking (${pickupText} to ${dropText}) is awaiting your response.`,
         type: 'booking',
         meta: { booking_id: booking.id, job_request_id: jobRequest.id },
       });

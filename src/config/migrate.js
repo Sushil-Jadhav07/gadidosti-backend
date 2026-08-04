@@ -744,6 +744,21 @@ const runMigrations = async (client) => {
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS city TEXT;
     `);
 
+    // ── BOOKING EXTRA STOPS + NOTHING REQUIRED (mirrors db/23booking_stops.sql) ──
+    // Extra pickup/drop stops beyond the single pickup_location/drop_location pair — e.g.
+    // picking up from two warehouses before heading to drop. Each is a JSONB array of
+    // { location, lat, lng } objects; defaults to an empty array rather than null so callers
+    // never have to null-check before iterating.
+    // Also drops the NOT NULL constraint on pickup_location/drop_location — createBookingValidation
+    // no longer requires either, and the DB constraint has to match or every omitted-location
+    // booking would 500 on insert instead of saving.
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS loading_locations JSONB NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS unloading_locations JSONB NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE bookings ALTER COLUMN pickup_location DROP NOT NULL;
+      ALTER TABLE bookings ALTER COLUMN drop_location DROP NOT NULL;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
