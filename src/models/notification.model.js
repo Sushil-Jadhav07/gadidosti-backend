@@ -1,7 +1,18 @@
 const pool = require('../config/db');
+const DeviceTokenModel = require('./deviceToken.model');
+const { getPushProvider } = require('../providers/push');
+const logger = require('../utils/logger');
+
+const pushProvider = getPushProvider();
 
 class NotificationModel {
   // Create a notification for a user (used internally by other modules — bookings, payments, etc.)
+  // Also pushes to every device the user is registered on (device_tokens) — deliberately hooked
+  // in right here, the one place every caller across the app already goes through, rather than
+  // each of the ~20 call sites (job.controller.js, driverRequest.controller.js, cron sweeps,
+  // etc.) remembering to trigger it separately. Push is best-effort: a failure here never
+  // throws back to the caller, since the in-app notification row is the thing that must not
+  // be lost — the push is a bonus delivery channel on top of it.
   static async create({ userId, title, message, type = 'general', meta }) {
     const result = await pool.query(
       `INSERT INTO notifications (user_id, title, message, type, meta)
@@ -9,7 +20,27 @@ class NotificationModel {
        RETURNING id, user_id, title, message, type, is_read, meta, created_at`,
       [userId, title, message, type, meta ? JSON.stringify(meta) : null]
     );
-    return result.rows[0];
+    const notification = result.rows[0];
+
+    this.sendPush(notification).catch((err) => {
+      logger.error(`Push notification failed for user ${userId}: ${err.message}`);
+    });
+
+    return notification;
+  }
+
+  static async sendPush(notification) {
+    const tokens = await DeviceTokenModel.findTokensByUserId(notification.user_id);
+    if (!tokens.length) return;
+
+    const { invalidTokens } = await pushProvider.send({
+      tokens,
+      title: notification.title,
+      body: notification.message,
+      data: { type: notification.type, notification_id: notification.id, ...(notification.meta || {}) },
+    });
+
+    await DeviceTokenModel.removeMany(invalidTokens);
   }
 
   // List a user's notifications, paginated, with total + unread counts

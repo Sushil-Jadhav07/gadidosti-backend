@@ -7,6 +7,7 @@ const { runMigrations } = require('./config/migrate');
 const { initSocket } = require('./realtime/socket');
 const { startDriverAssignmentTimeoutSweep } = require('./cron/driverAssignmentTimeoutSweep');
 const { startDriverRequestTimeoutSweep } = require('./cron/driverRequestTimeoutSweep');
+const { startStaleDriverLocationSweep } = require('./cron/staleDriverLocationSweep');
 
 const PORT = process.env.PORT || 5000;
 
@@ -44,6 +45,7 @@ const startServer = async () => {
   initSocket(server);
   startDriverAssignmentTimeoutSweep();
   startDriverRequestTimeoutSweep();
+  startStaleDriverLocationSweep();
 
   server.listen(PORT, () => {
     logger.info(`🚀 SSK Logistics Auth API running on port ${PORT}`);

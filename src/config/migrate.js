@@ -818,6 +818,27 @@ const runMigrations = async (client) => {
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS deleted_by UUID REFERENCES users(id) ON DELETE SET NULL;
     `);
 
+    // ── DEVICE TOKENS (mirrors db/27device_tokens.sql) ──
+    // One row per device a user is logged into — token is globally unique; re-registering it
+    // (e.g. a different account logs into the same device) reassigns user_id via ON CONFLICT
+    // rather than erroring. Also adds driver_profiles.stale_notified_at, which debounces the
+    // "driver's live location has gone stale mid-trip" notification (see
+    // src/cron/staleDriverLocationSweep.js) so it's sent once per stale period, not every tick.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS device_tokens (
+          id          UUID         PRIMARY KEY DEFAULT uuid_generate_v4(),
+          user_id     UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          token       TEXT         NOT NULL UNIQUE,
+          platform    TEXT,
+          created_at  TIMESTAMPTZ  DEFAULT NOW(),
+          updated_at  TIMESTAMPTZ  DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id);
+
+      ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS stale_notified_at TIMESTAMPTZ;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

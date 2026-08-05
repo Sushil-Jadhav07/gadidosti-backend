@@ -1,4 +1,5 @@
 const NotificationModel = require('../models/notification.model');
+const DeviceTokenModel = require('../models/deviceToken.model');
 const { successResponse, errorResponse } = require('../utils/response');
 
 // ─── GET /api/users/notifications ─────────────────────────────────────────────
@@ -38,4 +39,34 @@ const markAllNotificationsRead = async (req, res, next) => {
   }
 };
 
-module.exports = { getNotifications, markNotificationRead, markAllNotificationsRead };
+// ─── POST /api/users/device-token ─────────────────────────────────────────────
+// Call once after login (and again whenever the FCM SDK hands the app a fresh token — it
+// can rotate) from every platform: web, Android, iOS. Re-registering an existing token just
+// reassigns it to the current user (see DeviceTokenModel.upsert) — safe to call on every app
+// launch without checking whether it's already registered.
+const registerDeviceToken = async (req, res, next) => {
+  try {
+    const { token, platform } = req.body;
+    const saved = await DeviceTokenModel.upsert({ userId: req.user.id, token, platform });
+    return successResponse(res, 200, 'Device token registered', { deviceToken: saved });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── DELETE /api/users/device-token ───────────────────────────────────────────
+// Call on logout so a signed-out device stops receiving this user's pushes.
+const unregisterDeviceToken = async (req, res, next) => {
+  try {
+    const { token } = req.body;
+    await DeviceTokenModel.remove(token);
+    return successResponse(res, 200, 'Device token unregistered');
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = {
+  getNotifications, markNotificationRead, markAllNotificationsRead,
+  registerDeviceToken, unregisterDeviceToken,
+};

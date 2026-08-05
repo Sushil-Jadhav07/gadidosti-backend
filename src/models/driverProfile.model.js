@@ -154,7 +154,8 @@ class DriverProfileModel {
   static async updateLocation(userId, { lat, lng }) {
     const result = await pool.query(
       `UPDATE driver_profiles
-       SET current_lat = $1, current_lng = $2, last_location_at = NOW(), updated_at = NOW()
+       SET current_lat = $1, current_lng = $2, last_location_at = NOW(), updated_at = NOW(),
+           stale_notified_at = NULL
        WHERE user_id = $3
        RETURNING user_id, truck_id, current_lat, current_lng, last_location_at`,
       [lat, lng, userId]
@@ -168,6 +169,48 @@ class DriverProfileModel {
       [userId]
     );
     return result.rows[0] || null;
+  }
+
+  // "Available but not actually reachable" drivers — status still says available, but no GPS
+  // ping in staleMinutes (or they've never sent one at all while sitting available). The
+  // updated_at floor guards a driver who *just* went online moments ago from being flagged
+  // before their first location ping has had a chance to arrive.
+  // See src/cron/staleDriverLocationSweep.js.
+  static async findAvailableWithStaleLocation(staleMinutes) {
+    const result = await pool.query(
+      `SELECT user_id FROM driver_profiles
+       WHERE status = 'available'
+         AND (last_location_at IS NULL OR last_location_at <= NOW() - ($1 || ' minutes')::INTERVAL)
+         AND updated_at <= NOW() - ($1 || ' minutes')::INTERVAL`,
+      [staleMinutes]
+    );
+    return result.rows.map((row) => row.user_id);
+  }
+
+  static async setOffline(userId) {
+    await pool.query(`UPDATE driver_profiles SET status = 'offline', updated_at = NOW() WHERE user_id = $1`, [userId]);
+  }
+
+  // Drivers mid-trip whose GPS has gone stale — status isn't touched (an active trip
+  // shouldn't just vanish over a bad-signal patch), just the broker notified once per stale
+  // period (stale_notified_at debounces; cleared automatically on the next real location
+  // update — see updateLocation above).
+  static async findOnTripWithStaleLocation(staleMinutes) {
+    const result = await pool.query(
+      `SELECT dp.user_id, dp.broker_id, dp.truck_id, u.name AS driver_name, t.registration AS truck_reg
+       FROM driver_profiles dp
+       JOIN users u ON u.id = dp.user_id
+       LEFT JOIN trucks t ON t.id = dp.truck_id
+       WHERE dp.status = 'on_trip'
+         AND dp.stale_notified_at IS NULL
+         AND (dp.last_location_at IS NULL OR dp.last_location_at <= NOW() - ($1 || ' minutes')::INTERVAL)`,
+      [staleMinutes]
+    );
+    return result.rows;
+  }
+
+  static async markStaleNotified(userId) {
+    await pool.query(`UPDATE driver_profiles SET stale_notified_at = NOW() WHERE user_id = $1`, [userId]);
   }
 
   static async update(userId, { licenseNo, licenseExpiry, aadhaar, truckId, avatar, status }) {

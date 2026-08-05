@@ -14,6 +14,8 @@ const {
   getNotifications,
   markNotificationRead,
   markAllNotificationsRead,
+  registerDeviceToken,
+  unregisterDeviceToken,
 } = require('../controllers/notification.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -22,6 +24,7 @@ const {
   changePasswordValidation,
   updateUserStatusValidation,
 } = require('../validations/auth.validation');
+const { deviceTokenValidation, unregisterDeviceTokenValidation } = require('../validations/notification.validation');
 
 // ─── Authenticated user — own profile ────────────────────────────────────────
 
@@ -289,6 +292,71 @@ router.patch('/users/notifications/:id/read', authenticate, markNotificationRead
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.patch('/users/notifications/read-all', authenticate, markAllNotificationsRead);
+
+/**
+ * @swagger
+ * /api/users/device-token:
+ *   post:
+ *     tags: [Notifications]
+ *     summary: Register (or re-register) this device's FCM push token (any authenticated role)
+ *     description: Call once after login on every platform (web, Android, iOS), and again whenever the FCM SDK hands the app a fresh token — it can rotate. Safe to call repeatedly; re-registering an existing token just reassigns it to the current user.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token]
+ *             properties:
+ *               token: { type: string }
+ *               platform: { type: string, enum: [web, android, ios] }
+ *     responses:
+ *       200:
+ *         description: Device token registered
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       422:
+ *         description: Validation errors
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/users/device-token', authenticate, deviceTokenValidation, validate, registerDeviceToken);
+
+/**
+ * @swagger
+ * /api/users/device-token:
+ *   delete:
+ *     tags: [Notifications]
+ *     summary: Unregister this device's FCM push token (any authenticated role)
+ *     description: Call on logout so a signed-out device stops receiving this user's pushes.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token]
+ *             properties:
+ *               token: { type: string }
+ *     responses:
+ *       200:
+ *         description: Device token unregistered
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       422:
+ *         description: Validation errors
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.delete('/users/device-token', authenticate, unregisterDeviceTokenValidation, validate, unregisterDeviceToken);
 
 // ─── Admin — user management ──────────────────────────────────────────────────
 
