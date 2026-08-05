@@ -4,6 +4,7 @@ const rateLimit = require('express-rate-limit');
 
 const {
   register,
+  registerDriverWithTruck,
   registerAdmin,
   login,
   googleSignIn,
@@ -19,6 +20,7 @@ const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const {
   registerValidation,
+  registerDriverWithTruckValidation,
   registerAdminValidation,
   loginValidation,
   googleSignInValidation,
@@ -260,6 +262,56 @@ router.post('/login', authLimiter, loginValidation, validate, login);
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/register', authLimiter, registerValidation, validate, register);
+
+/**
+ * @swagger
+ * /api/auth/register/driver:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Self-register as a driver with your own truck (public)
+ *     description: |
+ *       For an independent owner-operator driver signing up directly, with no broker involved — one call creates the user account, a driver profile, and a fully-detailed truck together, and links them (the new truck is immediately available, with this driver assigned).
+ *
+ *       trucks.broker_id / driver_profiles.broker_id are NOT NULL platform-wide — every truck/driver belongs to some broker's fleet. Since this form has no broker selection, the new driver is set as their **own** broker_id on both rows (a one-person fleet), not left null.
+ *
+ *       registration/category/capacity are required (same as broker-driven POST /api/vehicles/trucks); make/year/insurance_expiry are optional. KYC starts at "pending" as usual, so this truck won't appear in GET /api/vehicles/trucks/nearby until KYC is verified.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, phone, email, registration, category, capacity, password, confirm_password]
+ *             properties:
+ *               name: { type: string, example: "Ramesh Singh" }
+ *               phone: { type: string, example: "9876543210" }
+ *               email: { type: string, example: "ramesh@driver.com" }
+ *               registration: { type: string, example: "MH-12-AB-1234" }
+ *               category: { type: string, enum: [small, medium, large, part], description: "Shown as \"Truck Type\" on the signup form" }
+ *               capacity: { type: string, example: "10 Tons" }
+ *               make: { type: string, example: "Tata 1109" }
+ *               year: { type: integer, example: 2020 }
+ *               insurance_expiry: { type: string, format: date }
+ *               password: { type: string, example: "mypassword" }
+ *               confirm_password: { type: string, example: "mypassword" }
+ *     responses:
+ *       201:
+ *         description: Registration successful — account and truck created, login separately
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       409:
+ *         description: Phone/email already registered, or a truck with this registration already exists
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Validation errors — missing/invalid field, or passwords don't match
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/register/driver', authLimiter, registerDriverWithTruckValidation, validate, registerDriverWithTruck);
 
 // ─── ADMIN REGISTER (protected) ──────────────────────────────────────────────
 

@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const { verifyGoogleIdToken } = require('../utils/googleClient');
 const UserModel = require('../models/user.model');
+const TruckModel = require('../models/truck.model');
 const OtpModel = require('../models/otp.model');
 const RefreshTokenModel = require('../models/refreshToken.model');
 const AuditLogModel = require('../models/auditLog.model');
@@ -8,6 +9,7 @@ const { generateAccessToken, generateRefreshToken, verifyRefreshToken, hashToken
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 const { getSmsProvider } = require('../providers/sms');
+const pool = require('../config/db');
 
 const smsProvider = getSmsProvider();
 
@@ -38,6 +40,85 @@ const register = async (req, res, next) => {
 
     logger.info(`New user registered: ${phone} [${role}]`);
     return successResponse(res, 201, 'Registration successful. You can now log in.', { user });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/auth/register/driver ──────────────────────────────────────────
+// Self-service signup for an independent owner-operator driver — one call creates the user
+// account, their driver profile, and their own truck (full details, not just the
+// registration number) together. trucks.broker_id and driver_profiles.broker_id are NOT NULL
+// platform-wide (every truck/driver belongs to some broker's fleet), so a driver signing up
+// with no broker context is modeled as their own one-person fleet: broker_id on both new rows
+// is set to the new user's own id, not left null or requiring a broker selection on this form.
+const registerDriverWithTruck = async (req, res, next) => {
+  try {
+    const {
+      name, phone, email, password, registration,
+      category, capacity, make, year, insurance_expiry,
+    } = req.body;
+
+    const existingPhone = await UserModel.findByPhone(phone);
+    if (existingPhone) return errorResponse(res, 409, 'Phone number already registered');
+
+    const existingEmail = await UserModel.findByEmail(email);
+    if (existingEmail) return errorResponse(res, 409, 'Email address already registered');
+
+    const existingTruck = await TruckModel.findByRegistration(registration);
+    if (existingTruck) return errorResponse(res, 409, 'A truck with this registration already exists');
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    const client = await pool.connect();
+    let user;
+    let truck;
+    try {
+      await client.query('BEGIN');
+
+      const userResult = await client.query(
+        `INSERT INTO users (name, email, phone, password_hash, role, status, is_email_verified)
+         VALUES ($1, $2, $3, $4, 'driver', 'active', true)
+         RETURNING id, name, email, phone, role, status, kyc_status, created_at`,
+        [name, email, phone, passwordHash]
+      );
+      user = userResult.rows[0];
+
+      const truckResult = await client.query(
+        `INSERT INTO trucks (broker_id, driver_id, registration, category, capacity, make, year, insurance_expiry)
+         VALUES ($1, $1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, registration, category, capacity, make, year, insurance_expiry, status, created_at`,
+        [user.id, registration, category, capacity, make || null, year || null, insurance_expiry || null]
+      );
+      truck = truckResult.rows[0];
+
+      await client.query(
+        `INSERT INTO driver_profiles (user_id, broker_id, truck_id) VALUES ($1, $1, $2)`,
+        [user.id, truck.id]
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    await AuditLogModel.log({
+      userId: user.id,
+      action: 'DRIVER_SELF_REGISTERED',
+      entity: 'users',
+      entityId: user.id,
+      meta: { phone, registration, category },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Driver self-registered with own truck: ${user.id} (${registration})`);
+    return successResponse(res, 201, 'Registration successful. You can now log in.', {
+      user,
+      truck,
+    });
   } catch (err) {
     next(err);
   }
@@ -462,4 +543,4 @@ const getMe = async (req, res) => {
   return successResponse(res, 200, 'Current user fetched', { user: req.user });
 };
 
-module.exports = { register, registerAdmin, login, googleSignIn, sendOtp, verifyOtp, refreshToken, logout, forgotPassword, resetPassword, getMe };
+module.exports = { register, registerDriverWithTruck, registerAdmin, login, googleSignIn, sendOtp, verifyOtp, refreshToken, logout, forgotPassword, resetPassword, getMe };
