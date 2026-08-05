@@ -109,11 +109,16 @@ class BookingModel {
     } else if (role === 'broker') {
       conditions.push(`b.broker_id = $${idx++}`);
       params.push(userId);
+      // Bookings the broker (or a self-registered driver, who is their own broker_id) has
+      // soft-deleted stay hidden from their own list — but never from admin, see below.
+      conditions.push(`b.deleted_at IS NULL`);
     } else if (role === 'driver') {
       conditions.push(`b.driver_id = $${idx++}`);
       params.push(userId);
+      conditions.push(`b.deleted_at IS NULL`);
     }
-    // admin: no scoping condition — sees all
+    // admin: no scoping condition, and deliberately no deleted_at filter either — a
+    // broker/driver soft-delete stays fully visible to admin until an admin hard-deletes it.
 
     const statuses = typeof status === 'string'
       ? status.split(',').map((value) => value.trim()).filter(Boolean)
@@ -195,6 +200,24 @@ class BookingModel {
       [...values, id]
     );
     return result.rows[0] || null;
+  }
+
+  // Hides a booking from its owning broker's (or self-registered driver's) own list —
+  // doesn't touch the row otherwise, and never affects admin visibility (findAll ignores
+  // deleted_at for role='admin').
+  static async softDelete(id, deletedByUserId) {
+    const result = await pool.query(
+      `UPDATE bookings SET deleted_at = NOW(), deleted_by = $1 WHERE id = $2 RETURNING *`,
+      [deletedByUserId, id]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Admin-only, real DELETE FROM — cascades to booking_timeline, job_requests, driver_requests,
+  // trips, chat threads, and payment/dispute/settlement rows referencing this booking (all
+  // ON DELETE CASCADE). Irreversible; enforced in booking.controller.js's deleteBooking.
+  static async hardDelete(id) {
+    await pool.query(`DELETE FROM bookings WHERE id = $1`, [id]);
   }
 
   // Bookings the client has confirmed a broker for (status='confirmed') but that still have

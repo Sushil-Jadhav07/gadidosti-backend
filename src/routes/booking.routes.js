@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, requestTruckForBooking } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, requestTruckForBooking, deleteBooking } = require('../controllers/booking.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
@@ -280,5 +280,46 @@ router.get('/bookings/:id', authenticate, getBooking);
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/bookings/:id/request-truck', authenticate, authorize('client'), requestTruckValidation, validate, requestTruckForBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}:
+ *   delete:
+ *     tags: [Bookings]
+ *     summary: Delete a booking (admin — permanent; broker, or a broker-less driver — hides it from their own list only)
+ *     description: |
+ *       Two different operations behind one endpoint, split by role:
+ *       - **admin**: a real, irreversible delete. Cascades to booking_timeline, job_requests, driver_requests, trips, chat threads, and payment/dispute/settlement rows referencing this booking. No status restriction.
+ *       - **broker** (or a **self-registered driver**, who is their own broker_id — a regular driver working under a real broker never matches and gets 403): a soft hide only — the row is untouched, just marked deleted_at, and stays fully visible to admin the whole time. Only allowed while status is `pending`, `cancelled`, or `completed` — an active or just-finished-but-unsettled shipment can't be hidden this way.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Deleted (permanently for admin, hidden-from-own-list for broker/driver)
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Already deleted, or status doesn't allow deletion (broker/driver only)
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.delete('/bookings/:id', authenticate, authorize('admin', 'broker', 'driver'), deleteBooking);
 
 module.exports = router;

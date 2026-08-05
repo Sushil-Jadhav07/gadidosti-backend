@@ -60,6 +60,10 @@ const projectBooking = (row, timeline, role) => {
     base.clientEmail = row.client_email;
     base.driverPhone = row.driver_phone;
     base.brokerPhone = row.broker_phone;
+    // Only admin ever needs to know a booking was soft-deleted by its broker/driver — that's
+    // exactly the "still visible to admin" case this field exists for.
+    base.deletedAt = row.deleted_at || null;
+    base.deletedBy = row.deleted_by || null;
   }
 
   return base;
@@ -109,9 +113,72 @@ const getBooking = async (req, res, next) => {
     const booking = await BookingModel.findById(req.params.id);
     if (!booking) return errorResponse(res, 404, 'Booking not found');
     if (!assertCanView(booking, req.user)) return errorResponse(res, 403, 'You do not have access to this booking');
+    // A broker/driver-soft-deleted booking is invisible to that same broker/driver (but the
+    // row still fully exists — assertCanView already let admin through unconditionally above).
+    if (booking.deleted_at && ['broker', 'driver'].includes(req.user.role)) {
+      return errorResponse(res, 404, 'Booking not found');
+    }
 
     const timeline = await BookingModel.getTimeline(booking.id);
     return successResponse(res, 200, 'Booking fetched', { booking: projectBooking(booking, timeline, req.user.role) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Only these statuses may be removed from a broker/driver's own list — an in-progress
+// shipment (confirmed/assigned/en_route_pickup/picked_up/in_transit/delivered) can't be
+// hidden this way, so an active or just-finished-but-unsettled trip is never accidentally
+// lost from view.
+const DELETABLE_STATUSES = ['pending', 'cancelled', 'completed'];
+
+// ─── DELETE /api/bookings/:id ──────────────────────────────────────────────────
+// Two different operations behind one endpoint, split entirely by role:
+//   - admin: a real, irreversible DELETE FROM (BookingModel.hardDelete) — no status
+//     restriction, admin has the final say.
+//   - broker (or a self-registered driver, who is their own broker_id — the same
+//     booking.broker_id match covers both without checking req.user.role at all) — a soft
+//     hide (deleted_at set), only allowed while status is pending/cancelled/completed, and
+//     the row stays fully visible to admin the whole time.
+// A regular driver working under a real broker never matches booking.broker_id, so they're
+// turned away with 403 regardless of status — matches "only admin and broker (or a
+// broker-less driver) can delete."
+const deleteBooking = async (req, res, next) => {
+  try {
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+
+    if (req.user.role === 'admin') {
+      await BookingModel.hardDelete(booking.id);
+      await AuditLogModel.log({
+        userId: req.user.id,
+        action: 'BOOKING_HARD_DELETED',
+        entity: 'bookings',
+        entityId: booking.id,
+        meta: { booking_number: booking.booking_number, status: booking.status },
+        ipAddress: req.ip,
+      });
+      logger.info(`Booking ${booking.id} permanently deleted by admin ${req.user.id}`);
+      return successResponse(res, 200, 'Booking permanently deleted');
+    }
+
+    if (booking.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (booking.deleted_at) return errorResponse(res, 409, 'Booking already deleted');
+    if (!DELETABLE_STATUSES.includes(booking.status)) {
+      return errorResponse(res, 409, `Cannot delete a booking with status "${booking.status}" — only pending, cancelled, or completed bookings can be removed from your list`);
+    }
+
+    await BookingModel.softDelete(booking.id, req.user.id);
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'BOOKING_SOFT_DELETED',
+      entity: 'bookings',
+      entityId: booking.id,
+      meta: { booking_number: booking.booking_number, status: booking.status },
+      ipAddress: req.ip,
+    });
+    logger.info(`Booking ${booking.id} soft-deleted by ${req.user.role} ${req.user.id}`);
+    return successResponse(res, 200, 'Booking removed from your list — still visible to admin');
   } catch (err) {
     next(err);
   }
@@ -321,4 +388,4 @@ const requestTruckForBooking = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, requestTruckForBooking };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, requestTruckForBooking, deleteBooking };
