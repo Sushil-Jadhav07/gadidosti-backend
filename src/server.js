@@ -5,6 +5,8 @@ const logger = require('./utils/logger');
 const pool   = require('./config/db');
 const { runMigrations } = require('./config/migrate');
 const { initSocket } = require('./realtime/socket');
+const { startDriverAssignmentTimeoutSweep } = require('./cron/driverAssignmentTimeoutSweep');
+const { startDriverRequestTimeoutSweep } = require('./cron/driverRequestTimeoutSweep');
 
 const PORT = process.env.PORT || 5000;
 
@@ -40,6 +42,8 @@ const startServer = async () => {
   // http://localhost:PORT, just on different protocols upgraded from the same connection.
   const server = http.createServer(app);
   initSocket(server);
+  startDriverAssignmentTimeoutSweep();
+  startDriverRequestTimeoutSweep();
 
   server.listen(PORT, () => {
     logger.info(`🚀 SSK Logistics Auth API running on port ${PORT}`);

@@ -759,6 +759,53 @@ const runMigrations = async (client) => {
       ALTER TABLE bookings ALTER COLUMN drop_location DROP NOT NULL;
     `);
 
+    // ── DRIVER ASSIGNMENT TIMEOUT (mirrors db/24driver_timeout.sql) ──
+    // Marks when the "driver not available" notification was sent for a booking stuck in
+    // 'confirmed' (client accepted a broker) with no driver assigned 5+ minutes later — see
+    // src/cron/driverAssignmentTimeoutSweep.js. Kept null until sent so the sweep (running
+    // every minute) never notifies the same booking twice.
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS driver_timeout_notified_at TIMESTAMPTZ;
+    `);
+
+    // ── DRIVER REQUESTS (mirrors db/25driver_requests.sql) ──
+    // Parallel path to job_requests (broker-broadcast negotiation) — this one is for a client
+    // who picks a specific truck+driver directly off GET /api/vehicles/trucks/nearby instead
+    // of waiting for brokers to respond to a broadcast. Mirrors job_requests' shape (status
+    // enum, offer_history) deliberately, just client<->driver instead of client<->broker.
+    await client.query(`
+      DO $$ BEGIN
+          CREATE TYPE driver_request_status AS ENUM ('pending', 'countered', 'accepted', 'declined');
+      EXCEPTION
+          WHEN duplicate_object THEN RAISE NOTICE 'Type driver_request_status already exists, skipping.';
+      END $$;
+
+      CREATE TABLE IF NOT EXISTS driver_requests (
+          id                  UUID                    PRIMARY KEY DEFAULT uuid_generate_v4(),
+          booking_id          UUID                    NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+          truck_id            UUID                    NOT NULL REFERENCES trucks(id) ON DELETE CASCADE,
+          driver_id           UUID                    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          broker_id           UUID                    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          amount              NUMERIC(12,2),
+          status              driver_request_status  NOT NULL DEFAULT 'pending',
+          offer_history       JSONB                   NOT NULL DEFAULT '[]'::jsonb,
+          driver_timeout_at   TIMESTAMPTZ,
+          created_at          TIMESTAMPTZ             DEFAULT NOW(),
+          updated_at          TIMESTAMPTZ             DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_driver_requests_booking ON driver_requests(booking_id);
+      CREATE INDEX IF NOT EXISTS idx_driver_requests_driver  ON driver_requests(driver_id);
+      CREATE INDEX IF NOT EXISTS idx_driver_requests_broker  ON driver_requests(broker_id);
+      CREATE INDEX IF NOT EXISTS idx_driver_requests_timeout_sweep
+          ON driver_requests(status, driver_timeout_at, updated_at);
+
+      DROP TRIGGER IF EXISTS update_driver_requests_updated_at ON driver_requests;
+      CREATE TRIGGER update_driver_requests_updated_at
+          BEFORE UPDATE ON driver_requests
+          FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

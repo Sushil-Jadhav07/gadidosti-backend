@@ -54,4 +54,17 @@ const createBookingValidation = [
   body('add_unloading_location.*.lng').optional({ nullable: true, checkFalsy: true }).isFloat({ min: -180, max: 180 }).withMessage('add_unloading_location[].lng must be a valid longitude'),
 ];
 
-module.exports = { createBookingValidation };
+const quoteBookingValidation = [
+  body('truck_category').trim().notEmpty().withMessage('truck_category is required')
+    .isIn(['small', 'medium', 'large', 'part']).withMessage('truck_category must be one of: small, medium, large, part'),
+  body('transport_type').optional({ nullable: true, checkFalsy: true })
+    .isIn(TRANSPORT_TYPES).withMessage(`transport_type must be one of: ${TRANSPORT_TYPES.join(', ')}`),
+  body('distance').notEmpty().withMessage('distance is required')
+    .isFloat({ min: 0 }).withMessage('distance must be a positive number'),
+  body('capacity_used_pct').optional({ nullable: true, checkFalsy: true })
+    .isFloat({ min: 0, max: 100 }).withMessage('capacity_used_pct must be between 0 and 100'),
+  body('duration_min').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }),
+  body('duration_in_traffic_min').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }),
+];
+
+module.exports = { createBookingValidation, quoteBookingValidation };

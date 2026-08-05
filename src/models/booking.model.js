@@ -196,6 +196,31 @@ class BookingModel {
     );
     return result.rows[0] || null;
   }
+
+  // Bookings the client has confirmed a broker for (status='confirmed') but that still have
+  // no driver assigned, at least `timeoutMinutes` after the confirm — read off
+  // booking_timeline's 'confirmed' step (its occurred_at), not bookings.updated_at, since that
+  // column can be touched by unrelated writes and wouldn't reliably mark the confirm moment.
+  // driver_timeout_notified_at IS NULL keeps this idempotent across sweep runs (see
+  // src/cron/driverAssignmentTimeoutSweep.js) — a booking is only ever surfaced here once.
+  static async findConfirmedAwaitingDriver(timeoutMinutes) {
+    const result = await pool.query(
+      `SELECT b.id, b.booking_number, b.broker_id, bt.occurred_at AS confirmed_at
+       FROM bookings b
+       JOIN booking_timeline bt ON bt.booking_id = b.id AND bt.step = 'confirmed'
+       WHERE b.status = 'confirmed'
+         AND b.driver_id IS NULL
+         AND b.driver_timeout_notified_at IS NULL
+         AND bt.occurred_at <= NOW() - ($1 || ' minutes')::INTERVAL
+       ORDER BY bt.occurred_at ASC`,
+      [timeoutMinutes]
+    );
+    return result.rows;
+  }
+
+  static async markDriverTimeoutNotified(id) {
+    await pool.query(`UPDATE bookings SET driver_timeout_notified_at = NOW() WHERE id = $1`, [id]);
+  }
 }
 
 module.exports = BookingModel;

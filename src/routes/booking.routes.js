@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, requestTruckForBooking } = require('../controllers/booking.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
-const { createBookingValidation } = require('../validations/booking.validation');
+const { createBookingValidation, quoteBookingValidation } = require('../validations/booking.validation');
+const { requestTruckValidation } = require('../validations/driverRequest.validation');
 
 /**
  * @swagger
@@ -41,6 +42,48 @@ const { createBookingValidation } = require('../validations/booking.validation')
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/bookings/validate-location', authenticate, authorize('client'), createBookingValidation, validate, validateLocation);
+
+/**
+ * @swagger
+ * /api/bookings/quote:
+ *   post:
+ *     tags: [Bookings]
+ *     summary: Preview a price estimate before creating a booking (any authenticated role)
+ *     description: Runs the same PricingModel.estimate() calculation POST /api/bookings uses internally when distance is given — call this on the Truck-selection step to show a live price per truck category without creating anything. Reads live from GET /api/admin/pricing's config, so results always match the current admin-configured rates.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [truck_category, distance]
+ *             properties:
+ *               truck_category: { type: string, enum: [small, medium, large, part] }
+ *               transport_type: { type: string, enum: [intra, inter], default: intra }
+ *               distance: { type: number, description: "In km" }
+ *               capacity_used_pct: { type: number, description: "Only used when truck_category=part" }
+ *               duration_min: { type: number, nullable: true, description: "Traffic-free ETA in minutes, from GET /api/config/distance — enables the traffic surge multiplier when given together with duration_in_traffic_min" }
+ *               duration_in_traffic_min: { type: number, nullable: true, description: "Live-traffic ETA in minutes, from GET /api/config/distance" }
+ *     responses:
+ *       200:
+ *         description: Pricing estimate calculated — shape depends on truck_category/transport_type (see PricingModel.estimate)
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: Pricing configuration not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Validation errors
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/bookings/quote', authenticate, quoteBookingValidation, validate, quoteBooking);
 
 /**
  * @swagger
@@ -121,5 +164,121 @@ router.post('/bookings/validate-location', authenticate, authorize('client'), cr
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/bookings', authenticate, authorize('client'), idempotent('POST /bookings'), createBookingValidation, validate, createBooking);
+
+/**
+ * @swagger
+ * /api/bookings:
+ *   get:
+ *     tags: [Bookings]
+ *     summary: List bookings (role-scoped — one endpoint covers client/broker/driver/admin)
+ *     description: client -> own bookings, broker -> bookings assigned to them, driver -> bookings assigned to them, admin -> every booking. No separate per-role endpoint exists — the scoping is automatic based on the caller's role.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         description: Comma-separated to match multiple statuses, e.g. "pending,confirmed"
+ *         schema: { type: string }
+ *       - in: query
+ *         name: sort
+ *         schema: { type: string, enum: [asc, desc], default: desc }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 10, maximum: 100 }
+ *     responses:
+ *       200:
+ *         description: Bookings fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ */
+router.get('/bookings', authenticate, listBookings);
+
+/**
+ * @swagger
+ * /api/bookings/{id}:
+ *   get:
+ *     tags: [Bookings]
+ *     summary: Get a single booking (role-scoped — client/broker/driver see only their own, admin sees any)
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Booking fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: You do not have access to this booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/bookings/:id', authenticate, getBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/request-truck:
+ *   post:
+ *     tags: [Bookings]
+ *     summary: Request a specific truck's driver directly (client)
+ *     description: |
+ *       Direct-negotiation entry point — parallel to the broker-broadcast flow (POST /api/bookings already does that broadcast automatically), not a replacement. Pick a truck_id from GET /api/vehicles/trucks/nearby and this sends that truck's driver a request at the booking's current amount.
+ *
+ *       What happens next: the driver can accept/decline/counter via PATCH /api/driver-requests/{id}/accept|decline|counter. If the driver doesn't respond within a few minutes, their broker is notified and can respond in their place (driver locked out from then on). Once someone accepts or counters, the client responds via PATCH /api/driver-requests/{id}/client-accept|client-reject|client-counter — client-accept is the final confirmation: it assigns the driver+truck to the booking and creates the trip immediately (no separate assign-driver step needed, since the truck was already picked).
+ *
+ *       If the client rejects, the booking stays 'pending' — pick a different truck and call this again.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [truck_id]
+ *             properties:
+ *               truck_id: { type: string, format: uuid }
+ *     responses:
+ *       201:
+ *         description: Request sent to driver
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking or truck not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Booking is no longer pending, or truck is not available / has no driver
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/bookings/:id/request-truck', authenticate, authorize('client'), requestTruckValidation, validate, requestTruckForBooking);
 
 module.exports = router;

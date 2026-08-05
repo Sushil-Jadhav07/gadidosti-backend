@@ -877,6 +877,10 @@ const options = {
         description: "Broker job requests generated from bookings, plus the inDrive-style negotiation on top of them — brokers can accept/decline/counter, and the client can accept/reject/counter back via the linked booking offers (GET /api/bookings/{bookingId}/offers). Job requests never auto-expire; 'pending' vs 'countered' tracks whose turn it is to respond.",
       },
       {
+        name: 'Driver Requests',
+        description: "Direct client-to-driver negotiation — parallel to Jobs (broker-broadcast), for a client who picks a specific truck+driver off GET /api/vehicles/trucks/nearby instead. Created via POST /api/bookings/{id}/request-truck. If the driver doesn't respond within a few minutes (src/cron/driverRequestTimeoutSweep.js), their broker is notified and takes over responding; the driver is locked out from then on. Client's client-accept is the real confirmation step — it assigns the driver+truck and creates the trip immediately.",
+      },
+      {
         name: 'Trips',
         description: 'Active trip tracking for brokers/drivers: status, live location, proof of delivery, incident reporting (including the breakdown/mechanic-dispatch sub-workflow), and incident resolution.',
       },

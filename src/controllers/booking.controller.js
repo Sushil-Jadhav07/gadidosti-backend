@@ -1,12 +1,15 @@
 const BookingModel = require('../models/booking.model');
 const PricingModel = require('../models/pricing.model');
 const JobRequestModel = require('../models/jobRequest.model');
+const DriverRequestModel = require('../models/driverRequest.model');
+const TruckModel = require('../models/truck.model');
 const BrokerProfileModel = require('../models/brokerProfile.model');
 const UserModel = require('../models/user.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
-const { successResponse } = require('../utils/response');
+const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
+const { projectDriverRequest } = require('./driverRequest.controller');
 
 const projectBooking = (row, timeline, role) => {
   const base = {
@@ -62,6 +65,58 @@ const projectBooking = (row, timeline, role) => {
   return base;
 };
 
+const assertCanView = (booking, user) => {
+  if (user.role === 'admin') return true;
+  if (user.role === 'client') return booking.client_id === user.id;
+  if (user.role === 'broker') return booking.broker_id === user.id;
+  if (user.role === 'driver') return booking.driver_id === user.id;
+  return false;
+};
+
+// ─── GET /api/bookings ────────────────────────────────────────────────────────
+// One role-aware endpoint instead of separate ones per role — BookingModel.findAll already
+// branches internally on req.user.role: client -> own bookings, broker -> assigned to them,
+// driver -> assigned to them, admin -> everything. Same for GET /api/bookings/:id below.
+const listBookings = async (req, res, next) => {
+  try {
+    const { status, sort = 'desc', page = 1, limit = 10 } = req.query;
+
+    const result = await BookingModel.findAll({
+      role: req.user.role,
+      userId: req.user.id,
+      status,
+      sort,
+      page: parseInt(page),
+      limit: Math.min(parseInt(limit), 100),
+    });
+
+    const bookings = await Promise.all(
+      result.bookings.map(async (row) => {
+        const timeline = await BookingModel.getTimeline(row.id);
+        return projectBooking(row, timeline, req.user.role);
+      })
+    );
+
+    return successResponse(res, 200, 'Bookings fetched', { ...result, bookings });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/bookings/:id ────────────────────────────────────────────────────
+const getBooking = async (req, res, next) => {
+  try {
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (!assertCanView(booking, req.user)) return errorResponse(res, 403, 'You do not have access to this booking');
+
+    const timeline = await BookingModel.getTimeline(booking.id);
+    return successResponse(res, 200, 'Booking fetched', { booking: projectBooking(booking, timeline, req.user.role) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── POST /api/bookings/validate-location ────────────────────────────────────
 // Lets the frontend gate progress past the Locations step before the user fills in Load
 // Info / Truck / Review — runs the exact same pickup/drop/city rule as POST /api/bookings
@@ -70,6 +125,33 @@ const projectBooking = (row, timeline, role) => {
 // call later, since both routes run the identical validation chain.
 const validateLocation = async (req, res) => {
   return successResponse(res, 200, 'Location is valid', { valid: true });
+};
+
+// ─── POST /api/bookings/quote ─────────────────────────────────────────────────
+// Preview a price before creating a booking — the same PricingModel.estimate() call
+// createBooking makes internally when distance is given, exposed standalone so the frontend
+// can show a live price on the Truck-selection step without actually creating anything.
+const quoteBooking = async (req, res, next) => {
+  try {
+    const {
+      truck_category, transport_type = 'intra', distance,
+      capacity_used_pct, duration_min, duration_in_traffic_min,
+    } = req.body;
+
+    const breakdown = await PricingModel.estimate({
+      truckCategory: truck_category,
+      transportType: transport_type,
+      distance,
+      capacityUsedPct: capacity_used_pct,
+      durationMin: duration_min,
+      durationInTrafficMin: duration_in_traffic_min,
+    });
+
+    return successResponse(res, 200, 'Pricing estimate calculated', breakdown);
+  } catch (err) {
+    if (err.message === 'Pricing configuration not found') return errorResponse(res, 404, err.message);
+    next(err);
+  }
 };
 
 // ─── POST /api/bookings ──────────────────────────────────────────────────────
@@ -185,4 +267,58 @@ const createBooking = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation };
+// ─── POST /api/bookings/:id/request-truck ─────────────────────────────────────
+// The client's entry point into the direct negotiation flow — picks one specific truck
+// (from GET /api/vehicles/trucks/nearby) and sends its driver a request at the booking's
+// current amount, instead of waiting for the broker-broadcast (job_requests) flow to produce
+// offers. Parallel to that flow, not a replacement — a booking can still separately receive
+// broker job_request offers at the same time; whichever gets accepted first wins (the loser
+// finds out via the 409 "This booking is no longer available" on its own accept attempt).
+const requestTruckForBooking = async (req, res, next) => {
+  try {
+    const { truck_id } = req.body;
+
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (booking.status !== 'pending') return errorResponse(res, 409, `Booking is no longer pending (${booking.status})`);
+
+    const truck = await TruckModel.findById(truck_id);
+    if (!truck) return errorResponse(res, 404, 'Truck not found');
+    if (truck.status !== 'available') return errorResponse(res, 409, 'Truck is not available');
+    if (!truck.driver_id) return errorResponse(res, 409, 'Truck has no driver assigned');
+
+    const driverRequest = await DriverRequestModel.create({
+      bookingId: booking.id,
+      truckId: truck.id,
+      driverId: truck.driver_id,
+      brokerId: truck.broker_id,
+      amount: booking.amount,
+    });
+
+    await NotificationModel.create({
+      userId: truck.driver_id,
+      title: 'New Booking Request',
+      message: `A client wants to book your truck (${truck.registration}) for ${booking.pickup_location || 'pickup'} -> ${booking.drop_location || 'drop'} at ₹${booking.amount ?? 'TBD'}. Respond within a few minutes or your broker will be notified.`,
+      type: 'booking',
+      meta: { booking_id: booking.id, driver_request_id: driverRequest.id },
+    });
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'DRIVER_REQUEST_CREATED',
+      entity: 'driver_requests',
+      entityId: driverRequest.id,
+      meta: { booking_id: booking.id, truck_id: truck.id, driver_id: truck.driver_id },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Driver request created: booking ${booking.id} -> truck ${truck.id} (driver ${truck.driver_id})`);
+    const full = await DriverRequestModel.findById(driverRequest.id);
+    return successResponse(res, 201, 'Request sent to driver', { request: projectDriverRequest(full) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, requestTruckForBooking };
