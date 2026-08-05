@@ -258,7 +258,11 @@ const assignDriverToTruck = async (req, res, next) => {
     if (!driver) return errorResponse(res, 404, 'Driver not found');
     if (driver.broker_id !== truck.broker_id) return errorResponse(res, 422, 'Driver and truck must belong to the same broker');
 
-    if (driver.truck_id === truck.id) {
+    // Both sides of the link must already agree to skip the write — a truck whose driver_id
+    // is null (or points elsewhere) still needs TruckModel.assignDriver() to run even when
+    // driver.truck_id already matches, otherwise an inconsistent link (one side set, one not)
+    // can never self-heal through this endpoint.
+    if (driver.truck_id === truck.id && truck.driver_id === driver_id) {
       return successResponse(res, 200, 'Driver already assigned to this truck', { truck: projectTruck(truck) });
     }
 
