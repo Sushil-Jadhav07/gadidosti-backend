@@ -55,6 +55,12 @@ if (process.env.NODE_ENV === 'production') {
     max: parseInt(process.env.RATE_LIMIT_MAX) || 100,
     standardHeaders: true,
     legacyHeaders: false,
+    // Driver GPS pings are frequent by design and get their own, much larger, per-driver
+    // limiter instead (driverLocationRateLimit.middleware.js, applied on that route in
+    // vehicle.routes.js) — this general IP-keyed limit is both too low for that traffic on
+    // its own and shared across every device behind the same IP, which starves other users
+    // on the same network the moment one driver starts pinging their location.
+    skip: (req) => req.path === '/api/vehicles/drivers/me/location',
     message: { success: false, message: 'Too many requests, please try again later' },
   }));
 }

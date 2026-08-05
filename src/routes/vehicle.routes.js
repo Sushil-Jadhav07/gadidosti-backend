@@ -9,6 +9,7 @@ const {
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const upload = require('../middleware/upload.middleware');
+const driverLocationRateLimit = require('../middleware/driverLocationRateLimit.middleware');
 const {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
   registerDriverValidation, updateDriverLocationValidation, assignDriverValidation, nearbyTrucksValidation,
@@ -485,7 +486,7 @@ router.get('/vehicles/drivers/me/truck', authenticate, authorize('driver'), myAs
  *   patch:
  *     tags: [Vehicles]
  *     summary: Update the authenticated driver's current location (driver)
- *     description: Pinged periodically by the driver's app while online, even before a trip starts.
+ *     description: Pinged periodically by the driver's app while online, even before a trip starts. Rate-limited to 60 requests/minute per driver (not shared with other drivers or other routes, unlike the general API limit) — plenty for any real GPS-ping cadence.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -514,8 +515,13 @@ router.get('/vehicles/drivers/me/truck', authenticate, authorize('driver'), myAs
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       429:
+ *         description: Too many location updates — over 60/minute from this driver
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.patch('/vehicles/drivers/me/location', authenticate, authorize('driver'), updateDriverLocationValidation, validate, updateDriverLocation);
+router.patch('/vehicles/drivers/me/location', authenticate, authorize('driver'), driverLocationRateLimit, updateDriverLocationValidation, validate, updateDriverLocation);
 
 /**
  * @swagger
