@@ -52,7 +52,11 @@ app.use(cors({
 if (process.env.NODE_ENV === 'production') {
   app.use(rateLimit({
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-    max: parseInt(process.env.RATE_LIMIT_MAX) || 100,
+    // Raised from 100 — this is IP-keyed and shared across every route and every user behind
+    // that IP (office wifi, mobile carrier NAT), so several real users testing/working from
+    // the same network exhaust it collectively, not per-person. Override via RATE_LIMIT_MAX
+    // if this still isn't enough.
+    max: parseInt(process.env.RATE_LIMIT_MAX) || 300,
     standardHeaders: true,
     legacyHeaders: false,
     // Driver GPS pings are frequent by design and get their own, much larger, per-driver

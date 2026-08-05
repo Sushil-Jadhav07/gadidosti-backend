@@ -29,15 +29,31 @@ const {
   resetPasswordValidation,
 } = require('../validations/auth.validation');
 
+// Keyed by IP + the account identifier being acted on (email/phone), not IP alone — a single
+// account still can't be brute-forced more than `max` times per window from one IP, but
+// several different real users/accounts sharing an IP (office wifi, mobile carrier NAT) no
+// longer drain one shared budget between them. Falls back to IP-only when no identifier is in
+// the body yet (validation hasn't run) so malformed requests still get rate-limited.
+const accountKeyGenerator = (req) => {
+  const identifier = String(req.body?.email || req.body?.phone || '').trim().toLowerCase();
+  return identifier ? `${req.ip}:${identifier}` : req.ip;
+};
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: accountKeyGenerator,
   message: { success: false, message: 'Too many requests, please try again later' },
 });
 
 const otpLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: accountKeyGenerator,
   message: { success: false, message: 'Too many OTP requests, please wait 10 minutes' },
 });
 
