@@ -1,6 +1,10 @@
 const { body } = require('express-validator');
 
-const updateTripStatusValidation = [];
+const TRIP_STATUS_VALUES = ['confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed', 'cancelled'];
+
+const updateTripStatusValidation = [
+  body('status').isIn(TRIP_STATUS_VALUES).withMessage(`status must be one of: ${TRIP_STATUS_VALUES.join(', ')}`),
+];
 const updateTripLocationValidation = [];
 
 const reportIssueValidation = [

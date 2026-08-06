@@ -3,9 +3,14 @@ const DriverRequestModel = require('../models/driverRequest.model');
 const NotificationModel = require('../models/notification.model');
 const logger = require('../utils/logger');
 
-// "2-3 min" — picked the upper bound so a driver who's just a little slow (bad signal, mid-call)
-// doesn't immediately lose their window; adjust freely if you want it tighter.
-const DRIVER_RESPONSE_TIMEOUT_MINUTES = 3;
+// Driver gets a hard 2-minute window to respond before their broker is looped in.
+const DRIVER_RESPONSE_TIMEOUT_MINUTES = 2;
+
+// If the broker also doesn't act within this many minutes of taking over, the request is
+// expired outright so the client isn't left waiting indefinitely — they're expected to go
+// back to GET /api/vehicles/trucks/nearby and pick a different truck. Broker gets longer than
+// the driver since they may be juggling responses across their whole fleet.
+const BROKER_RESPONSE_TIMEOUT_MINUTES = 5;
 
 // Runs every minute: finds driver_requests still awaiting the driver's response (status
 // 'pending', never timed out yet) more than DRIVER_RESPONSE_TIMEOUT_MINUTES after it became
@@ -36,10 +41,39 @@ const sweep = async () => {
   }
 };
 
+// Second stage: the broker took over (driver_timeout_at set) but still hasn't acted after
+// BROKER_RESPONSE_TIMEOUT_MINUTES — expire the request rather than leave it open forever, and
+// tell the client to restart their truck search. No truck/driver was ever reserved for this
+// request (that only happens on client-accept), so nothing needs to be freed up here.
+const brokerSweep = async () => {
+  try {
+    const overdue = await DriverRequestModel.findOverdueForBrokerResponse(BROKER_RESPONSE_TIMEOUT_MINUTES);
+    if (!overdue.length) return;
+
+    for (const request of overdue) {
+      const expired = await DriverRequestModel.respondentDecline(request.id);
+      if (!expired) continue;
+
+      await NotificationModel.create({
+        userId: request.client_id,
+        title: 'Request Expired',
+        message: `Neither the driver nor the broker responded to your request for booking ${request.booking_number}. Please search for another truck.`,
+        type: 'booking',
+        meta: { booking_id: request.booking_id, driver_request_id: request.id },
+      });
+
+      logger.info(`Driver-request broker timeout: request ${request.id} expired (broker ${request.broker_id} did not respond), client ${request.client_id} notified to re-search`);
+    }
+  } catch (err) {
+    logger.error(`Broker timeout sweep failed: ${err.message}`);
+  }
+};
+
 // Called once from server.js at startup.
 const startDriverRequestTimeoutSweep = () => {
   cron.schedule('* * * * *', sweep);
+  cron.schedule('* * * * *', brokerSweep);
   logger.info('🔔 Driver request timeout sweep scheduled (every minute)');
 };
 
-module.exports = { startDriverRequestTimeoutSweep, sweep };
+module.exports = { startDriverRequestTimeoutSweep, sweep, brokerSweep };

@@ -165,6 +165,22 @@ class DriverRequestModel {
     );
     return result.rows[0] || null;
   }
+
+  // Second-stage sweep target: the broker's turn (driver_timeout_at set, still 'pending' —
+  // 'countered' means it's actually back on the client, not the broker) for longer than
+  // timeoutMinutes since the driver timed out.
+  static async findOverdueForBrokerResponse(timeoutMinutes) {
+    const result = await pool.query(
+      `SELECT dr.id, dr.booking_id, dr.broker_id, dr.driver_id, b.client_id, b.booking_number
+       FROM driver_requests dr
+       JOIN bookings b ON b.id = dr.booking_id
+       WHERE dr.status = 'pending'
+         AND dr.driver_timeout_at IS NOT NULL
+         AND dr.driver_timeout_at <= NOW() - ($1 || ' minutes')::INTERVAL`,
+      [timeoutMinutes]
+    );
+    return result.rows;
+  }
 }
 
 module.exports = DriverRequestModel;

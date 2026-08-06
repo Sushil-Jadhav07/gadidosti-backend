@@ -13,9 +13,26 @@ const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 const { getStorageProvider } = require('../providers/storage');
 const { toAbsoluteUrl } = require('../utils/fileUrl');
+const { haversineKm } = require('../utils/geo');
 
 const storageProvider = getStorageProvider();
 const STATUS_STEPS = ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
+
+// How close the truck's last-reported GPS position must be to the pickup/drop point before a
+// driver (not broker/admin, who may need to override manually) is allowed to mark it picked
+// up / delivered.
+const PICKUP_PROXIMITY_KM = 0.8;
+
+// Notifies the broker on every trip status change so they don't have to poll — mirrors the
+// MECHANIC_STATUS_MESSAGES pattern below. Keyed by the same `status` value the driver app sends.
+const BROKER_STATUS_MESSAGES = {
+  en_route_pickup: (t) => `Your driver is en route to pickup for ${t.booking_number || 'a booking'}.`,
+  picked_up: (t) => `Your driver picked up the shipment for ${t.booking_number || 'a booking'}.`,
+  in_transit: (t) => `Your driver is now in transit for ${t.booking_number || 'a booking'}.`,
+  delivered: (t) => `Your driver marked ${t.booking_number || 'a booking'} as delivered.`,
+  completed: (t) => `Trip ${t.booking_number || ''} has been completed.`,
+  cancelled: (t) => `Trip ${t.booking_number || 'a booking'} was cancelled.`,
+};
 
 // A trip is "active" (still underway, incident-reportable) once it's past creation
 // but before it's wrapped up one way or another.
@@ -199,6 +216,29 @@ const updateTripStatus = async (req, res, next) => {
     if (!trip) return errorResponse(res, 404, 'Trip not found');
     if (!assertCanView(trip, req.user)) return errorResponse(res, 403, 'You do not have access to this trip');
 
+    // Pickup/delivery must actually happen near the pickup/drop point — only enforced for the
+    // driver themselves; broker/admin can still override manually (e.g. bad GPS fix). Uses the
+    // truck's last-reported position (trips.current_lat/lng, kept fresh via PATCH .../location).
+    if (req.user.role === 'driver' && (status === 'picked_up' || status === 'delivered')) {
+      const targetLat = status === 'picked_up' ? trip.pickup_lat : trip.drop_lat;
+      const targetLng = status === 'picked_up' ? trip.pickup_lng : trip.drop_lng;
+      const hasTruckLocation = trip.current_lat != null && trip.current_lng != null;
+      const hasTargetLocation = targetLat != null && targetLng != null;
+
+      if (!hasTruckLocation || !hasTargetLocation) {
+        return errorResponse(res, 409, 'Your current location is not available yet — enable location sharing and try again.');
+      }
+
+      const distanceKm = haversineKm(Number(trip.current_lat), Number(trip.current_lng), Number(targetLat), Number(targetLng));
+      if (distanceKm > PICKUP_PROXIMITY_KM) {
+        const pointLabel = status === 'picked_up' ? 'the pickup point' : 'the drop point';
+        return errorResponse(
+          res, 409,
+          `You're ${distanceKm.toFixed(1)}km from ${pointLabel} — move within ${PICKUP_PROXIMITY_KM * 1000}m to mark this as ${status === 'picked_up' ? 'picked up' : 'delivered'}.`
+        );
+      }
+    }
+
     // Settlement/trip-count must fire exactly once per trip. The driver flow sends two
     // separate status updates for one trip (in_transit -> delivered, then, once POD is
     // uploaded, delivered -> completed) — only the transition *into* 'completed' pays out.
@@ -237,6 +277,11 @@ const updateTripStatus = async (req, res, next) => {
         platformFee: booking.platform_fee || 0,
       });
 
+      // Free up the driver/truck now that the trip is over — previously left stuck at
+      // 'on_trip' forever, since this was the only status-changing path that never reset them.
+      if (trip.driver_id) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
+      if (trip.truck_id) await TruckModel.update(trip.truck_id, { status: 'available' });
+
       if (trip.driver_id) {
         await NotificationModel.create({
           userId: trip.driver_id,
@@ -246,6 +291,20 @@ const updateTripStatus = async (req, res, next) => {
           meta: { trip_id: id },
         });
       }
+    } else if (status === 'cancelled') {
+      // Same fix as completion — a cancelled trip must also release the driver/truck.
+      if (trip.driver_id) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
+      if (trip.truck_id) await TruckModel.update(trip.truck_id, { status: 'available' });
+    }
+
+    if (trip.broker_id && BROKER_STATUS_MESSAGES[status]) {
+      await NotificationModel.create({
+        userId: trip.broker_id,
+        title: 'Trip Update',
+        message: BROKER_STATUS_MESSAGES[status](trip),
+        type: 'booking',
+        meta: { trip_id: id, booking_id: trip.booking_id, status },
+      });
     }
 
     await AuditLogModel.log({
