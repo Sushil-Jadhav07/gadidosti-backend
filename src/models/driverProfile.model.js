@@ -151,13 +151,19 @@ class DriverProfileModel {
     };
   }
 
+  // A fresh ping self-heals status 'offline' -> 'available' — the stale-location cron
+  // (see staleDriverLocationSweep.js) auto-flips a driver offline after a signal gap, but
+  // nothing else ever flipped them back on when GPS resumed, leaving them permanently
+  // invisible to TruckModel.findNearby despite actively reporting a live location.
+  // 'on_trip' is left untouched — a ping mid-trip shouldn't make the driver bookable again.
   static async updateLocation(userId, { lat, lng }) {
     const result = await pool.query(
       `UPDATE driver_profiles
        SET current_lat = $1, current_lng = $2, last_location_at = NOW(), updated_at = NOW(),
-           stale_notified_at = NULL
+           stale_notified_at = NULL,
+           status = CASE WHEN status = 'offline' THEN 'available' ELSE status END
        WHERE user_id = $3
-       RETURNING user_id, truck_id, current_lat, current_lng, last_location_at`,
+       RETURNING user_id, truck_id, current_lat, current_lng, last_location_at, status`,
       [lat, lng, userId]
     );
     return result.rows[0] || null;
