@@ -3,6 +3,9 @@ const PricingModel = require('../models/pricing.model');
 const JobRequestModel = require('../models/jobRequest.model');
 const DriverRequestModel = require('../models/driverRequest.model');
 const TruckModel = require('../models/truck.model');
+const TripModel = require('../models/trip.model');
+const DriverProfileModel = require('../models/driverProfile.model');
+const TripIncidentModel = require('../models/tripIncident.model');
 const BrokerProfileModel = require('../models/brokerProfile.model');
 const UserModel = require('../models/user.model');
 const AuditLogModel = require('../models/auditLog.model');
@@ -121,6 +124,67 @@ const getBooking = async (req, res, next) => {
 
     const timeline = await BookingModel.getTimeline(booking.id);
     return successResponse(res, 200, 'Booking fetched', { booking: projectBooking(booking, timeline, req.user.role) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Straight-line ETA only — no routing engine, so this is a rough estimate for the
+// "how far out is my driver" UI, not turn-by-turn navigation.
+const AVERAGE_SPEED_KMPH = 40;
+
+const haversineKm = (lat1, lng1, lat2, lng2) => {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+// ─── GET /api/bookings/:id/track ─────────────────────────────────────────────
+// Polled by the frontend every 5-10s — plain lat/lng snapshot, no WebSocket infra.
+const trackBooking = async (req, res, next) => {
+  try {
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (!assertCanView(booking, req.user)) return errorResponse(res, 403, 'You do not have access to this booking');
+
+    const location = booking.driver_id ? await DriverProfileModel.findLocation(booking.driver_id) : null;
+    const hasLocation = !!(location && location.current_lat != null && location.current_lng != null);
+
+    let distanceRemainingKm = null;
+    let etaMinutes = null;
+    if (hasLocation && booking.drop_lat != null && booking.drop_lng != null) {
+      distanceRemainingKm = haversineKm(
+        Number(location.current_lat), Number(location.current_lng),
+        Number(booking.drop_lat), Number(booking.drop_lng)
+      );
+      etaMinutes = Math.round((distanceRemainingKm / AVERAGE_SPEED_KMPH) * 60);
+    }
+
+    // Surfaced so the client's tracking screen can show an incident banner without a
+    // separate call to GET /api/trips/:id/incidents.
+    const trip = await TripModel.findByBookingId(booking.id);
+    const incident = trip ? await TripIncidentModel.findLatestUnresolvedByTrip(trip.id) : null;
+
+    return successResponse(res, 200, 'Booking location fetched', {
+      status: booking.status,
+      driverLat: hasLocation ? Number(location.current_lat) : null,
+      driverLng: hasLocation ? Number(location.current_lng) : null,
+      lastLocationAt: location ? location.last_location_at : null,
+      distanceRemainingKm: distanceRemainingKm != null ? Math.round(distanceRemainingKm * 100) / 100 : null,
+      etaMinutes,
+      incident: incident ? {
+        reason: incident.reason,
+        notes: incident.notes,
+        status: incident.status,
+        reportedAt: incident.reported_at,
+        // Only set for reason='breakdown' — lets the client see "mechanic on the way" instead
+        // of just a generic "we're on it" message.
+        mechanicStatus: incident.mechanic_status || null,
+      } : null,
+    });
   } catch (err) {
     next(err);
   }
@@ -388,4 +452,4 @@ const requestTruckForBooking = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, requestTruckForBooking, deleteBooking };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, deleteBooking };

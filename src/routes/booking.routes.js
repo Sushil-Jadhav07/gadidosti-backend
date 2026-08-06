@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, requestTruckForBooking, deleteBooking } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, deleteBooking } = require('../controllers/booking.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
@@ -228,6 +228,39 @@ router.get('/bookings', authenticate, listBookings);
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/bookings/:id', authenticate, getBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/track:
+ *   get:
+ *     tags: [Bookings]
+ *     summary: Live driver location + ETA for the tracking screen (role-scoped — same access rule as GET /api/bookings/{id})
+ *     description: Polled by the frontend every 5-10s — plain lat/lng snapshot, no WebSocket infra. Returns null driverLat/driverLng/lastLocationAt/distanceRemainingKm/etaMinutes until a driver is assigned and has reported a location. Also surfaces the latest unresolved trip incident (if any) so the tracking screen can show a banner without a separate call.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Booking location fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: You do not have access to this booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/bookings/:id/track', authenticate, trackBooking);
 
 /**
  * @swagger

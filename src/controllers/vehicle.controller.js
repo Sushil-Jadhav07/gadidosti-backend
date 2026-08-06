@@ -361,15 +361,29 @@ const createDriver = async (req, res, next) => {
       return errorResponse(res, 409, 'This driver already has a profile');
     }
 
-    const profile = await DriverProfileModel.create({
+    if (truck_id) {
+      const truck = await TruckModel.findById(truck_id);
+      if (!truck) return errorResponse(res, 404, 'Truck not found');
+      if (truck.broker_id !== brokerId) return errorResponse(res, 422, 'Driver and truck must belong to the same broker');
+    }
+
+    let profile = await DriverProfileModel.create({
       userId: user_id,
       brokerId,
       licenseNo: license_no,
       licenseExpiry: license_expiry,
       aadhaar,
-      truckId: truck_id,
       avatar,
     });
+
+    // Truck linking goes through TruckModel.assignDriver so both trucks.driver_id and
+    // driver_profiles.truck_id stay in sync — writing truck_id straight into driver_profiles
+    // here would leave trucks.driver_id null, which silently drops the truck out of
+    // TruckModel.findNearby's results (it requires the link to hold on both sides).
+    if (truck_id) {
+      await TruckModel.assignDriver(truck_id, user_id);
+      profile = await DriverProfileModel.findById(user_id);
+    }
 
     await AuditLogModel.log({
       userId: req.user.id,
@@ -407,6 +421,12 @@ const registerDriver = async (req, res, next) => {
     const { brokerId, error } = await resolveBrokerId(req);
     if (error) return errorResponse(res, error === 'Broker not found' ? 404 : 422, error);
 
+    if (truck_id) {
+      const truck = await TruckModel.findById(truck_id);
+      if (!truck) return errorResponse(res, 404, 'Truck not found');
+      if (truck.broker_id !== brokerId) return errorResponse(res, 422, 'Driver and truck must belong to the same broker');
+    }
+
     const existingPhone = await UserModel.findByPhone(phone);
     if (existingPhone) return errorResponse(res, 409, 'A user with this phone number already exists — use "Link Existing Driver" instead');
 
@@ -417,15 +437,21 @@ const registerDriver = async (req, res, next) => {
     const passwordHash = await bcrypt.hash(tempPassword, 12);
     const user = await UserModel.create({ name, phone, email, passwordHash, role: 'driver' });
 
-    const profile = await DriverProfileModel.create({
+    let profile = await DriverProfileModel.create({
       userId: user.id,
       brokerId,
       licenseNo: license_no,
       licenseExpiry: license_expiry,
       aadhaar,
-      truckId: truck_id,
       avatar,
     });
+
+    // See createDriver — truck linking must go through TruckModel.assignDriver to keep
+    // trucks.driver_id and driver_profiles.truck_id in sync on both sides.
+    if (truck_id) {
+      await TruckModel.assignDriver(truck_id, user.id);
+      profile = await DriverProfileModel.findById(user.id);
+    }
 
     await AuditLogModel.log({
       userId: req.user.id,
@@ -516,9 +542,23 @@ const updateDriver = async (req, res, next) => {
     if (req.user.role === 'broker' && driver.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your driver');
 
     const { license_no, license_expiry, aadhaar, truck_id, avatar, status } = req.body;
-    const updated = await DriverProfileModel.update(req.params.id, {
-      licenseNo: license_no, licenseExpiry: license_expiry, aadhaar, truckId: truck_id, avatar, status,
+
+    if (truck_id) {
+      const truck = await TruckModel.findById(truck_id);
+      if (!truck) return errorResponse(res, 404, 'Truck not found');
+      if (truck.broker_id !== driver.broker_id) return errorResponse(res, 422, 'Driver and truck must belong to the same broker');
+    }
+
+    let updated = await DriverProfileModel.update(req.params.id, {
+      licenseNo: license_no, licenseExpiry: license_expiry, aadhaar, avatar, status,
     });
+
+    // See createDriver — truck linking must go through TruckModel.assignDriver to keep
+    // trucks.driver_id and driver_profiles.truck_id in sync on both sides.
+    if (truck_id) {
+      await TruckModel.assignDriver(truck_id, req.params.id);
+      updated = await DriverProfileModel.findById(req.params.id);
+    }
 
     await AuditLogModel.log({
       userId: req.user.id,
