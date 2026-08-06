@@ -40,6 +40,13 @@ const initSocket = (server) => {
   io.on('connection', (socket) => {
     logger.info(`Socket connected: user ${socket.user.id} (${socket.user.role})`);
 
+    // Auto-joined, unlike the thread/truck rooms below which a client opts into explicitly —
+    // there's no single resource id to join ahead of time for driver_requests updates (e.g. a
+    // client doesn't know a broker-assigned offer's id until it exists). Lets any REST
+    // controller push straight to a specific user via getIO()?.to(`user:${id}`).emit(...),
+    // same pattern as driverRequest.controller.js / driverRequestTimeoutSweep.js.
+    socket.join(`user:${socket.user.id}`);
+
     // ─── join-thread — verifies chat access before letting the socket into the room ──────────
     socket.on('join-thread', async ({ threadId } = {}, ack) => {
       try {

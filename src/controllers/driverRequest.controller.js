@@ -5,6 +5,7 @@ const TruckModel = require('../models/truck.model');
 const DriverProfileModel = require('../models/driverProfile.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
+const { getIO } = require('../realtime/socket');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
@@ -43,6 +44,14 @@ const projectDriverRequest = (row) => ({
   updatedAt: row.updated_at,
 });
 
+// Pushes the fresh request straight to a specific user's socket (see socket.js's auto-joined
+// `user:${id}` room) — same recipients as whichever NotificationModel.create call sits next
+// to each call site, so the UI updates live instead of waiting on the next poll.
+const emitDriverRequestUpdate = (userId, driverRequest) => {
+  if (!userId || !driverRequest) return;
+  getIO()?.to(`user:${userId}`).emit('driver-request-updated', projectDriverRequest(driverRequest));
+};
+
 // Only the driver may act while their window is open; only the broker may act once the
 // timeout sweep has flagged it (driver_timeout_at set) — never both, never neither.
 const assertCanRespond = (driverRequest, user) => {
@@ -69,8 +78,11 @@ const acceptDriverRequest = async (req, res, next) => {
       meta: { booking_id: driverRequest.booking_id, driver_request_id: driverRequest.id },
     });
 
+    const fresh = await DriverRequestModel.findById(driverRequest.id);
+    emitDriverRequestUpdate(driverRequest.client_id, fresh);
+
     logger.info(`Driver request ${driverRequest.id} accepted by ${req.user.role} ${req.user.id}`);
-    return successResponse(res, 200, 'Accepted — awaiting client confirmation', { request: projectDriverRequest(await DriverRequestModel.findById(driverRequest.id)) });
+    return successResponse(res, 200, 'Accepted — awaiting client confirmation', { request: projectDriverRequest(fresh) });
   } catch (err) {
     next(err);
   }
@@ -90,6 +102,7 @@ const declineDriverRequest = async (req, res, next) => {
     // Broker-assign origin: the broker picked this driver, not the client — so the broker
     // needs to try someone else from their fleet, not the client "picking another truck"
     // (they never picked a truck in this flow to begin with).
+    const notifyUserId = driverRequest.job_request_id ? driverRequest.broker_id : driverRequest.client_id;
     if (driverRequest.job_request_id) {
       await NotificationModel.create({
         userId: driverRequest.broker_id,
@@ -108,7 +121,10 @@ const declineDriverRequest = async (req, res, next) => {
       });
     }
 
-    return successResponse(res, 200, 'Declined', { request: projectDriverRequest(await DriverRequestModel.findById(driverRequest.id)) });
+    const fresh = await DriverRequestModel.findById(driverRequest.id);
+    emitDriverRequestUpdate(notifyUserId, fresh);
+
+    return successResponse(res, 200, 'Declined', { request: projectDriverRequest(fresh) });
   } catch (err) {
     next(err);
   }
@@ -134,7 +150,10 @@ const counterDriverRequest = async (req, res, next) => {
       meta: { booking_id: driverRequest.booking_id, driver_request_id: driverRequest.id },
     });
 
-    return successResponse(res, 200, 'Counter-offer sent', { request: projectDriverRequest(await DriverRequestModel.findById(driverRequest.id)) });
+    const fresh = await DriverRequestModel.findById(driverRequest.id);
+    emitDriverRequestUpdate(driverRequest.client_id, fresh);
+
+    return successResponse(res, 200, 'Counter-offer sent', { request: projectDriverRequest(fresh) });
   } catch (err) {
     next(err);
   }
@@ -232,8 +251,12 @@ const clientAcceptDriverRequest = async (req, res, next) => {
       ipAddress: req.ip,
     });
 
+    const fresh = await DriverRequestModel.findById(driverRequest.id);
+    emitDriverRequestUpdate(driverRequest.driver_id, fresh);
+    emitDriverRequestUpdate(driverRequest.broker_id, fresh);
+
     logger.info(`Driver request ${driverRequest.id} confirmed by client ${req.user.id} — trip ${trip.id} created`);
-    return successResponse(res, 200, 'Booking confirmed', { request: projectDriverRequest(await DriverRequestModel.findById(driverRequest.id)) });
+    return successResponse(res, 200, 'Booking confirmed', { request: projectDriverRequest(fresh) });
   } catch (err) {
     next(err);
   }
@@ -260,7 +283,10 @@ const clientRejectDriverRequest = async (req, res, next) => {
       meta: { booking_id: driverRequest.booking_id },
     });
 
-    return successResponse(res, 200, 'Declined', { request: projectDriverRequest(await DriverRequestModel.findById(driverRequest.id)) });
+    const fresh = await DriverRequestModel.findById(driverRequest.id);
+    emitDriverRequestUpdate(notifyUserId, fresh);
+
+    return successResponse(res, 200, 'Declined', { request: projectDriverRequest(fresh) });
   } catch (err) {
     next(err);
   }
@@ -288,7 +314,10 @@ const clientCounterDriverRequest = async (req, res, next) => {
       meta: { booking_id: driverRequest.booking_id },
     });
 
-    return successResponse(res, 200, 'Counter-offer sent', { request: projectDriverRequest(await DriverRequestModel.findById(driverRequest.id)) });
+    const fresh = await DriverRequestModel.findById(driverRequest.id);
+    emitDriverRequestUpdate(driverRequest.driver_id, fresh);
+
+    return successResponse(res, 200, 'Counter-offer sent', { request: projectDriverRequest(fresh) });
   } catch (err) {
     next(err);
   }
@@ -356,5 +385,6 @@ const getDriverRequestForBooking = async (req, res, next) => {
 module.exports = {
   acceptDriverRequest, declineDriverRequest, counterDriverRequest,
   clientAcceptDriverRequest, clientRejectDriverRequest, clientCounterDriverRequest,
-  listDriverRequests, getDriverRequest, getDriverRequestForBooking, projectDriverRequest,
+  listDriverRequests, getDriverRequest, getDriverRequestForBooking,
+  projectDriverRequest, emitDriverRequestUpdate,
 };

@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const DriverRequestModel = require('../models/driverRequest.model');
 const NotificationModel = require('../models/notification.model');
+const { emitDriverRequestUpdate } = require('../controllers/driverRequest.controller');
 const logger = require('../utils/logger');
 
 // Driver gets a hard 2-minute window to respond before their broker is looped in.
@@ -34,6 +35,9 @@ const sweep = async () => {
         meta: { booking_id: request.booking_id, driver_request_id: request.id },
       });
 
+      const fresh = await DriverRequestModel.findById(request.id);
+      emitDriverRequestUpdate(request.broker_id, fresh);
+
       logger.info(`Driver-request timeout: broker ${request.broker_id} notified for request ${request.id} (driver ${request.driver_id} did not respond)`);
     }
   } catch (err) {
@@ -56,6 +60,7 @@ const brokerSweep = async () => {
 
       // Broker-assign origin: the broker picked this driver themselves, so it's on them to
       // try someone else from their fleet — the client never searched trucks in this flow.
+      const notifyUserId = request.job_request_id ? request.broker_id : request.client_id;
       if (request.job_request_id) {
         await NotificationModel.create({
           userId: request.broker_id,
@@ -73,6 +78,9 @@ const brokerSweep = async () => {
           meta: { booking_id: request.booking_id, driver_request_id: request.id },
         });
       }
+
+      const fresh = await DriverRequestModel.findById(request.id);
+      emitDriverRequestUpdate(notifyUserId, fresh);
 
       logger.info(`Driver-request broker timeout: request ${request.id} expired (broker ${request.broker_id} did not respond)`);
     }

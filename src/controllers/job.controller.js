@@ -6,7 +6,7 @@ const DriverProfileModel = require('../models/driverProfile.model');
 const DriverRequestModel = require('../models/driverRequest.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
-const { projectDriverRequest } = require('./driverRequest.controller');
+const { projectDriverRequest, emitDriverRequestUpdate } = require('./driverRequest.controller');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
@@ -116,6 +116,12 @@ const assignDriver = async (req, res, next) => {
         meta: { booking_id: booking.id, driver_request_id: driverRequest.id },
       });
 
+      // create()'s RETURNING * is the bare driver_requests row — missing the joined fields
+      // (booking_number, client_name, driver_name, truck_reg, ...) projectDriverRequest reads,
+      // so re-fetch through the joined query before using it in a response or a socket push.
+      const fresh = await DriverRequestModel.findById(driverRequest.id);
+      emitDriverRequestUpdate(driverId, fresh);
+
       await AuditLogModel.log({
         userId: req.user.id,
         action: 'JOB_DRIVER_OFFERED',
@@ -125,7 +131,7 @@ const assignDriver = async (req, res, next) => {
         ipAddress: req.ip,
       });
 
-      return successResponse(res, 200, 'Driver offer sent — awaiting response', { request: projectDriverRequest(driverRequest) });
+      return successResponse(res, 200, 'Driver offer sent — awaiting response', { request: projectDriverRequest(fresh) });
     }
 
     // Reassignment — stays instant, unlike the first-time path above: this is an urgent
