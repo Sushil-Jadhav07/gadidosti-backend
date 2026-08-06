@@ -31,6 +31,9 @@ const projectDriverRequest = (row) => ({
   weight: row.weight ? `${row.weight} ${row.weight_unit || ''}`.trim() : null,
   amount: row.amount,
   status: row.status,
+  // Set only for the broker-assign origin (broker picked this driver for an already-negotiated
+  // job_requests booking) — null for the direct client-pick origin.
+  jobRequestId: row.job_request_id || null,
   // Whose turn it is to respond: while status='pending' and driverTimedOut is false, it's the
   // driver's; once driverTimedOut is true, it's the broker's; while 'countered', it's the client's.
   driverTimedOut: !!row.driver_timeout_at,
@@ -84,13 +87,26 @@ const declineDriverRequest = async (req, res, next) => {
     const updated = await DriverRequestModel.respondentDecline(driverRequest.id);
     if (!updated) return errorResponse(res, 400, 'Request is already actioned');
 
-    await NotificationModel.create({
-      userId: driverRequest.client_id,
-      title: 'Driver Unavailable',
-      message: `This truck's driver declined your request for booking ${driverRequest.booking_number}. Pick another truck to try again.`,
-      type: 'booking',
-      meta: { booking_id: driverRequest.booking_id, driver_request_id: driverRequest.id },
-    });
+    // Broker-assign origin: the broker picked this driver, not the client — so the broker
+    // needs to try someone else from their fleet, not the client "picking another truck"
+    // (they never picked a truck in this flow to begin with).
+    if (driverRequest.job_request_id) {
+      await NotificationModel.create({
+        userId: driverRequest.broker_id,
+        title: 'Driver Declined Assignment',
+        message: `The driver declined the assignment for booking ${driverRequest.booking_number}. Assign a different driver from your fleet.`,
+        type: 'booking',
+        meta: { booking_id: driverRequest.booking_id, driver_request_id: driverRequest.id },
+      });
+    } else {
+      await NotificationModel.create({
+        userId: driverRequest.client_id,
+        title: 'Driver Unavailable',
+        message: `This truck's driver declined your request for booking ${driverRequest.booking_number}. Pick another truck to try again.`,
+        type: 'booking',
+        meta: { booking_id: driverRequest.booking_id, driver_request_id: driverRequest.id },
+      });
+    }
 
     return successResponse(res, 200, 'Declined', { request: projectDriverRequest(await DriverRequestModel.findById(driverRequest.id)) });
   } catch (err) {
@@ -141,7 +157,11 @@ const clientAcceptDriverRequest = async (req, res, next) => {
     const claimed = await DriverRequestModel.clientAcceptIfCountered(driverRequest.id);
     if (!claimed) return errorResponse(res, 400, 'Request is already actioned');
 
-    const booking = await BookingModel.advanceStatusIfCurrent(driverRequest.booking_id, 'pending', {
+    // Broker-assign origin bookings are already 'confirmed' (from the earlier client-accepts-
+    // broker-offer step) by the time a driver_request exists for them; direct client-pick
+    // origin bookings are still 'pending' at this point.
+    const fromStatus = driverRequest.job_request_id ? 'confirmed' : 'pending';
+    const booking = await BookingModel.advanceStatusIfCurrent(driverRequest.booking_id, fromStatus, {
       status: 'assigned',
       currentStep: STATUS_STEPS.indexOf('assigned'),
       brokerId: driverRequest.broker_id,
@@ -310,8 +330,31 @@ const getDriverRequest = async (req, res, next) => {
   }
 };
 
+// ─── GET /api/driver-requests/booking/:bookingId ──────────────────────────────
+// Lets a client discover a driver_request they didn't create themselves — the broker-assign
+// origin (job_request_id set) is created by the broker via job.controller.js's assignDriver,
+// so the client has no id to look it up by otherwise (unlike the direct client-pick origin,
+// where the client already has the id from their own POST /request-truck response).
+const getDriverRequestForBooking = async (req, res, next) => {
+  try {
+    const requests = await DriverRequestModel.findByBookingId(req.params.bookingId);
+    const driverRequest = requests[0] || null;
+    if (!driverRequest) return errorResponse(res, 404, 'No driver request found for this booking');
+
+    const canView = req.user.role === 'admin'
+      || driverRequest.client_id === req.user.id
+      || driverRequest.driver_id === req.user.id
+      || driverRequest.broker_id === req.user.id;
+    if (!canView) return errorResponse(res, 403, 'You do not have access to this booking');
+
+    return successResponse(res, 200, 'Driver request fetched', { request: projectDriverRequest(driverRequest) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   acceptDriverRequest, declineDriverRequest, counterDriverRequest,
   clientAcceptDriverRequest, clientRejectDriverRequest, clientCounterDriverRequest,
-  listDriverRequests, getDriverRequest, projectDriverRequest,
+  listDriverRequests, getDriverRequest, getDriverRequestForBooking, projectDriverRequest,
 };

@@ -18,14 +18,16 @@ const SELECT_WITH_JOINS = `
 
 class DriverRequestModel {
   // Seeds offer_history with the client's starting ask (the booking's estimated amount) so
-  // the first entry is never blank — same convention as JobRequestModel.create.
-  static async create({ bookingId, truckId, driverId, brokerId, amount }) {
+  // the first entry is never blank — same convention as JobRequestModel.create. jobRequestId
+  // is only set for the broker-assign origin (broker picked this driver for an already-
+  // negotiated job_requests booking) — null for the direct client-pick origin.
+  static async create({ bookingId, truckId, driverId, brokerId, amount, jobRequestId }) {
     const initialHistory = JSON.stringify([{ by: 'client', amount: amount || null, note: null, at: new Date().toISOString() }]);
     const result = await pool.query(
-      `INSERT INTO driver_requests (booking_id, truck_id, driver_id, broker_id, amount, offer_history)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+      `INSERT INTO driver_requests (booking_id, truck_id, driver_id, broker_id, amount, offer_history, job_request_id)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
        RETURNING *`,
-      [bookingId, truckId, driverId, brokerId, amount || null, initialHistory]
+      [bookingId, truckId, driverId, brokerId, amount || null, initialHistory, jobRequestId || null]
     );
     return result.rows[0];
   }
@@ -171,7 +173,7 @@ class DriverRequestModel {
   // timeoutMinutes since the driver timed out.
   static async findOverdueForBrokerResponse(timeoutMinutes) {
     const result = await pool.query(
-      `SELECT dr.id, dr.booking_id, dr.broker_id, dr.driver_id, b.client_id, b.booking_number
+      `SELECT dr.id, dr.booking_id, dr.broker_id, dr.driver_id, dr.job_request_id, b.client_id, b.booking_number
        FROM driver_requests dr
        JOIN bookings b ON b.id = dr.booking_id
        WHERE dr.status = 'pending'

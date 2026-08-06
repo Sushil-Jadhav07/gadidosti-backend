@@ -54,15 +54,27 @@ const brokerSweep = async () => {
       const expired = await DriverRequestModel.respondentDecline(request.id);
       if (!expired) continue;
 
-      await NotificationModel.create({
-        userId: request.client_id,
-        title: 'Request Expired',
-        message: `Neither the driver nor the broker responded to your request for booking ${request.booking_number}. Please search for another truck.`,
-        type: 'booking',
-        meta: { booking_id: request.booking_id, driver_request_id: request.id },
-      });
+      // Broker-assign origin: the broker picked this driver themselves, so it's on them to
+      // try someone else from their fleet — the client never searched trucks in this flow.
+      if (request.job_request_id) {
+        await NotificationModel.create({
+          userId: request.broker_id,
+          title: 'Assignment Not Confirmed',
+          message: `Neither your driver nor you responded in time to the ride you assigned for booking ${request.booking_number}. Please assign a different driver from your fleet.`,
+          type: 'booking',
+          meta: { booking_id: request.booking_id, driver_request_id: request.id },
+        });
+      } else {
+        await NotificationModel.create({
+          userId: request.client_id,
+          title: 'Request Expired',
+          message: `Neither the driver nor the broker responded to your request for booking ${request.booking_number}. Please search for another truck.`,
+          type: 'booking',
+          meta: { booking_id: request.booking_id, driver_request_id: request.id },
+        });
+      }
 
-      logger.info(`Driver-request broker timeout: request ${request.id} expired (broker ${request.broker_id} did not respond), client ${request.client_id} notified to re-search`);
+      logger.info(`Driver-request broker timeout: request ${request.id} expired (broker ${request.broker_id} did not respond)`);
     }
   } catch (err) {
     logger.error(`Broker timeout sweep failed: ${err.message}`);

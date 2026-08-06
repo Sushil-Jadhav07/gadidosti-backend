@@ -170,7 +170,11 @@ class BookingModel {
 
   // Same as advanceStatus, but only commits if the booking is still in fromStatus — the
   // compare-and-swap that stops two brokers racing to accept the same broadcast booking.
+  // fromStatus may be a single status or an array of acceptable current statuses (e.g. a
+  // broker-assign-origin driver_requests accept needs to match from 'confirmed', while the
+  // direct client-pick origin matches from 'pending' — see driverRequest.controller.js).
   static async advanceStatusIfCurrent(id, fromStatus, { status, currentStep, brokerId, driverId, truckId }) {
+    const fromStatuses = Array.isArray(fromStatus) ? fromStatus : [fromStatus];
     const result = await pool.query(
       `UPDATE bookings
        SET status = $1,
@@ -179,9 +183,9 @@ class BookingModel {
            driver_id = COALESCE($4, driver_id),
            truck_id = COALESCE($5, truck_id),
            updated_at = NOW()
-       WHERE id = $6 AND status = $7
+       WHERE id = $6 AND status = ANY($7::booking_status[])
        RETURNING *`,
-      [status, currentStep, brokerId || null, driverId || null, truckId || null, id, fromStatus]
+      [status, currentStep, brokerId || null, driverId || null, truckId || null, id, fromStatuses]
     );
     return result.rows[0] || null;
   }

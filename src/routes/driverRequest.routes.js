@@ -4,7 +4,7 @@ const router = express.Router();
 const {
   acceptDriverRequest, declineDriverRequest, counterDriverRequest,
   clientAcceptDriverRequest, clientRejectDriverRequest, clientCounterDriverRequest,
-  listDriverRequests, getDriverRequest,
+  listDriverRequests, getDriverRequest, getDriverRequestForBooking,
 } = require('../controllers/driverRequest.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -34,6 +34,39 @@ const { driverCounterOfferValidation } = require('../validations/driverRequest.v
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.get('/driver-requests', authenticate, authorize('driver', 'broker'), listDriverRequests);
+
+/**
+ * @swagger
+ * /api/driver-requests/booking/{bookingId}:
+ *   get:
+ *     tags: [Driver Requests]
+ *     summary: Get the most recent driver request for a booking (client/driver/broker who's party to it, or admin)
+ *     description: Lets a client discover a driver request they didn't create themselves — the broker-assign origin is created by the broker, so the client has no id to look it up by otherwise.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Driver request fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: You do not have access to this booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: No driver request found for this booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/driver-requests/booking/:bookingId', authenticate, getDriverRequestForBooking);
 
 /**
  * @swagger

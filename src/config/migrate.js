@@ -839,6 +839,18 @@ const runMigrations = async (client) => {
       ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS stale_notified_at TIMESTAMPTZ;
     `);
 
+    // ── DRIVER REQUESTS: LINK TO BROKER-ASSIGN ORIGIN (mirrors db/28_driver_request_job_link.sql) ──
+    // Distinguishes the two origins a driver_requests row can come from: NULL = direct
+    // client-pick (client chose the truck themselves), set = broker-assign (broker picked the
+    // driver from their fleet for an already-negotiated job_requests booking). Needed so
+    // decline/expiry notifications go to the right party — see driverRequest.controller.js and
+    // driverRequestTimeoutSweep.js's brokerSweep.
+    await client.query(`
+      ALTER TABLE driver_requests ADD COLUMN IF NOT EXISTS job_request_id UUID REFERENCES job_requests(id) ON DELETE CASCADE;
+
+      CREATE INDEX IF NOT EXISTS idx_driver_requests_job_request ON driver_requests(job_request_id);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
