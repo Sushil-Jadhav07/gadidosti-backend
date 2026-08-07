@@ -12,7 +12,7 @@ const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
-const { haversineKm } = require('../utils/geo');
+const { haversineKm, AVERAGE_SPEED_KMPH } = require('../utils/geo');
 const { projectDriverRequest } = require('./driverRequest.controller');
 
 const projectBooking = (row, timeline, role) => {
@@ -129,10 +129,6 @@ const getBooking = async (req, res, next) => {
     next(err);
   }
 };
-
-// Straight-line ETA only — no routing engine, so this is a rough estimate for the
-// "how far out is my driver" UI, not turn-by-turn navigation.
-const AVERAGE_SPEED_KMPH = 40;
 
 // ─── GET /api/bookings/:id/track ─────────────────────────────────────────────
 // Polled by the frontend every 5-10s — plain lat/lng snapshot, no WebSocket infra.

@@ -9,4 +9,8 @@ const haversineKm = (lat1, lng1, lat2, lng2) => {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-module.exports = { haversineKm };
+// Shared "how fast is a truck" assumption for straight-line ETA estimates derived from
+// haversineKm — no routing engine, so this is a rough estimate, not turn-by-turn ETA.
+const AVERAGE_SPEED_KMPH = 40;
+
+module.exports = { haversineKm, AVERAGE_SPEED_KMPH };

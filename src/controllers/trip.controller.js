@@ -13,7 +13,7 @@ const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 const { getStorageProvider } = require('../providers/storage');
 const { toAbsoluteUrl } = require('../utils/fileUrl');
-const { haversineKm } = require('../utils/geo');
+const { haversineKm, AVERAGE_SPEED_KMPH } = require('../utils/geo');
 
 const storageProvider = getStorageProvider();
 const STATUS_STEPS = ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
@@ -41,8 +41,31 @@ const ACTIVE_TRIP_STATUSES = ['confirmed', 'en_route_pickup', 'picked_up', 'in_t
 // Subset of the booking status stepper that applies once a trip exists.
 const TRIP_STEPS = ['confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
 
+// Straight-line remaining distance/ETA from the truck's last-reported position to wherever
+// it's headed next — the pickup point while still "en_route_pickup", the drop point once
+// "picked_up"/"in_transit". Same haversineKm + AVERAGE_SPEED_KMPH approach already used by
+// booking.controller.js's trackBooking, just computed once here so every trip endpoint
+// (list/detail/active/upcoming) gets it for free instead of each caller recomputing it.
+const computeRemaining = (row) => {
+  const targetLat = row.status === 'en_route_pickup' ? row.pickup_lat
+    : ['picked_up', 'in_transit'].includes(row.status) ? row.drop_lat
+    : null;
+  const targetLng = row.status === 'en_route_pickup' ? row.pickup_lng
+    : ['picked_up', 'in_transit'].includes(row.status) ? row.drop_lng
+    : null;
+  if (targetLat == null || targetLng == null || row.current_lat == null || row.current_lng == null) {
+    return { distanceRemainingKm: null, etaMinutes: null };
+  }
+  const distanceRemainingKm = haversineKm(Number(row.current_lat), Number(row.current_lng), Number(targetLat), Number(targetLng));
+  return {
+    distanceRemainingKm: Math.round(distanceRemainingKm * 100) / 100,
+    etaMinutes: Math.round((distanceRemainingKm / AVERAGE_SPEED_KMPH) * 60),
+  };
+};
+
 const projectTrip = async (row, timeline) => {
   const podPhotos = await TripPodPhotoModel.findByTrip(row.id);
+  const { distanceRemainingKm, etaMinutes } = computeRemaining(row);
   return {
   id: row.id,
   bookingId: row.booking_id,
@@ -87,6 +110,10 @@ const projectTrip = async (row, timeline) => {
   earnings: row.earnings,
   startedAt: row.started_at,
   currentLocation: { lat: row.current_lat, lng: row.current_lng },
+  // null unless there's both a live position and a meaningful destination for this trip's
+  // current phase (en_route_pickup -> pickup point, picked_up/in_transit -> drop point).
+  distanceRemainingKm,
+  etaMinutes,
   podUrl: row.pod_url,
   podPhotos: podPhotos.map((p) => p.url),
   // Drives the driver app's delivery-completion flow: whether the Payments step is needed

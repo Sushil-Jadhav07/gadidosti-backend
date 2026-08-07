@@ -1,4 +1,5 @@
 const DriverRequestModel = require('../models/driverRequest.model');
+const JobRequestModel = require('../models/jobRequest.model');
 const BookingModel = require('../models/booking.model');
 const TripModel = require('../models/trip.model');
 const TruckModel = require('../models/truck.model');
@@ -84,6 +85,11 @@ const finalizeDriverRequest = async (driverRequest, amount) => {
   await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
   await BookingModel.addTimelineStep(booking.id, { step: 'assigned', position: 2 });
   await DriverRequestModel.declineOthersForBooking(booking.id, driverRequest.id);
+  // This booking was won through the direct client-pick flow, not the broker-broadcast one —
+  // every job_requests row ever fanned out to brokers for it (potentially many, since every
+  // eligible broker gets one on booking creation) is now stale and would otherwise sit
+  // 'pending' forever in each of those brokers' inboxes.
+  await JobRequestModel.declineAllForBooking(booking.id);
 
   await TruckModel.update(driverRequest.truck_id, { status: 'on_trip' });
   await DriverProfileModel.update(driverRequest.driver_id, { status: 'on_trip', truckId: driverRequest.truck_id });

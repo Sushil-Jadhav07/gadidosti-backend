@@ -76,6 +76,17 @@ class JobRequestModel {
     );
   }
 
+  // Used when a booking is won through a different flow entirely (direct client-pick driver
+  // negotiation, see driverRequest.controller.js's finalizeDriverRequest) — every job_requests
+  // row ever broadcast for it, across every broker, is now moot. Unlike declineOthersForBooking,
+  // there's no "winning" row on this table to except.
+  static async declineAllForBooking(bookingId) {
+    await pool.query(
+      `UPDATE job_requests SET status = 'declined' WHERE booking_id = $1 AND status IN ('pending', 'countered')`,
+      [bookingId]
+    );
+  }
+
   // Broker submits a counter-offer — only while the request is awaiting the broker's response
   // ('pending'). Flips to 'countered' so the client sees it and can respond next.
   static async brokerCounter(id, { amount, note }) {
