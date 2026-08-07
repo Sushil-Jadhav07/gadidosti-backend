@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { downloadInvoice, emailInvoice } = require('../controllers/invoice.controller');
+const { downloadInvoice, emailInvoice, notifyPortal } = require('../controllers/invoice.controller');
 const { authenticate } = require('../middleware/auth.middleware');
 
 /**
@@ -72,5 +72,32 @@ router.get('/bookings/:id/invoice', authenticate, downloadInvoice);
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/bookings/:id/invoice/email', authenticate, emailInvoice);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/invoice/notify:
+ *   post:
+ *     tags: [Invoice]
+ *     summary: "Send-to-portal: notify the client in-app that the broker/driver shared their invoice"
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Client notified
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Only the broker or driver on this booking can use this
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/bookings/:id/invoice/notify', authenticate, notifyPortal);
 
 module.exports = router;

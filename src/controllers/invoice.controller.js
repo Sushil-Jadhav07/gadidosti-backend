@@ -1,4 +1,5 @@
 const BookingModel = require('../models/booking.model');
+const NotificationModel = require('../models/notification.model');
 const { buildInvoicePdfBuffer } = require('../utils/invoicePdf');
 const { getEmailProvider } = require('../providers/email');
 const { errorResponse, successResponse } = require('../utils/response');
@@ -63,4 +64,34 @@ const emailInvoice = async (req, res, next) => {
   }
 };
 
-module.exports = { downloadInvoice, emailInvoice };
+// ─── POST /api/bookings/:id/invoice/notify ────────────────────────────────────
+// One-click "send to portal" — broker/driver notifies the client that their invoice is ready
+// to view, without needing the client's email/phone. Pure notification, no PDF work: the
+// client already has full download access to their own booking's invoice.
+const notifyPortal = async (req, res, next) => {
+  try {
+    if (!['broker', 'driver', 'admin'].includes(req.user.role)) {
+      return errorResponse(res, 403, 'Only the broker or driver on this booking can share the invoice this way');
+    }
+
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (!assertCanView(booking, req.user)) return errorResponse(res, 403, 'You do not have access to this booking');
+    if (!booking.client_id) return errorResponse(res, 422, 'This booking has no client to notify');
+
+    await NotificationModel.create({
+      userId: booking.client_id,
+      title: 'Invoice Shared',
+      message: `Your ${req.user.role} shared your invoice for ${booking.booking_number} — view it in My Bookings.`,
+      type: 'payment',
+      meta: { booking_id: booking.id },
+    });
+
+    logger.info(`Invoice for booking ${booking.id} shared to client portal by ${req.user.role} ${req.user.id}`);
+    return successResponse(res, 200, 'Client notified');
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { downloadInvoice, emailInvoice, notifyPortal };

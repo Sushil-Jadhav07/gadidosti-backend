@@ -329,6 +329,18 @@ const updateTripStatus = async (req, res, next) => {
           meta: { trip_id: id },
         });
       }
+
+      if (trip.client_id) {
+        await NotificationModel.create({
+          userId: trip.client_id,
+          title: 'Invoice Ready',
+          message: booking.payment_status === 'paid'
+            ? `Your trip ${trip.booking_number || ''} is complete. Your invoice and payment receipt are ready to download.`
+            : `Your trip ${trip.booking_number || ''} is complete. Your invoice is ready to download.`,
+          type: 'payment',
+          meta: { trip_id: id, booking_id: trip.booking_id },
+        });
+      }
     } else if (status === 'cancelled') {
       // Same fix as completion — a cancelled trip must also release the driver/truck.
       if (trip.driver_id) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
@@ -707,7 +719,7 @@ const collectPayment = async (req, res, next) => {
       await NotificationModel.create({
         userId: trip.client_id,
         title: 'Payment Received',
-        message: `Your payment for ${trip.booking_number || 'your booking'} was collected by the driver via ${modeLabel}.`,
+        message: `Your payment for ${trip.booking_number || 'your booking'} was collected by the driver via ${modeLabel}. Your receipt is ready to download.`,
         type: 'payment',
         meta: { trip_id: id, booking_id: trip.booking_id, mode },
       });
