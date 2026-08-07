@@ -59,7 +59,65 @@ const assertCanRespond = (driverRequest, user) => {
   return user.role === 'driver' && driverRequest.driver_id === user.id;
 };
 
+// Locks the truck/driver, creates the trip, and mirrors the status onto the parent booking —
+// shared between acceptDriverRequest (driver/broker agrees to the client's current asking
+// price) and clientAcceptDriverRequest (client agrees to the driver/broker's counter-offer).
+// Either direction is "both sides have now agreed on a price," so both finalize the booking
+// the same way — there's no reason to require a second explicit confirmation once that's true.
+// Returns null if the booking moved on some other way in the meantime (caller must undo the
+// accept it just made).
+const finalizeDriverRequest = async (driverRequest, amount) => {
+  const fromStatus = driverRequest.job_request_id ? 'confirmed' : 'pending';
+  const booking = await BookingModel.advanceStatusIfCurrent(driverRequest.booking_id, fromStatus, {
+    status: 'assigned',
+    currentStep: STATUS_STEPS.indexOf('assigned'),
+    brokerId: driverRequest.broker_id,
+    driverId: driverRequest.driver_id,
+    truckId: driverRequest.truck_id,
+  });
+  if (!booking) return null;
+
+  if (amount != null && Number(booking.amount) !== Number(amount)) {
+    await BookingModel.update(booking.id, { amount });
+  }
+
+  await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
+  await BookingModel.addTimelineStep(booking.id, { step: 'assigned', position: 2 });
+  await DriverRequestModel.declineOthersForBooking(booking.id, driverRequest.id);
+
+  await TruckModel.update(driverRequest.truck_id, { status: 'on_trip' });
+  await DriverProfileModel.update(driverRequest.driver_id, { status: 'on_trip', truckId: driverRequest.truck_id });
+
+  const trip = await TripModel.create({
+    bookingId: booking.id,
+    driverId: driverRequest.driver_id,
+    brokerId: driverRequest.broker_id,
+    pickupAddress: booking.pickup_location,
+    pickupLat: booking.pickup_lat,
+    pickupLng: booking.pickup_lng,
+    dropAddress: booking.drop_location,
+    dropLat: booking.drop_lat,
+    dropLng: booking.drop_lng,
+    distance: booking.distance,
+    cargoMaterial: booking.material,
+    cargoWeight: booking.weight,
+    cargoQuantity: booking.quantity,
+    cargoValue: booking.amount,
+    earnings: booking.amount && booking.platform_fee ? booking.amount - booking.platform_fee : booking.amount,
+  });
+  await TripModel.addTimelineStep(trip.id, { step: 'Pickup', done: false, position: 0, occurredAt: null });
+  await TripModel.addTimelineStep(trip.id, { step: 'In Transit', done: false, position: 1, occurredAt: null });
+  await TripModel.addTimelineStep(trip.id, { step: 'Delivered', done: false, position: 2, occurredAt: null });
+
+  return { booking, trip };
+};
+
 // ─── PATCH /api/driver-requests/:id/accept ────────────────────────────────────
+// Driver (or broker, once the driver's timed out) accepting the client's current asking price
+// finalizes the booking immediately — the price is already agreed (the client set it when
+// creating the request), so there's nothing left for the client to confirm. A client-side
+// action is only needed when the *price itself* changes (see counterDriverRequest, answered by
+// clientAcceptDriverRequest/clientCounterDriverRequest/clientRejectDriverRequest).
 const acceptDriverRequest = async (req, res, next) => {
   try {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
@@ -70,19 +128,51 @@ const acceptDriverRequest = async (req, res, next) => {
     const updated = await DriverRequestModel.respondentAccept(driverRequest.id);
     if (!updated) return errorResponse(res, 400, 'Request is already actioned');
 
+    const result = await finalizeDriverRequest(updated, updated.amount);
+    if (!result) {
+      // Booking moved on some other way (e.g. the broker-broadcast flow won it first) —
+      // undo the accept so this request doesn't sit in a false 'accepted' state.
+      await DriverRequestModel.respondentDecline(driverRequest.id).catch(() => {});
+      return errorResponse(res, 409, 'This booking is no longer available');
+    }
+    const { trip } = result;
+
     await NotificationModel.create({
       userId: driverRequest.client_id,
-      title: 'Driver Accepted',
-      message: `${driverRequest.driver_name} accepted your request at ₹${driverRequest.amount} for booking ${driverRequest.booking_number}. Confirm to finalize.`,
+      title: 'Trip Confirmed',
+      message: `${driverRequest.driver_name} confirmed your request at ₹${updated.amount} for booking ${driverRequest.booking_number}.`,
       type: 'booking',
-      meta: { booking_id: driverRequest.booking_id, driver_request_id: driverRequest.id },
+      meta: { booking_id: driverRequest.booking_id, trip_id: trip.id },
+    });
+
+    // Notify whichever of driver/broker didn't act — the other one doesn't otherwise learn
+    // this happened (e.g. broker accepted on a timed-out driver's behalf, or vice versa).
+    const otherPartyId = req.user.id === driverRequest.driver_id ? driverRequest.broker_id : driverRequest.driver_id;
+    if (otherPartyId && otherPartyId !== req.user.id) {
+      await NotificationModel.create({
+        userId: otherPartyId,
+        title: 'Trip Confirmed',
+        message: `The trip for booking ${driverRequest.booking_number} was confirmed at ₹${updated.amount}.`,
+        type: 'booking',
+        meta: { booking_id: driverRequest.booking_id, trip_id: trip.id },
+      });
+    }
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'DRIVER_REQUEST_ACCEPTED',
+      entity: 'driver_requests',
+      entityId: driverRequest.id,
+      meta: { booking_id: driverRequest.booking_id, amount: updated.amount, trip_id: trip.id },
+      ipAddress: req.ip,
     });
 
     const fresh = await DriverRequestModel.findById(driverRequest.id);
     emitDriverRequestUpdate(driverRequest.client_id, fresh);
+    if (otherPartyId && otherPartyId !== req.user.id) emitDriverRequestUpdate(otherPartyId, fresh);
 
-    logger.info(`Driver request ${driverRequest.id} accepted by ${req.user.role} ${req.user.id}`);
-    return successResponse(res, 200, 'Accepted — awaiting client confirmation', { request: projectDriverRequest(fresh) });
+    logger.info(`Driver request ${driverRequest.id} accepted by ${req.user.role} ${req.user.id} — trip ${trip.id} created`);
+    return successResponse(res, 200, 'Accepted — booking confirmed', { request: projectDriverRequest(fresh) });
   } catch (err) {
     next(err);
   }
@@ -176,56 +266,14 @@ const clientAcceptDriverRequest = async (req, res, next) => {
     const claimed = await DriverRequestModel.clientAcceptIfCountered(driverRequest.id);
     if (!claimed) return errorResponse(res, 400, 'Request is already actioned');
 
-    // Broker-assign origin bookings are already 'confirmed' (from the earlier client-accepts-
-    // broker-offer step) by the time a driver_request exists for them; direct client-pick
-    // origin bookings are still 'pending' at this point.
-    const fromStatus = driverRequest.job_request_id ? 'confirmed' : 'pending';
-    const booking = await BookingModel.advanceStatusIfCurrent(driverRequest.booking_id, fromStatus, {
-      status: 'assigned',
-      currentStep: STATUS_STEPS.indexOf('assigned'),
-      brokerId: driverRequest.broker_id,
-      driverId: driverRequest.driver_id,
-      truckId: driverRequest.truck_id,
-    });
-
-    if (!booking) {
+    const result = await finalizeDriverRequest(claimed, claimed.amount);
+    if (!result) {
       // Booking moved on some other way (e.g. the broker-broadcast flow won it first) —
       // undo the accept so this request doesn't sit in a false 'accepted' state.
       await DriverRequestModel.respondentDecline(driverRequest.id).catch(() => {});
       return errorResponse(res, 409, 'This booking is no longer available');
     }
-
-    if (claimed.amount != null && Number(booking.amount) !== Number(claimed.amount)) {
-      await BookingModel.update(booking.id, { amount: claimed.amount });
-    }
-
-    await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
-    await BookingModel.addTimelineStep(booking.id, { step: 'assigned', position: 2 });
-    await DriverRequestModel.declineOthersForBooking(booking.id, driverRequest.id);
-
-    await TruckModel.update(driverRequest.truck_id, { status: 'on_trip' });
-    await DriverProfileModel.update(driverRequest.driver_id, { status: 'on_trip', truckId: driverRequest.truck_id });
-
-    const trip = await TripModel.create({
-      bookingId: booking.id,
-      driverId: driverRequest.driver_id,
-      brokerId: driverRequest.broker_id,
-      pickupAddress: booking.pickup_location,
-      pickupLat: booking.pickup_lat,
-      pickupLng: booking.pickup_lng,
-      dropAddress: booking.drop_location,
-      dropLat: booking.drop_lat,
-      dropLng: booking.drop_lng,
-      distance: booking.distance,
-      cargoMaterial: booking.material,
-      cargoWeight: booking.weight,
-      cargoQuantity: booking.quantity,
-      cargoValue: booking.amount,
-      earnings: booking.amount && booking.platform_fee ? booking.amount - booking.platform_fee : booking.amount,
-    });
-    await TripModel.addTimelineStep(trip.id, { step: 'Pickup', done: false, position: 0, occurredAt: null });
-    await TripModel.addTimelineStep(trip.id, { step: 'In Transit', done: false, position: 1, occurredAt: null });
-    await TripModel.addTimelineStep(trip.id, { step: 'Delivered', done: false, position: 2, occurredAt: null });
+    const { booking, trip } = result;
 
     await NotificationModel.create({
       userId: driverRequest.driver_id,
