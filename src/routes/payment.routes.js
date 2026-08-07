@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { listSettlements, getBrokerAnalytics } = require('../controllers/payment.controller');
+const { listSettlements, getSettlement, getBrokerAnalytics } = require('../controllers/payment.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 
 /**
@@ -28,6 +28,38 @@ const { authenticate, authorize } = require('../middleware/auth.middleware');
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.get('/payments/settlements', authenticate, authorize('broker', 'driver', 'admin'), listSettlements);
+
+/**
+ * @swagger
+ * /api/payments/settlements/{id}:
+ *   get:
+ *     tags: [Payments]
+ *     summary: Get a single settlement (broker/driver on it, or admin)
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Settlement fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: You do not have access to this settlement
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Settlement not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/payments/settlements/:id', authenticate, authorize('broker', 'driver', 'admin'), getSettlement);
 
 /**
  * @swagger

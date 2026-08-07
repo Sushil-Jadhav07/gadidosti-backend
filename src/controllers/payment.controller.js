@@ -1,5 +1,5 @@
 const SettlementModel = require('../models/settlement.model');
-const { successResponse } = require('../utils/response');
+const { successResponse, errorResponse } = require('../utils/response');
 
 const projectSettlement = (row) => ({
   id: row.id,
@@ -37,6 +37,23 @@ const listSettlements = async (req, res, next) => {
   }
 };
 
+// ─── GET /api/payments/settlements/:id ────────────────────────────────────────
+const getSettlement = async (req, res, next) => {
+  try {
+    const settlement = await SettlementModel.findById(req.params.id);
+    if (!settlement) return errorResponse(res, 404, 'Settlement not found');
+
+    const canView = req.user.role === 'admin'
+      || (req.user.role === 'broker' && settlement.broker_id === req.user.id)
+      || (req.user.role === 'driver' && settlement.driver_id === req.user.id);
+    if (!canView) return errorResponse(res, 403, 'You do not have access to this settlement');
+
+    return successResponse(res, 200, 'Settlement fetched', { settlement: projectSettlement(settlement) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── GET /api/analytics/broker ────────────────────────────────────────────────
 const getBrokerAnalytics = async (req, res, next) => {
   try {
@@ -54,4 +71,4 @@ const getBrokerAnalytics = async (req, res, next) => {
   }
 };
 
-module.exports = { listSettlements, getBrokerAnalytics };
+module.exports = { listSettlements, getSettlement, getBrokerAnalytics };

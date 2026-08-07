@@ -110,7 +110,7 @@ class TripModel {
     };
   }
 
-  static async findAll({ role, userId, status, page = 1, limit = 10 } = {}) {
+  static async findAll({ role, userId, status, truckId, driverId, page = 1, limit = 10 } = {}) {
     const offset = (page - 1) * limit;
     const conditions = [];
     const params = [];
@@ -135,8 +135,24 @@ class TripModel {
       params.push(statuses);
     }
 
+    // Additive on top of the role-scoping above, not a replacement for it — a broker passing
+    // truckId only narrows further within trips already restricted to tr.broker_id = them, so
+    // this can't be used to see another broker's trips. truck_id lives on the joined booking,
+    // not on trips itself (see SELECT_WITH_JOINS).
+    if (truckId) {
+      conditions.push(`b.truck_id = $${idx++}`);
+      params.push(truckId);
+    }
+    if (driverId) {
+      conditions.push(`tr.driver_id = $${idx++}`);
+      params.push(driverId);
+    }
+
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const countResult = await pool.query(`SELECT COUNT(*) FROM trips tr ${where}`, params);
+    // Joins bookings too (not just "FROM trips tr") since the truckId filter above conditions
+    // on b.truck_id — needed here regardless of whether that filter is active, so the count
+    // query's FROM clause always matches what the WHERE clause can reference.
+    const countResult = await pool.query(`SELECT COUNT(*) FROM trips tr JOIN bookings b ON b.id = tr.booking_id ${where}`, params);
     const total = parseInt(countResult.rows[0].count, 10);
 
     const rows = await pool.query(
@@ -161,6 +177,7 @@ class TripModel {
     const result = await pool.query(
       `UPDATE trips SET status = $1::booking_status,
               started_at = CASE WHEN started_at IS NULL AND $1::text NOT IN ('confirmed', 'pending') THEN NOW() ELSE started_at END,
+              delivered_at = CASE WHEN delivered_at IS NULL AND $1::text = 'delivered' THEN NOW() ELSE delivered_at END,
               updated_at = NOW()
        WHERE id = $2 RETURNING *`,
       [status, id]

@@ -21,13 +21,19 @@ const TripPodPhotoModel = require('../models/tripPodPhoto.model');
  *   get:
  *     tags: [Trips]
  *     summary: List trips (role-scoped)
- *     description: broker/driver -> own trips only, admin -> all trips. Each item uses the same rich projection as GET /api/trips/{id}.
+ *     description: broker/driver -> own trips only, admin -> all trips. Each item uses the same rich projection as GET /api/trips/{id}. truckId/driverId (broker/admin only, ignored for a driver's own list) narrow further, e.g. for the Trucks/Drivers fleet detail views' trip history.
  *     security:
  *       - BearerAuth: []
  *     parameters:
  *       - in: query
  *         name: status
  *         schema: { type: string, enum: [confirmed, en_route_pickup, picked_up, in_transit, delivered, completed, cancelled] }
+ *       - in: query
+ *         name: truckId
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: driverId
+ *         schema: { type: string, format: uuid }
  *       - in: query
  *         name: page
  *         schema: { type: integer, default: 1 }

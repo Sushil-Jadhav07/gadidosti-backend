@@ -26,6 +26,7 @@ const disputeRoutes = require('./routes/dispute.routes');
 const adminRoutes   = require('./routes/admin.routes');
 const chatRoutes    = require('./routes/chat.routes');
 const trackingRoutes = require('./routes/tracking.routes');
+const invoiceRoutes = require('./routes/invoice.routes');
 const errorHandler  = require('./middleware/errorHandler.middleware');
 const logger        = require('./utils/logger');
 const allowedOrigins = require('./config/corsOrigins');
@@ -128,6 +129,7 @@ app.use('/api', disputeRoutes);
 app.use('/api', adminRoutes);
 app.use('/api', chatRoutes);
 app.use('/api', trackingRoutes);
+app.use('/api', invoiceRoutes);
 
 // 404 handler
 app.use((req, res) => {

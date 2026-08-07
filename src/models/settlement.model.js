@@ -27,6 +27,11 @@ class SettlementModel {
     return result.rows[0];
   }
 
+  static async findById(id) {
+    const result = await pool.query(`${SELECT_WITH_JOINS} WHERE s.id = $1`, [id]);
+    return result.rows[0] || null;
+  }
+
   static async findAll({ role, userId, page = 1, limit = 10 } = {}) {
     const conditions = [];
     const params = [];

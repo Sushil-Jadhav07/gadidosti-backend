@@ -44,6 +44,8 @@ const projectBooking = (row, timeline, role) => {
     date: row.scheduled_date,
     amount: row.amount,
     paymentStatus: row.payment_status,
+    paymentMode: row.payment_mode || null,
+    paidAt: row.paid_at || null,
     driver: { name: row.driver_name || null, phone: row.driver_phone || null },
     truckReg: row.truck_reg || null,
     broker: row.broker_name || null,
@@ -54,14 +56,26 @@ const projectBooking = (row, timeline, role) => {
     platformFee: row.platform_fee,
     podUrl: row.pod_url || null,
     rating: row.rating || null,
+    // Total delivery duration, same computation as trip.controller.js's projectTrip — null
+    // until the linked trip has both a started_at and a delivered_at.
+    timeTakenMinutes: row.trip_started_at && row.trip_delivered_at
+      ? Math.round((new Date(row.trip_delivered_at) - new Date(row.trip_started_at)) / 60000)
+      : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 
-  if (role === 'admin') {
+  // A broker already has a legitimate relationship with the client on their own booking (they
+  // can already see the client's phone elsewhere, e.g. job_requests/driver_requests
+  // projections) — client contact fields here are needed so the broker's invoice-email UI can
+  // pre-fill a recipient, not just for admin.
+  if (role === 'admin' || role === 'broker') {
     base.client = row.client_name;
     base.clientPhone = row.client_phone;
     base.clientEmail = row.client_email;
+  }
+
+  if (role === 'admin') {
     base.driverPhone = row.driver_phone;
     base.brokerPhone = row.broker_phone;
     // Only admin ever needs to know a booking was soft-deleted by its broker/driver — that's

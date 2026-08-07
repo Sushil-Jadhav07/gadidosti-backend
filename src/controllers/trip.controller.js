@@ -109,6 +109,12 @@ const projectTrip = async (row, timeline) => {
   },
   earnings: row.earnings,
   startedAt: row.started_at,
+  deliveredAt: row.delivered_at,
+  // Total delivery duration once both endpoints of the trip are known — null while still
+  // in progress (delivered_at not set yet) or if the trip somehow never got a started_at.
+  timeTakenMinutes: row.started_at && row.delivered_at
+    ? Math.round((new Date(row.delivered_at) - new Date(row.started_at)) / 60000)
+    : null,
   currentLocation: { lat: row.current_lat, lng: row.current_lng },
   // null unless there's both a live position and a meaningful destination for this trip's
   // current phase (en_route_pickup -> pickup point, picked_up/in_transit -> drop point).
@@ -169,11 +175,16 @@ const projectIncident = (row) => ({
 
 const listTrips = async (req, res, next) => {
   try {
-    const { status, page = 1, limit = 10 } = req.query;
+    const { status, truckId, driverId, page = 1, limit = 10 } = req.query;
     const result = await TripModel.findAll({
       role: req.user.role,
       userId: req.user.id,
       status,
+      // Broker/admin only — narrows down to one truck's/driver's trip history (e.g. the
+      // Trucks/Drivers fleet detail views). Ignored for a driver's own list since their
+      // role-scoping (tr.driver_id = them) already fixes it to themselves.
+      truckId: req.user.role !== 'driver' ? truckId : undefined,
+      driverId: req.user.role !== 'driver' ? driverId : undefined,
       page: parseInt(page, 10),
       limit: Math.min(parseInt(limit, 10), 100),
     });

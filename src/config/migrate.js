@@ -851,6 +851,14 @@ const runMigrations = async (client) => {
       CREATE INDEX IF NOT EXISTS idx_driver_requests_job_request ON driver_requests(job_request_id);
     `);
 
+    // ── TRIP DELIVERED_AT (mirrors db/29trip_delivered_at.sql) ──
+    // Set once, the first time a trip's status moves to 'delivered' — same one-time-write
+    // pattern trips.started_at already uses. Lets "time taken" be computed as
+    // delivered_at - started_at (see trip.controller.js's projectTrip).
+    await client.query(`
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
