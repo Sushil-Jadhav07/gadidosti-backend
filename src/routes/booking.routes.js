@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, deleteBooking } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, deleteBooking } = require('../controllers/booking.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
@@ -313,6 +313,66 @@ router.get('/bookings/:id/track', authenticate, trackBooking);
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/bookings/:id/request-truck', authenticate, authorize('client'), requestTruckValidation, validate, requestTruckForBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/cancel:
+ *   patch:
+ *     tags: [Bookings]
+ *     summary: Cancel a booking (client, with a required reason)
+ *     description: |
+ *       Allowed any time before cargo is picked up — status pending, confirmed, assigned, or
+ *       en_route_pickup. Once picked_up or later, use the dispute flow instead (report-a-problem).
+ *
+ *       On success: booking -> cancelled (payment_status -> refunded if it was paid), every
+ *       still-open job_requests/driver_requests offer for it is declined, and if a driver/truck
+ *       was already assigned they're freed back to available and the linked trip (if any) is
+ *       cancelled too. The driver and broker (whoever is assigned at the time) are notified,
+ *       including the reason.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reason]
+ *             properties:
+ *               reason: { type: string, description: "Why the client is cancelling — shown to the driver/broker in their notification" }
+ *     responses:
+ *       200:
+ *         description: Booking cancelled
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Booking can no longer be cancelled (already picked up, delivered, completed, or already cancelled)
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: A cancellation reason is required
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/bookings/:id/cancel', authenticate, authorize('client'), cancelBooking);
 
 /**
  * @swagger

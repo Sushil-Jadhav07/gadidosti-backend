@@ -214,6 +214,94 @@ const trackBooking = async (req, res, next) => {
   }
 };
 
+// A booking may be cancelled by the client any time before cargo is actually picked up —
+// once picked_up/in_transit/delivered/completed, the goods are already in the truck, so a
+// straight cancel is no longer appropriate (report-a-problem/dispute is the right path then).
+const CANCELLABLE_STATUSES = ['pending', 'confirmed', 'assigned', 'en_route_pickup'];
+
+// ─── PATCH /api/bookings/:id/cancel ───────────────────────────────────────────
+// Client-initiated cancellation, with a required reason. Covers every stage from a still-open
+// request (no broker/driver yet) through an already-assigned, en-route driver — previously
+// only cancellable while still 'pending', which meant a client couldn't back out at all once
+// a driver had taken the job.
+const cancelBooking = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    if (!reason || !reason.trim()) return errorResponse(res, 422, 'A cancellation reason is required');
+
+    const booking = await BookingModel.findById(id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (!CANCELLABLE_STATUSES.includes(booking.status)) {
+      return errorResponse(res, 409, `This booking can no longer be cancelled (status: ${booking.status})`);
+    }
+
+    const wasPaid = booking.payment_status === 'paid';
+    await BookingModel.update(id, {
+      status: 'cancelled',
+      payment_status: wasPaid ? 'refunded' : booking.payment_status,
+    });
+    await BookingModel.addTimelineStep(id, { step: 'cancelled', position: 99 });
+
+    // Clear out any still-open negotiation offers so nobody can accept a booking that's just
+    // been cancelled out from under them.
+    await JobRequestModel.declineAllForBooking(id);
+    await DriverRequestModel.declineAllForBooking(id);
+
+    // A driver/truck may already be assigned (confirmed/assigned/en_route_pickup) — free them
+    // up and cancel the linked trip too, same release-on-cancel logic trip.controller.js's
+    // updateTripStatus already uses for a driver-initiated cancellation.
+    const trip = await TripModel.findByBookingId(id);
+    if (trip) {
+      await TripModel.updateStatus(trip.id, 'cancelled');
+      await TripModel.addTimelineStep(trip.id, { step: 'cancelled', position: 99 });
+      if (trip.driver_id) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
+      if (trip.truck_id) await TruckModel.update(trip.truck_id, { status: 'available' });
+    } else if (booking.driver_id || booking.truck_id) {
+      if (booking.driver_id) await DriverProfileModel.update(booking.driver_id, { status: 'available' });
+      if (booking.truck_id) await TruckModel.update(booking.truck_id, { status: 'available' });
+    }
+
+    const driverId = trip?.driver_id || booking.driver_id;
+    if (driverId) {
+      await NotificationModel.create({
+        userId: driverId,
+        title: 'Booking Cancelled',
+        message: `The client cancelled booking ${booking.booking_number}. Reason: ${reason.trim()}`,
+        type: 'booking',
+        meta: { booking_id: id, reason: reason.trim() },
+      });
+    }
+    const brokerId = trip?.broker_id || booking.broker_id;
+    if (brokerId) {
+      await NotificationModel.create({
+        userId: brokerId,
+        title: 'Booking Cancelled',
+        message: `The client cancelled booking ${booking.booking_number}. Reason: ${reason.trim()}`,
+        type: 'booking',
+        meta: { booking_id: id, reason: reason.trim() },
+      });
+    }
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'BOOKING_CANCELLED_BY_CLIENT',
+      entity: 'bookings',
+      entityId: id,
+      meta: { reason: reason.trim(), previous_status: booking.status },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Booking ${id} cancelled by client ${req.user.id}: ${reason.trim()}`);
+    const full = await BookingModel.findById(id);
+    const timeline = await BookingModel.getTimeline(id);
+    return successResponse(res, 200, 'Booking cancelled', { booking: projectBooking(full, timeline, req.user.role) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // Only these statuses may be removed from a broker/driver's own list — an in-progress
 // shipment (confirmed/assigned/en_route_pickup/picked_up/in_transit/delivered) can't be
 // hidden this way, so an active or just-finished-but-unsettled trip is never accidentally
@@ -476,4 +564,4 @@ const requestTruckForBooking = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, deleteBooking };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, deleteBooking };

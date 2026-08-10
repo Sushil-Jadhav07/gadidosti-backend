@@ -78,6 +78,16 @@ class DriverRequestModel {
     );
   }
 
+  // Used when the client cancels a booking outright — there's no "winning" request to
+  // except, every still-open request for it is now moot (mirrors JobRequestModel's
+  // declineAllForBooking).
+  static async declineAllForBooking(bookingId) {
+    await pool.query(
+      `UPDATE driver_requests SET status = 'declined' WHERE booking_id = $1 AND status IN ('pending', 'countered')`,
+      [bookingId]
+    );
+  }
+
   // Driver (or broker, once driver_timeout_at is set) counters — only while 'pending'
   // (their turn). Flips to 'countered' so the client sees it and responds next. `actor` is
   // recorded in offer_history as 'driver' or 'broker' so the client can tell who they're
