@@ -159,12 +159,30 @@ const trackBooking = async (req, res, next) => {
     if (!booking) return errorResponse(res, 404, 'Booking not found');
     if (!assertCanView(booking, req.user)) return errorResponse(res, 403, 'You do not have access to this booking');
 
-    const location = booking.driver_id ? await DriverProfileModel.findLocation(booking.driver_id) : null;
+    // Surfaced so the client's tracking screen can show an incident banner without a
+    // separate call to GET /api/trips/:id/incidents. Fetched first (not just for the
+    // incident) since a delivered/completed booking needs it for the frozen-location branch
+    // below too.
+    const trip = await TripModel.findByBookingId(booking.id);
+    const incident = trip ? await TripIncidentModel.findLatestUnresolvedByTrip(trip.id) : null;
+
+    // Once a trip is delivered/completed, the driver's location keeps moving (their next
+    // trip, heading home, etc.) — driver_profiles.current_lat/lng is the driver's live
+    // position, not this trip's. Showing it here would silently drift the map away from
+    // where this shipment actually ended up. trips.current_lat/lng, by contrast, stops
+    // updating the moment this trip leaves the driver's "active trip" (GET /api/trips/active
+    // excludes delivered/completed/cancelled — see useDriverLocationTracking.js), so it's
+    // frozen at (or very near) the real delivery point — exactly what a finished shipment's
+    // tracking screen should show.
+    const isTerminal = ['delivered', 'completed'].includes(booking.status);
+    const location = isTerminal
+      ? (trip && trip.current_lat != null && trip.current_lng != null ? { current_lat: trip.current_lat, current_lng: trip.current_lng, last_location_at: trip.delivered_at } : null)
+      : (booking.driver_id ? await DriverProfileModel.findLocation(booking.driver_id) : null);
     const hasLocation = !!(location && location.current_lat != null && location.current_lng != null);
 
     let distanceRemainingKm = null;
     let etaMinutes = null;
-    if (hasLocation && booking.drop_lat != null && booking.drop_lng != null) {
+    if (!isTerminal && hasLocation && booking.drop_lat != null && booking.drop_lng != null) {
       distanceRemainingKm = haversineKm(
         Number(location.current_lat), Number(location.current_lng),
         Number(booking.drop_lat), Number(booking.drop_lng)
@@ -172,16 +190,13 @@ const trackBooking = async (req, res, next) => {
       etaMinutes = Math.round((distanceRemainingKm / AVERAGE_SPEED_KMPH) * 60);
     }
 
-    // Surfaced so the client's tracking screen can show an incident banner without a
-    // separate call to GET /api/trips/:id/incidents.
-    const trip = await TripModel.findByBookingId(booking.id);
-    const incident = trip ? await TripIncidentModel.findLatestUnresolvedByTrip(trip.id) : null;
-
     return successResponse(res, 200, 'Booking location fetched', {
       status: booking.status,
       driverLat: hasLocation ? Number(location.current_lat) : null,
       driverLng: hasLocation ? Number(location.current_lng) : null,
       lastLocationAt: location ? location.last_location_at : null,
+      isTerminal,
+      deliveredAt: trip?.delivered_at || null,
       distanceRemainingKm: distanceRemainingKm != null ? Math.round(distanceRemainingKm * 100) / 100 : null,
       etaMinutes,
       incident: incident ? {
