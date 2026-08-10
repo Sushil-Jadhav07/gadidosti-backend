@@ -100,6 +100,10 @@ const projectTrip = async (row, timeline) => {
   },
   distance: row.distance,
   estimatedTime: row.estimated_time,
+  // Ordered pickup -> loading -> unloading -> drop sequence (see driverRequest.controller.js's
+  // finalizeDriverRequest). Just [pickup, drop] for every trip with no extra stops — the
+  // driver app only renders the checklist when a 'loading'/'unloading' entry is present.
+  stops: row.stops || [],
   cargo: {
     material: row.cargo_material,
     weight: row.cargo_weight,
@@ -277,6 +281,18 @@ const updateTripStatus = async (req, res, next) => {
       }
     }
 
+    // A trip with extra loading/unloading stops (trips.stops beyond the base [pickup, drop]
+    // pair) must have those checked off via PATCH .../stops/:index/complete before the coarse
+    // status can advance past them — prevents skipping the checklist by hitting this endpoint
+    // directly. No-op for the common case (no extra stops).
+    const stops = Array.isArray(trip.stops) ? trip.stops : [];
+    if (status === 'in_transit' && stops.some((s) => s.type === 'loading' && s.status !== 'done')) {
+      return errorResponse(res, 409, 'Complete all loading stops before starting delivery.');
+    }
+    if (status === 'delivered' && stops.some((s) => s.type === 'unloading' && s.status !== 'done')) {
+      return errorResponse(res, 409, 'Complete all unloading stops before marking delivered.');
+    }
+
     // Settlement/trip-count must fire exactly once per trip. The driver flow sends two
     // separate status updates for one trip (in_transit -> delivered, then, once POD is
     // uploaded, delivered -> completed) — only the transition *into* 'completed' pays out.
@@ -370,6 +386,67 @@ const updateTripStatus = async (req, res, next) => {
     const full = await TripModel.findById(id);
     const timeline = await TripModel.getTimeline(id);
     return successResponse(res, 200, 'Trip status updated', { trip: await projectTrip(full || trip, timeline) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/trips/:id/stops/:index/complete ───────────────────────────────
+// Checks off one extra loading/unloading stop (never the base pickup/drop pair — those stay
+// on PATCH .../status, untouched). Same proximity gate as pickup/delivered above, plus
+// sequential-within-type enforcement so a driver can't skip ahead to stop 2 before stop 1.
+const completeTripStop = async (req, res, next) => {
+  try {
+    const { id, index } = req.params;
+    const stopIndex = Number(index);
+
+    const trip = await TripModel.findById(id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (!assertCanView(trip, req.user)) return errorResponse(res, 403, 'You do not have access to this trip');
+    if (req.user.role !== 'driver') return errorResponse(res, 403, 'Only the driver on this trip can complete a stop');
+
+    const stops = Array.isArray(trip.stops) ? trip.stops : [];
+    const stop = stops[stopIndex];
+    if (!stop) return errorResponse(res, 404, 'Stop not found');
+    if (stop.type !== 'loading' && stop.type !== 'unloading') {
+      return errorResponse(res, 422, 'Pickup and drop are completed via trip status, not this endpoint');
+    }
+    if (stop.status === 'done') return errorResponse(res, 409, 'This stop is already complete');
+
+    const earlierPending = stops.some((s, i) => i < stopIndex && s.type === stop.type && s.status !== 'done');
+    if (earlierPending) {
+      return errorResponse(res, 409, `Complete the earlier ${stop.type} stops first`);
+    }
+
+    const hasTruckLocation = trip.current_lat != null && trip.current_lng != null;
+    const hasTargetLocation = stop.lat != null && stop.lng != null;
+    if (!hasTruckLocation || !hasTargetLocation) {
+      return errorResponse(res, 409, 'Your current location is not available yet — enable location sharing and try again.');
+    }
+    const distanceKm = haversineKm(Number(trip.current_lat), Number(trip.current_lng), Number(stop.lat), Number(stop.lng));
+    if (distanceKm > PICKUP_PROXIMITY_KM) {
+      return errorResponse(
+        res, 409,
+        `You're ${distanceKm.toFixed(1)}km from ${stop.location || 'this stop'} — move within ${PICKUP_PROXIMITY_KM * 1000}m to mark it complete.`
+      );
+    }
+
+    const updated = await TripModel.completeStop(id, stopIndex);
+    if (!updated) return errorResponse(res, 404, 'Stop not found');
+
+    await TripModel.addTimelineStep(id, { step: `${stop.type}_stop_${stopIndex}`, position: 50 + stopIndex });
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'TRIP_STOP_COMPLETED',
+      entity: 'trips',
+      entityId: id,
+      meta: { stop_index: stopIndex, stop_type: stop.type },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Trip ${id} stop ${stopIndex} (${stop.type}) completed by driver ${req.user.id}`);
+    const timeline = await TripModel.getTimeline(id);
+    return successResponse(res, 200, 'Stop completed', { trip: await projectTrip(updated, timeline) });
   } catch (err) {
     next(err);
   }
@@ -779,6 +856,6 @@ const getPodFile = async (req, res, next) => {
 };
 
 module.exports = {
-  listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, declineTrip, updateTripLocation,
+  listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
   reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
 };

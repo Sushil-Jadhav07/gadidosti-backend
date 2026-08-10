@@ -56,6 +56,13 @@ const projectBooking = (row, timeline, role) => {
     platformFee: row.platform_fee,
     podUrl: row.pod_url || null,
     rating: row.rating || null,
+    // Live truck position + the full pickup/loading/unloading/drop sequence, sourced from the
+    // linked trip — lets the broker's Job Detail map show the truck moving during the trip and
+    // the complete stop checklist (with done/pending status) once it's over. Null/empty until
+    // a trip actually exists for this booking.
+    currentLat: row.trip_current_lat != null ? Number(row.trip_current_lat) : null,
+    currentLng: row.trip_current_lng != null ? Number(row.trip_current_lng) : null,
+    stops: row.trip_stops || [],
     // Total delivery duration, same computation as trip.controller.js's projectTrip — null
     // until the linked trip has both a started_at and a delivered_at.
     timeTakenMinutes: row.trip_started_at && row.trip_delivered_at

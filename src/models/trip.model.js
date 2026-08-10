@@ -22,21 +22,21 @@ class TripModel {
     bookingId, driverId, brokerId, pickupContactPerson, pickupContactPhone, pickupAddress,
     pickupTime, pickupLat, pickupLng, dropContactPerson, dropContactPhone, dropAddress,
     dropTime, dropLat, dropLng, distance, estimatedTime, cargoMaterial, cargoWeight,
-    cargoQuantity, cargoSpecialInstructions, cargoValue, earnings,
+    cargoQuantity, cargoSpecialInstructions, cargoValue, earnings, stops,
   }) {
     const result = await pool.query(
       `INSERT INTO trips (
          booking_id, driver_id, broker_id, pickup_contact_person, pickup_contact_phone, pickup_address,
          pickup_time, pickup_lat, pickup_lng, drop_contact_person, drop_contact_phone, drop_address,
          drop_time, drop_lat, drop_lng, distance, estimated_time, cargo_material, cargo_weight,
-         cargo_quantity, cargo_special_instructions, cargo_value, earnings
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+         cargo_quantity, cargo_special_instructions, cargo_value, earnings, stops
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
        RETURNING *`,
       [
         bookingId, driverId || null, brokerId || null, pickupContactPerson || null, pickupContactPhone || null, pickupAddress || null,
         pickupTime || null, pickupLat || null, pickupLng || null, dropContactPerson || null, dropContactPhone || null, dropAddress || null,
         dropTime || null, dropLat || null, dropLng || null, distance || null, estimatedTime || null, cargoMaterial || null, cargoWeight || null,
-        cargoQuantity || null, cargoSpecialInstructions || null, cargoValue || null, earnings || null,
+        cargoQuantity || null, cargoSpecialInstructions || null, cargoValue || null, earnings || null, JSON.stringify(stops || []),
       ]
     );
     return result.rows[0];
@@ -181,6 +181,22 @@ class TripModel {
               updated_at = NOW()
        WHERE id = $2 RETURNING *`,
       [status, id]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Marks stops[index] done — read-modify-write in JS rather than a jsonb_set path expression,
+  // since only the assigned driver ever calls this (no concurrent-writer race to worry about)
+  // and a full-array rewrite is far simpler to reason about than dynamic JSONB path building.
+  static async completeStop(id, index) {
+    const trip = await this.findById(id);
+    if (!trip) return null;
+    const stops = Array.isArray(trip.stops) ? [...trip.stops] : [];
+    if (!stops[index]) return null;
+    stops[index] = { ...stops[index], status: 'done', completedAt: new Date().toISOString() };
+    const result = await pool.query(
+      `UPDATE trips SET stops = $1::jsonb, updated_at = NOW() WHERE id = $2 RETURNING *`,
+      [JSON.stringify(stops), id]
     );
     return result.rows[0] || null;
   }

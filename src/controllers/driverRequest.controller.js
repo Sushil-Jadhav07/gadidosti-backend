@@ -94,6 +94,18 @@ const finalizeDriverRequest = async (driverRequest, amount) => {
   await TruckModel.update(driverRequest.truck_id, { status: 'on_trip' });
   await DriverProfileModel.update(driverRequest.driver_id, { status: 'on_trip', truckId: driverRequest.truck_id });
 
+  // Ordered sequence of every stop this trip visits — pickup, any extra loading/unloading
+  // points the client added at booking time (bookings.loading_locations/unloading_locations,
+  // dormant until now), and the final drop. Built once here so it never drifts from the
+  // booking; the driver app only shows a checklist when there are loading/unloading entries,
+  // so a booking with none of those produces the same [pickup, drop] shape trips always had.
+  const stops = [
+    { type: 'pickup', location: booking.pickup_location, lat: booking.pickup_lat, lng: booking.pickup_lng, status: 'pending', completedAt: null },
+    ...(booking.loading_locations || []).map((s) => ({ type: 'loading', location: s.location, lat: s.lat, lng: s.lng, status: 'pending', completedAt: null })),
+    ...(booking.unloading_locations || []).map((s) => ({ type: 'unloading', location: s.location, lat: s.lat, lng: s.lng, status: 'pending', completedAt: null })),
+    { type: 'drop', location: booking.drop_location, lat: booking.drop_lat, lng: booking.drop_lng, status: 'pending', completedAt: null },
+  ];
+
   const trip = await TripModel.create({
     bookingId: booking.id,
     driverId: driverRequest.driver_id,
@@ -110,6 +122,7 @@ const finalizeDriverRequest = async (driverRequest, amount) => {
     cargoQuantity: booking.quantity,
     cargoValue: booking.amount,
     earnings: booking.amount && booking.platform_fee ? booking.amount - booking.platform_fee : booking.amount,
+    stops,
   });
   await TripModel.addTimelineStep(trip.id, { step: 'Pickup', done: false, position: 0, occurredAt: null });
   await TripModel.addTimelineStep(trip.id, { step: 'In Transit', done: false, position: 1, occurredAt: null });

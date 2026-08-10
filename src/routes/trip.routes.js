@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const {
-  listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, declineTrip, updateTripLocation,
+  listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
   reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
 } = require('../controllers/trip.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
@@ -153,6 +153,31 @@ router.get('/trips/:id', authenticate, authorize('broker', 'driver', 'admin'), g
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.patch('/trips/:id/status', authenticate, authorize('broker', 'driver', 'admin'), idempotent('PATCH /trips/:id/status'), updateTripStatusValidation, validate, updateTripStatus);
+
+/**
+ * @swagger
+ * /api/trips/{id}/stops/{index}/complete:
+ *   patch:
+ *     tags: [Trips]
+ *     summary: Mark one extra loading/unloading stop complete (proximity-gated, driver only)
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: index
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Stop completed
+ *       409:
+ *         description: Too far from the stop, an earlier stop of the same type is still pending, or it's already done
+ */
+router.patch('/trips/:id/stops/:index/complete', authenticate, authorize('driver'), completeTripStop);
 
 /**
  * @swagger

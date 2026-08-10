@@ -859,6 +859,32 @@ const runMigrations = async (client) => {
       ALTER TABLE trips ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
     `);
 
+    // ── TRIP STOPS (mirrors db/30trip_stops.sql) ──
+    // Ordered sequence of every stop a trip visits — pickup, extra loading/unloading points,
+    // final drop — built once at trip creation (driverRequest.controller.js's
+    // finalizeDriverRequest). Defaults to '[]' for pre-existing trips.
+    await client.query(`
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS stops JSONB NOT NULL DEFAULT '[]'::jsonb;
+    `);
+
+    // ── TRACKING LAST KNOWN LOCATION (mirrors db/31tracking_last_known.sql) ──
+    // Opportunistic cache of each Bolt GPS device's last known position, upserted on every
+    // successful vendor fetch — lets the admin Tracking page show a "last seen" fallback
+    // instead of nothing when the live vendor call fails or the device is briefly offline.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS tracking_last_known (
+        device_imei   TEXT PRIMARY KEY,
+        device_name   TEXT,
+        latitude      NUMERIC(9,6),
+        longitude     NUMERIC(9,6),
+        speed         NUMERIC,
+        course        NUMERIC,
+        ignition      BOOLEAN,
+        raw           JSONB,
+        recorded_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

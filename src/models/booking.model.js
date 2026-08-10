@@ -17,7 +17,10 @@ const SELECT_WITH_JOINS = `
          t.registration AS truck_reg,
          trip.pod_url AS pod_url,
          trip.started_at AS trip_started_at,
-         trip.delivered_at AS trip_delivered_at
+         trip.delivered_at AS trip_delivered_at,
+         trip.current_lat AS trip_current_lat,
+         trip.current_lng AS trip_current_lng,
+         trip.stops AS trip_stops
   FROM bookings b
   LEFT JOIN users broker ON broker.id = b.broker_id
   LEFT JOIN users client ON client.id = b.client_id
