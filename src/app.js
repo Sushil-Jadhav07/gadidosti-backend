@@ -8,6 +8,7 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const swaggerUi = require('swagger-ui-express');
 
+const { verifyAccessToken } = require('./utils/jwt');
 const swaggerSpec   = require('./config/swagger');
 const authRoutes    = require('./routes/auth.routes');
 const userRoutes    = require('./routes/user.routes');
@@ -55,18 +56,41 @@ app.use(cors({
 if (process.env.NODE_ENV === 'production') {
   app.use(rateLimit({
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-    // Raised from 100 — this is IP-keyed and shared across every route and every user behind
-    // that IP (office wifi, mobile carrier NAT), so several real users testing/working from
-    // the same network exhaust it collectively, not per-person. Override via RATE_LIMIT_MAX
-    // if this still isn't enough.
-    max: parseInt(process.env.RATE_LIMIT_MAX) || 300,
+    // Raised from 100, then again from 300 — every screen in every app now polls something
+    // (negotiation fallback polling, live tracking, trip-active refresh, admin device polls,
+    // ...), and once keying was fixed to be per-user (see keyGenerator below) there's no more
+    // reason to keep this artificially low just to protect against a shared-IP pileup.
+    // Override via RATE_LIMIT_MAX if this still isn't enough.
+    max: parseInt(process.env.RATE_LIMIT_MAX) || 600,
     standardHeaders: true,
     legacyHeaders: false,
+    // Keyed by the authenticated user's id (decoded from the bearer token right here — not a
+    // full `authenticate` call, no DB lookup, just enough to get a stable per-user key) instead
+    // of raw IP. This is the actual fix for "too many requests hitting everyone on the VPS":
+    // almost every request in this app is authenticated, and on a VPS every request passes
+    // through the same nginx reverse proxy — if X-Forwarded-For isn't being forwarded exactly
+    // right there (a one-line nginx config detail, easy to get wrong), IP-based keying quietly
+    // collapses down to ONE shared bucket for the entire server, so any handful of active users
+    // trips the limit for everyone at once. Keying by user id sidesteps that entirely, and as a
+    // bonus stops the old "office wifi / mobile carrier NAT" problem this comment used to
+    // describe. Only truly unauthenticated requests (login, register, health) fall back to IP,
+    // which is the right scope for those anyway (brute-force protection).
+    keyGenerator: (req) => {
+      const authHeader = req.headers.authorization;
+      if (authHeader?.startsWith('Bearer ')) {
+        try {
+          const decoded = verifyAccessToken(authHeader.slice(7));
+          if (decoded?.id) return `user:${decoded.id}`;
+        } catch {
+          // Expired/invalid token — fall through to IP; the route's own `authenticate`
+          // middleware will reject the request properly, this is just the rate-limit key.
+        }
+      }
+      return req.ip;
+    },
     // Driver GPS pings are frequent by design and get their own, much larger, per-driver
     // limiter instead (driverLocationRateLimit.middleware.js, applied on that route in
-    // vehicle.routes.js) — this general IP-keyed limit is both too low for that traffic on
-    // its own and shared across every device behind the same IP, which starves other users
-    // on the same network the moment one driver starts pinging their location.
+    // vehicle.routes.js).
     skip: (req) => req.path === '/api/vehicles/drivers/me/location',
     message: { success: false, message: 'Too many requests, please try again later' },
   }));
