@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { AVERAGE_SPEED_KMPH } = require('../utils/geo');
 
 // % delta helper for the dashboard's up/down-arrow stats. 0 previous with
 // a positive current reads as a full "+100%" gain rather than dividing by zero.
