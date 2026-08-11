@@ -303,6 +303,46 @@ const cancelBooking = async (req, res, next) => {
   }
 };
 
+// ─── PATCH /api/bookings/:id/pay ──────────────────────────────────────────────
+// Client marks a booking as paid — used both by the post-confirmation "Continue to Payment"
+// step (RequestDriver.jsx / ChooseBroker.jsx) and BookingDetail.jsx's standalone "Pay Now"
+// fallback. No real payment gateway is wired up yet (PaymentSheet is a simulated checkout);
+// this just records the client's completed payment and how they said they paid.
+const payBooking = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { payment_mode } = req.body;
+
+    const booking = await BookingModel.findById(id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (booking.payment_status === 'paid') return errorResponse(res, 409, 'This booking is already paid');
+    if (booking.status === 'cancelled') return errorResponse(res, 409, 'This booking is cancelled');
+
+    await BookingModel.update(id, {
+      payment_status: 'paid',
+      payment_mode: payment_mode || null,
+      paid_at: new Date(),
+    });
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'BOOKING_PAID_BY_CLIENT',
+      entity: 'bookings',
+      entityId: id,
+      meta: { payment_mode: payment_mode || null },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Booking ${id} marked paid by client ${req.user.id} (mode: ${payment_mode || 'unspecified'})`);
+    const full = await BookingModel.findById(id);
+    const timeline = await BookingModel.getTimeline(id);
+    return successResponse(res, 200, 'Payment recorded', { booking: projectBooking(full, timeline, req.user.role) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // Only these statuses may be removed from a broker/driver's own list — an in-progress
 // shipment (confirmed/assigned/en_route_pickup/picked_up/in_transit/delivered) can't be
 // hidden this way, so an active or just-finished-but-unsettled trip is never accidentally
@@ -583,4 +623,4 @@ const getClientAnalytics = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, deleteBooking, getClientAnalytics };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, deleteBooking, getClientAnalytics };

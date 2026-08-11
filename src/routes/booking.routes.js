@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, deleteBooking, getClientAnalytics } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, deleteBooking, getClientAnalytics } = require('../controllers/booking.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
@@ -373,6 +373,54 @@ router.post('/bookings/:id/request-truck', authenticate, authorize('client'), re
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/bookings/:id/cancel', authenticate, authorize('client'), cancelBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/pay:
+ *   patch:
+ *     tags: [Bookings]
+ *     summary: Mark a booking as paid (client)
+ *     description: |
+ *       No real payment gateway is wired up yet — the client app's PaymentSheet is a simulated
+ *       checkout. This just records that payment completed and how, once a driver/broker has
+ *       confirmed the booking (or any time after, as a standalone "Pay Now" fallback).
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               payment_mode: { type: string, description: "How the client paid — upi/cards/netbanking/wallet, matches the PaymentSheet tab used" }
+ *     responses:
+ *       200:
+ *         description: Payment recorded
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Already paid, or booking is cancelled
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/bookings/:id/pay', authenticate, authorize('client'), payBooking);
 
 /**
  * @swagger
