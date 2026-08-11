@@ -107,7 +107,9 @@ class AnalyticsModel {
   // just filtered to one client_id instead of platform-wide. Used by the client app's own
   // dashboard (GET /api/analytics/client).
   static async clientDashboard(clientId) {
-    const [activeBookings, delayedTrips, paidInvoices, newBookings] = await Promise.all([
+    const [totalBookings, cancelledBookings, activeBookings, delayedTrips, paidInvoices, newBookings] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM bookings WHERE client_id = $1`, [clientId]),
+      pool.query(`SELECT COUNT(*) FROM bookings WHERE client_id = $1 AND status = 'cancelled'`, [clientId]),
       pool.query(`SELECT COUNT(*) FROM bookings WHERE client_id = $1 AND status NOT IN ('delivered', 'completed', 'cancelled')`, [clientId]),
       pool.query(
         `SELECT COUNT(*) FROM trips tr JOIN bookings b ON b.id = tr.booking_id
@@ -121,6 +123,8 @@ class AnalyticsModel {
     ]);
 
     return {
+      totalBookings: parseInt(totalBookings.rows[0].count),
+      cancelledBookings: parseInt(cancelledBookings.rows[0].count),
       activeBookings: parseInt(activeBookings.rows[0].count),
       delayedBookings: parseInt(delayedTrips.rows[0].count),
       paidInvoices: parseInt(paidInvoices.rows[0].count),
