@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, deleteBooking } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, deleteBooking, getClientAnalytics } = require('../controllers/booking.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
@@ -414,5 +414,23 @@ router.patch('/bookings/:id/cancel', authenticate, authorize('client'), cancelBo
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.delete('/bookings/:id', authenticate, authorize('admin', 'broker', 'driver'), deleteBooking);
+
+/**
+ * @swagger
+ * /api/analytics/client:
+ *   get:
+ *     tags: [Bookings]
+ *     summary: Client dashboard analytics (own bookings only)
+ *     description: Client-scoped mirror of GET /api/analytics/admin — activeBookings, delayedBookings, paidInvoices, newBookingsLast7Days, plus a 14-day spendSparkline and a 7-day weeklyBookings series, all filtered to the caller's own bookings.
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Client analytics fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ */
+router.get('/analytics/client', authenticate, authorize('client'), getClientAnalytics);
 
 module.exports = router;

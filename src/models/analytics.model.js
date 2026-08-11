@@ -102,6 +102,58 @@ class AnalyticsModel {
     `);
     return result.rows.map((r) => parseInt(r.count));
   }
+
+  // Client-scoped mirror of dashboard() above — same four metrics, same "delayed" heuristic,
+  // just filtered to one client_id instead of platform-wide. Used by the client app's own
+  // dashboard (GET /api/analytics/client).
+  static async clientDashboard(clientId) {
+    const [activeBookings, delayedTrips, paidInvoices, newBookings] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM bookings WHERE client_id = $1 AND status NOT IN ('delivered', 'completed', 'cancelled')`, [clientId]),
+      pool.query(
+        `SELECT COUNT(*) FROM trips tr JOIN bookings b ON b.id = tr.booking_id
+         WHERE b.client_id = $1 AND tr.status IN ('en_route_pickup', 'picked_up', 'in_transit')
+           AND tr.started_at IS NOT NULL AND tr.distance IS NOT NULL AND tr.distance > 0
+           AND NOW() > tr.started_at + ((tr.distance / $2::numeric) * 60 * 1.5) * INTERVAL '1 minute'`,
+        [clientId, AVERAGE_SPEED_KMPH]
+      ),
+      pool.query(`SELECT COUNT(*) FROM bookings WHERE client_id = $1 AND payment_status = 'paid'`, [clientId]),
+      pool.query(`SELECT COUNT(*) FROM bookings WHERE client_id = $1 AND created_at >= NOW() - INTERVAL '7 days'`, [clientId]),
+    ]);
+
+    return {
+      activeBookings: parseInt(activeBookings.rows[0].count),
+      delayedBookings: parseInt(delayedTrips.rows[0].count),
+      paidInvoices: parseInt(paidInvoices.rows[0].count),
+      newBookingsLast7Days: parseInt(newBookings.rows[0].count),
+    };
+  }
+
+  // Last 14 days of this client's spend, one point per day — the "Revenue" chart's client-side
+  // equivalent (there's no platform revenue to show a client, just what they've spent).
+  static async clientSpendSparkline(clientId) {
+    const result = await pool.query(
+      `SELECT d::date AS day, COALESCE((
+         SELECT SUM(amount) FROM bookings b WHERE b.client_id = $1 AND date_trunc('day', b.created_at) = d
+       ), 0) AS amount
+       FROM generate_series(NOW() - INTERVAL '13 days', NOW(), INTERVAL '1 day') AS d
+       ORDER BY d`,
+      [clientId]
+    );
+    return result.rows.map((r) => ({ day: r.day, amount: parseFloat(r.amount) }));
+  }
+
+  // This client's booking count for each of the last 7 days (Sun..Sat-style "weekly overview").
+  static async clientWeeklyBookings(clientId) {
+    const result = await pool.query(
+      `SELECT d::date AS day, COALESCE((
+         SELECT COUNT(*) FROM bookings b WHERE b.client_id = $1 AND date_trunc('day', b.created_at) = d
+       ), 0) AS count
+       FROM generate_series(NOW() - INTERVAL '6 days', NOW(), INTERVAL '1 day') AS d
+       ORDER BY d`,
+      [clientId]
+    );
+    return result.rows.map((r) => ({ day: r.day, count: parseInt(r.count) }));
+  }
 }
 
 module.exports = AnalyticsModel;

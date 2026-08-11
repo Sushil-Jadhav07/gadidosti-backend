@@ -1,4 +1,5 @@
 const BookingModel = require('../models/booking.model');
+const AnalyticsModel = require('../models/analytics.model');
 const PricingModel = require('../models/pricing.model');
 const JobRequestModel = require('../models/jobRequest.model');
 const DriverRequestModel = require('../models/driverRequest.model');
@@ -564,4 +565,22 @@ const requestTruckForBooking = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, deleteBooking };
+// ─── GET /api/analytics/client ─────────────────────────────────────────────────
+// Client-scoped mirror of GET /api/analytics/admin — the client dashboard's own "Recent
+// Activities" stats plus the two chart series (spend sparkline, weekly booking count), all
+// filtered to this client's own bookings.
+const getClientAnalytics = async (req, res, next) => {
+  try {
+    const [stats, spendSparkline, weeklyBookings] = await Promise.all([
+      AnalyticsModel.clientDashboard(req.user.id),
+      AnalyticsModel.clientSpendSparkline(req.user.id),
+      AnalyticsModel.clientWeeklyBookings(req.user.id),
+    ]);
+
+    return successResponse(res, 200, 'Client analytics fetched', { ...stats, spendSparkline, weeklyBookings });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, deleteBooking, getClientAnalytics };

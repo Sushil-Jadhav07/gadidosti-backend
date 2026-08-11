@@ -28,6 +28,11 @@ Every request needs `Authorization: Bearer <access_token>` unless stated otherwi
 
 ---
 
+> 📄 **Building a new client (mobile app, etc.) against negotiation specifically?** See
+> [`NEGOTIATION_API_GUIDE.md`](./NEGOTIATION_API_GUIDE.md) — a dedicated, step-by-step
+> integration guide with full request/response bodies, a worked example, and polling/socket
+> guidance. This section is the summary version.
+
 ## 1. Negotiation flow (driver ↔ broker ↔ client)
 
 Two independent entry points into the same negotiation machinery (`driver_requests` table),
