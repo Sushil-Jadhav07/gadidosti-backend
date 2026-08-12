@@ -39,6 +39,10 @@ const projectDriverRequest = (row) => ({
   // Whose turn it is to respond: while status='pending' and driverTimedOut is false, it's the
   // driver's; once driverTimedOut is true, it's the broker's; while 'countered', it's the client's.
   driverTimedOut: !!row.driver_timeout_at,
+  // Only meaningful while status='awaiting_confirmation' — 'client' means the client already
+  // committed and it's the driver/broker's turn to confirm or decline; 'respondent' means the
+  // reverse. Null otherwise.
+  pendingConfirmationBy: row.pending_confirmation_by || null,
   // Full back-and-forth: [{ by: 'client'|'driver'|'broker', amount, note, at }], oldest first.
   offerHistory: row.offer_history || [],
   createdAt: row.created_at,
@@ -132,26 +136,45 @@ const finalizeDriverRequest = async (driverRequest, amount) => {
 };
 
 // ─── PATCH /api/driver-requests/:id/accept ────────────────────────────────────
-// Driver (or broker, once the driver's timed out) accepting the client's current asking price
-// finalizes the booking immediately — the price is already agreed (the client set it when
-// creating the request), so there's nothing left for the client to confirm. A client-side
-// action is only needed when the *price itself* changes (see counterDriverRequest, answered by
-// clientAcceptDriverRequest/clientCounterDriverRequest/clientRejectDriverRequest).
+// Driver (or broker, once the driver's timed out) agreeing to the client's current asking
+// price. Mutual-confirmation: this is a dual-purpose CAS (DriverRequestModel.respondentAccept)
+// — if the client hasn't already committed, this call only commits the respondent's own side
+// (status -> 'awaiting_confirmation') and the booking is NOT finalized yet; the client must
+// separately confirm via client-accept. If the client had already committed first, this call
+// IS that second, finalizing confirmation, and the trip is created immediately.
 const acceptDriverRequest = async (req, res, next) => {
   try {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (!assertCanRespond(driverRequest, req.user)) return errorResponse(res, 403, 'Not yours to respond to');
-    if (driverRequest.status !== 'pending') return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
+    const canActNow = driverRequest.status === 'pending'
+      || (driverRequest.status === 'awaiting_confirmation' && driverRequest.pending_confirmation_by === 'client');
+    if (!canActNow) return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
 
     const updated = await DriverRequestModel.respondentAccept(driverRequest.id);
     if (!updated) return errorResponse(res, 400, 'Request is already actioned');
 
+    if (updated.status === 'awaiting_confirmation') {
+      // First mover — nothing is finalized yet. Notify the client that it's their turn.
+      await NotificationModel.create({
+        userId: driverRequest.client_id,
+        title: 'Driver Accepted — Please Confirm',
+        message: `${driverRequest.driver_name || 'The driver'} accepted your request at ₹${updated.amount} for booking ${driverRequest.booking_number}. Confirm to finalize.`,
+        type: 'booking',
+        meta: { booking_id: driverRequest.booking_id, driver_request_id: driverRequest.id },
+      });
+      const fresh = await DriverRequestModel.findById(driverRequest.id);
+      emitDriverRequestUpdate(driverRequest.client_id, fresh);
+      logger.info(`Driver request ${driverRequest.id} accepted by ${req.user.role} ${req.user.id} — awaiting client confirmation`);
+      return successResponse(res, 200, 'Accepted — waiting for the client to confirm', { request: projectDriverRequest(fresh) });
+    }
+
     const result = await finalizeDriverRequest(updated, updated.amount);
     if (!result) {
       // Booking moved on some other way (e.g. the broker-broadcast flow won it first) —
-      // undo the accept so this request doesn't sit in a false 'accepted' state.
-      await DriverRequestModel.respondentDecline(driverRequest.id).catch(() => {});
+      // undo the accept so this request doesn't sit in a false 'accepted' state. Must CAS
+      // from 'accepted' (rollbackAccepted), not 'pending' — the row is already 'accepted' here.
+      await DriverRequestModel.rollbackAccepted(driverRequest.id).catch(() => {});
       return errorResponse(res, 409, 'This booking is no longer available');
     }
     const { trip } = result;
@@ -203,7 +226,9 @@ const declineDriverRequest = async (req, res, next) => {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (!assertCanRespond(driverRequest, req.user)) return errorResponse(res, 403, 'Not yours to respond to');
-    if (driverRequest.status !== 'pending') return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
+    const canActNow = driverRequest.status === 'pending'
+      || (driverRequest.status === 'awaiting_confirmation' && driverRequest.pending_confirmation_by === 'client');
+    if (!canActNow) return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
 
     const updated = await DriverRequestModel.respondentDecline(driverRequest.id);
     if (!updated) return errorResponse(res, 400, 'Request is already actioned');
@@ -269,27 +294,47 @@ const counterDriverRequest = async (req, res, next) => {
 };
 
 // ─── PATCH /api/driver-requests/:id/client-accept ─────────────────────────────
-// The confirmation step — unlike the broker-broadcast flow (where client-accept only picks a
-// broker, and driver assignment is a separate later step), here the truck+driver are already
-// known, so accepting finalizes the whole booking in one shot: status -> 'assigned' directly,
-// truck/driver marked on_trip, and a trip record created — mirroring job.controller.js's
-// assignDriver, minus the reassignment branch (this is always a first assignment, since a
-// driver request only exists for a still-'pending' booking).
+// Mutual-confirmation, same dual-purpose CAS pattern as acceptDriverRequest above
+// (DriverRequestModel.clientAcceptIfCountered): if the driver/broker hasn't already committed,
+// this only commits the client's own side (status -> 'awaiting_confirmation') and does NOT
+// finalize anything yet. Only once BOTH sides have accepted does this finalize the whole
+// booking in one shot: status -> 'assigned', truck/driver marked on_trip, trip record created —
+// mirroring job.controller.js's assignDriver, minus the reassignment branch (this is always a
+// first assignment, since a driver request only exists for a still-'pending' booking).
 const clientAcceptDriverRequest = async (req, res, next) => {
   try {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (driverRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
-    if (!['pending', 'countered'].includes(driverRequest.status)) return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
+    const canActNow = ['pending', 'countered'].includes(driverRequest.status)
+      || (driverRequest.status === 'awaiting_confirmation' && driverRequest.pending_confirmation_by === 'respondent');
+    if (!canActNow) return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
 
     const claimed = await DriverRequestModel.clientAcceptIfCountered(driverRequest.id);
     if (!claimed) return errorResponse(res, 400, 'Request is already actioned');
 
+    if (claimed.status === 'awaiting_confirmation') {
+      // First mover — nothing is finalized yet. Notify the driver/broker that it's their turn.
+      await NotificationModel.create({
+        userId: driverRequest.driver_id,
+        title: 'Client Accepted — Please Confirm',
+        message: `The client accepted at ₹${claimed.amount} for booking ${driverRequest.booking_number}. Confirm to finalize.`,
+        type: 'booking',
+        meta: { booking_id: driverRequest.booking_id, driver_request_id: driverRequest.id },
+      });
+      const fresh = await DriverRequestModel.findById(driverRequest.id);
+      emitDriverRequestUpdate(driverRequest.driver_id, fresh);
+      emitDriverRequestUpdate(driverRequest.broker_id, fresh);
+      logger.info(`Driver request ${driverRequest.id} accepted by client ${req.user.id} — awaiting driver confirmation`);
+      return successResponse(res, 200, 'Accepted — waiting for the driver to confirm', { request: projectDriverRequest(fresh) });
+    }
+
     const result = await finalizeDriverRequest(claimed, claimed.amount);
     if (!result) {
       // Booking moved on some other way (e.g. the broker-broadcast flow won it first) —
-      // undo the accept so this request doesn't sit in a false 'accepted' state.
-      await DriverRequestModel.respondentDecline(driverRequest.id).catch(() => {});
+      // undo the accept so this request doesn't sit in a false 'accepted' state. Must CAS
+      // from 'accepted' (rollbackAccepted), not 'pending' — the row is already 'accepted' here.
+      await DriverRequestModel.rollbackAccepted(driverRequest.id).catch(() => {});
       return errorResponse(res, 409, 'This booking is no longer available');
     }
     const { booking, trip } = result;

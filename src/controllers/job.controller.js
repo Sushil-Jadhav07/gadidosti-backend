@@ -7,6 +7,7 @@ const DriverRequestModel = require('../models/driverRequest.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { projectDriverRequest, emitDriverRequestUpdate } = require('./driverRequest.controller');
+const { getIO } = require('../realtime/socket');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
@@ -37,10 +38,22 @@ const projectJobRequest = (row) => ({
   weight: row.weight ? `${row.weight} ${row.weight_unit || ''}`.trim() : null,
   amount: row.amount,
   status: row.status,
+  // Only meaningful while status='awaiting_confirmation' — 'client' means the client already
+  // committed and it's the broker's turn to confirm or decline; 'broker' means the reverse.
+  pendingConfirmationBy: row.pending_confirmation_by || null,
   // Negotiation back-and-forth: [{ by: 'client'|'broker', amount, note, at }], oldest first.
   offerHistory: row.offer_history || [],
   timestamp: timeAgo(row.created_at),
 });
+
+// Pushes the fresh request straight to a specific user's socket (see socket.js's auto-joined
+// `user:${id}` room) — this subsystem had no real-time push at all before mutual-confirmation;
+// without it the new "please confirm" step would feel broken, waiting out an 8-15s poll cycle
+// to find out it's your turn (or that your booking just got confirmed).
+const emitJobRequestUpdate = (userId, jobRequest) => {
+  if (!userId || !jobRequest) return;
+  getIO()?.to(`user:${userId}`).emit('job-request-updated', projectJobRequest(jobRequest));
+};
 
 // ─── GET /api/jobs/requests ───────────────────────────────────────────────────
 const listJobRequests = async (req, res, next) => {
@@ -203,9 +216,12 @@ const declineJobRequest = async (req, res, next) => {
     const jobRequest = await JobRequestModel.findById(id);
     if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
     if (jobRequest.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your job request');
-    if (jobRequest.status !== 'pending') return errorResponse(res, 400, `Job request is already ${jobRequest.status}`);
+    const canActNow = jobRequest.status === 'pending'
+      || (jobRequest.status === 'awaiting_confirmation' && jobRequest.pending_confirmation_by === 'client');
+    if (!canActNow) return errorResponse(res, 400, `Job request is already ${jobRequest.status}`);
 
-    const updated = await JobRequestModel.setStatus(id, 'declined');
+    const updated = await JobRequestModel.setStatus(id, 'declined', ['pending', 'awaiting_confirmation']);
+    if (!updated) return errorResponse(res, 400, 'Job request is already actioned');
 
     await AuditLogModel.log({
       userId: req.user.id,
@@ -214,6 +230,8 @@ const declineJobRequest = async (req, res, next) => {
       entityId: id,
       ipAddress: req.ip,
     });
+
+    emitJobRequestUpdate(jobRequest.client_id, updated);
 
     return successResponse(res, 200, 'Job request declined', { request: updated });
   } catch (err) {
@@ -253,16 +271,112 @@ const counterJobRequest = async (req, res, next) => {
     });
 
     const full = await JobRequestModel.findById(id);
+    emitJobRequestUpdate(jobRequest.client_id, full);
     return successResponse(res, 200, 'Counter-offer sent', { request: projectJobRequest(full) });
   } catch (err) {
     next(err);
   }
 };
 
+// ─── PATCH /api/jobs/requests/:id/accept — broker agrees at the current amount ─────────────────
+// Mutual-confirmation: dual-purpose CAS (JobRequestModel.brokerAccept). If the client hasn't
+// already committed, this only commits the broker's own side (status -> 'awaiting_confirmation')
+// and does NOT confirm the booking yet — the client must separately confirm via client-accept.
+// If the client had already committed first, this call IS that second, finalizing confirmation.
+const acceptJobRequest = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const jobRequest = await JobRequestModel.findById(id);
+    if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
+    if (jobRequest.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your job request');
+    const canActNow = jobRequest.status === 'pending'
+      || (jobRequest.status === 'awaiting_confirmation' && jobRequest.pending_confirmation_by === 'client');
+    if (!canActNow) return errorResponse(res, 400, `Job request is not awaiting your response (${jobRequest.status})`);
+
+    const updated = await JobRequestModel.brokerAccept(id, req.user.id);
+    if (!updated) return errorResponse(res, 400, 'Job request is already actioned');
+
+    if (updated.status === 'awaiting_confirmation') {
+      // First mover — the booking is NOT confirmed yet. Notify the client that it's their turn.
+      await NotificationModel.create({
+        userId: jobRequest.client_id,
+        title: 'Broker Accepted — Please Confirm',
+        message: `A broker accepted at ₹${updated.amount} for your booking (${jobRequest.pickup} to ${jobRequest.drop}). Confirm to finalize.`,
+        type: 'booking',
+        meta: { booking_id: jobRequest.booking_id, job_request_id: id },
+      });
+      const fresh = await JobRequestModel.findById(id);
+      emitJobRequestUpdate(jobRequest.client_id, fresh);
+      logger.info(`Job request ${id} accepted by broker ${req.user.id} — awaiting client confirmation`);
+      return successResponse(res, 200, 'Accepted — waiting for the client to confirm', { request: projectJobRequest(fresh) });
+    }
+
+    const result = await finalizeJobRequest(updated, jobRequest);
+    if (!result) {
+      // Booking moved on some other way (e.g. the direct client-pick flow won it first) — must
+      // CAS from 'accepted' (rollbackAccepted), not blindly overwrite — the row is already
+      // 'accepted' here.
+      await JobRequestModel.rollbackAccepted(id).catch(() => {});
+      return errorResponse(res, 409, 'This booking is no longer available');
+    }
+    const { booking } = result;
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'JOB_REQUEST_ACCEPTED',
+      entity: 'job_requests',
+      entityId: id,
+      meta: { booking_id: booking.id, amount: updated.amount },
+      ipAddress: req.ip,
+    });
+
+    await NotificationModel.create({
+      userId: jobRequest.client_id,
+      title: 'Booking Confirmed',
+      message: `Your booking (${jobRequest.pickup} to ${jobRequest.drop}) is confirmed at ₹${updated.amount}.`,
+      type: 'booking',
+      meta: { booking_id: booking.id },
+    });
+
+    const fresh = await JobRequestModel.findById(id);
+    emitJobRequestUpdate(jobRequest.client_id, fresh);
+
+    logger.info(`Job request ${id} confirmed by broker ${req.user.id} — booking ${booking.id} confirmed`);
+    return successResponse(res, 200, 'Booking confirmed', { booking: { id: booking.id, status: booking.status, brokerId: booking.broker_id, amount: booking.amount } });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Shared by clientAcceptOffer and acceptJobRequest — runs once BOTH sides have mutually
+// confirmed (the job_requests row is already 'accepted' by this point). Locks in the broker on
+// the booking itself and cleans up sibling offers. Returns null if the booking moved on some
+// other way in the meantime (e.g. the direct client-pick flow won it first) — caller must roll
+// its own row back.
+const finalizeJobRequest = async (acceptedJobRequest, originalJobRequest) => {
+  const booking = await BookingModel.advanceStatusIfCurrent(acceptedJobRequest.booking_id, 'pending', {
+    status: 'confirmed',
+    currentStep: 1,
+    brokerId: acceptedJobRequest.broker_id,
+  });
+  if (!booking) return null;
+
+  if (acceptedJobRequest.amount != null && Number(booking.amount) !== Number(acceptedJobRequest.amount)) {
+    await BookingModel.update(booking.id, { amount: acceptedJobRequest.amount });
+  }
+
+  await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
+  await JobRequestModel.declineOthersForBooking(booking.id, acceptedJobRequest.id);
+
+  return { booking };
+};
+
 // ─── PATCH /api/jobs/requests/:id/client-accept — client locks in a broker ─────────────────────
-// Works whether the broker has countered yet or not: 'pending' means the client is accepting
-// the broker's still-open offer at the original asking price (no negotiation needed); 'countered'
-// means the client is accepting whatever the broker last countered with. Same action either way.
+// Mutual-confirmation, same dual-purpose CAS pattern as acceptJobRequest above
+// (JobRequestModel.clientAcceptIfCountered): if the broker hasn't already committed, this only
+// commits the client's own side (status -> 'awaiting_confirmation') and does NOT confirm the
+// booking yet. Only once BOTH sides have accepted does this actually lock in the broker.
 const clientAcceptOffer = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -270,30 +384,36 @@ const clientAcceptOffer = async (req, res, next) => {
     const jobRequest = await JobRequestModel.findById(id);
     if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
     if (jobRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
-    if (!['pending', 'countered'].includes(jobRequest.status)) return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
+    const canActNow = ['pending', 'countered'].includes(jobRequest.status)
+      || (jobRequest.status === 'awaiting_confirmation' && jobRequest.pending_confirmation_by === 'broker');
+    if (!canActNow) return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
 
     // Same compare-and-swap shape as the broker's acceptJobRequest above — claim the offer
     // first, then the booking, so a second concurrent action on this booking can't both win.
     const claimed = await JobRequestModel.clientAcceptIfCountered(id);
     if (!claimed) return errorResponse(res, 400, 'Offer is already actioned');
 
-    const booking = await BookingModel.advanceStatusIfCurrent(jobRequest.booking_id, 'pending', {
-      status: 'confirmed',
-      currentStep: 1,
-      brokerId: jobRequest.broker_id,
-    });
+    if (claimed.status === 'awaiting_confirmation') {
+      // First mover — the booking is NOT confirmed yet. Notify the broker that it's their turn.
+      await NotificationModel.create({
+        userId: jobRequest.broker_id,
+        title: 'Client Accepted — Please Confirm',
+        message: `The client accepted your offer of ₹${claimed.amount}. Confirm to finalize the booking.`,
+        type: 'booking',
+        meta: { booking_id: jobRequest.booking_id, job_request_id: id },
+      });
+      const fresh = await JobRequestModel.findById(id);
+      emitJobRequestUpdate(jobRequest.broker_id, fresh);
+      logger.info(`Job request ${id} accepted by client ${req.user.id} — awaiting broker confirmation`);
+      return successResponse(res, 200, 'Accepted — waiting for the broker to confirm', { request: projectJobRequest(fresh) });
+    }
 
-    if (!booking) {
-      await JobRequestModel.setStatus(id, 'declined');
+    const result = await finalizeJobRequest(claimed, jobRequest);
+    if (!result) {
+      await JobRequestModel.rollbackAccepted(id).catch(() => {});
       return errorResponse(res, 409, 'This booking is no longer available');
     }
-
-    if (claimed.amount != null && Number(booking.amount) !== Number(claimed.amount)) {
-      await BookingModel.update(booking.id, { amount: claimed.amount });
-    }
-
-    await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
-    await JobRequestModel.declineOthersForBooking(booking.id, id);
+    const { booking } = result;
 
     await AuditLogModel.log({
       userId: req.user.id,
@@ -312,6 +432,9 @@ const clientAcceptOffer = async (req, res, next) => {
       meta: { booking_id: booking.id },
     });
 
+    const fresh = await JobRequestModel.findById(id);
+    emitJobRequestUpdate(jobRequest.broker_id, fresh);
+
     logger.info(`Job request ${id} accepted by client ${req.user.id}`);
     return successResponse(res, 200, 'Offer accepted', { booking: { id: booking.id, status: booking.status, brokerId: booking.broker_id, amount: booking.amount } });
   } catch (err) {
@@ -327,7 +450,9 @@ const clientRejectOffer = async (req, res, next) => {
     const jobRequest = await JobRequestModel.findById(id);
     if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
     if (jobRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
-    if (jobRequest.status !== 'countered') return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
+    const canActNow = jobRequest.status === 'countered'
+      || (jobRequest.status === 'awaiting_confirmation' && jobRequest.pending_confirmation_by === 'broker');
+    if (!canActNow) return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
 
     const updated = await JobRequestModel.clientRejectIfCountered(id);
     if (!updated) return errorResponse(res, 400, 'Offer is already actioned');
@@ -348,6 +473,8 @@ const clientRejectOffer = async (req, res, next) => {
       type: 'booking',
       meta: { booking_id: jobRequest.booking_id },
     });
+
+    emitJobRequestUpdate(jobRequest.broker_id, updated);
 
     return successResponse(res, 200, 'Offer declined', { request: updated });
   } catch (err) {
@@ -390,6 +517,7 @@ const clientCounterOffer = async (req, res, next) => {
     });
 
     const full = await JobRequestModel.findById(id);
+    emitJobRequestUpdate(jobRequest.broker_id, full);
     return successResponse(res, 200, 'Counter-offer sent', { request: projectJobRequest(full) });
   } catch (err) {
     next(err);
@@ -397,6 +525,6 @@ const clientCounterOffer = async (req, res, next) => {
 };
 
 module.exports = {
-  listJobRequests, assignDriver, declineJobRequest,
+  listJobRequests, assignDriver, declineJobRequest, acceptJobRequest,
   counterJobRequest, clientAcceptOffer, clientRejectOffer, clientCounterOffer,
 };

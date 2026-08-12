@@ -59,19 +59,24 @@ class JobRequestModel {
     };
   }
 
-  static async setStatus(id, status) {
+  // CAS, not a blind write — `fromStatuses` is the set of statuses this transition is valid
+  // from; the caller's own pre-check is not race-safe on its own (findById then act is TOCTOU),
+  // so this is the real guard. Returns null if the row's actual status had already moved on.
+  static async setStatus(id, status, fromStatuses) {
     const result = await pool.query(
-      `UPDATE job_requests SET status = $1 WHERE id = $2 RETURNING *`,
-      [status, id]
+      `UPDATE job_requests SET status = $1 WHERE id = $2 AND status = ANY($3::job_status[]) RETURNING *`,
+      [status, id, fromStatuses]
     );
     return result.rows[0] || null;
   }
 
-  // Declines every other still-open (pending or mid-negotiation) request for the same booking
-  // once one broker has won it.
+  // Declines every other still-open (pending, mid-negotiation, or mid-handshake) request for
+  // the same booking once one broker has won it. Includes 'awaiting_confirmation' — a sibling
+  // parked mid-handshake must die too, otherwise it could still complete its own
+  // second-confirm CAS after the fact (zombie state).
   static async declineOthersForBooking(bookingId, exceptJobRequestId) {
     await pool.query(
-      `UPDATE job_requests SET status = 'declined' WHERE booking_id = $1 AND id != $2 AND status IN ('pending', 'countered')`,
+      `UPDATE job_requests SET status = 'declined' WHERE booking_id = $1 AND id != $2 AND status IN ('pending', 'countered', 'awaiting_confirmation')`,
       [bookingId, exceptJobRequestId]
     );
   }
@@ -82,7 +87,7 @@ class JobRequestModel {
   // there's no "winning" row on this table to except.
   static async declineAllForBooking(bookingId) {
     await pool.query(
-      `UPDATE job_requests SET status = 'declined' WHERE booking_id = $1 AND status IN ('pending', 'countered')`,
+      `UPDATE job_requests SET status = 'declined' WHERE booking_id = $1 AND status IN ('pending', 'countered', 'awaiting_confirmation')`,
       [bookingId]
     );
   }
@@ -118,24 +123,64 @@ class JobRequestModel {
     return result.rows[0] || null;
   }
 
-  // Client locks in a broker — the only way a booking gets confirmed now (brokers can no
-  // longer unilaterally accept). Atomic compare-and-swap so two concurrent client actions
-  // can't both win. Works from either 'pending' (client accepts the broker's still-open offer
-  // at the original asking price, no counter needed) or 'countered' (client accepts what the
-  // broker countered with) — the two are the same action from the client's side, just at
-  // whatever amount is currently on the request.
+  // Broker agrees at the current amount — mutual-confirmation, dual-purpose CAS mirroring
+  // DriverRequestModel.respondentAccept. From 'pending': first side to commit — parks at
+  // 'awaiting_confirmation' (pending_confirmation_by = 'broker'), nothing finalized yet. From
+  // 'awaiting_confirmation' with pending_confirmation_by = 'client': the client already
+  // committed, so this is the finalizing confirmation -> 'accepted'. Scoped to broker_id so a
+  // broker can only accept their own row.
+  static async brokerAccept(id, brokerId) {
+    const result = await pool.query(
+      `UPDATE job_requests SET
+         status = CASE WHEN status = 'pending' THEN 'awaiting_confirmation' ELSE 'accepted' END,
+         pending_confirmation_by = CASE WHEN status = 'pending' THEN 'broker' ELSE pending_confirmation_by END
+       WHERE id = $1 AND broker_id = $2
+         AND (status = 'pending' OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'client'))
+       RETURNING *`,
+      [id, brokerId]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Client locks in a broker — same dual-purpose CAS, mirrored: from 'pending'/'countered' this
+  // is the client committing first (parks at 'awaiting_confirmation', pending_confirmation_by
+  // = 'client'); from 'awaiting_confirmation' with pending_confirmation_by = 'broker', this is
+  // the client's finalizing confirmation of the broker's prior commitment -> 'accepted'.
   static async clientAcceptIfCountered(id) {
     const result = await pool.query(
-      `UPDATE job_requests SET status = 'accepted' WHERE id = $1 AND status IN ('pending', 'countered') RETURNING *`,
+      `UPDATE job_requests SET
+         status = CASE WHEN status IN ('pending', 'countered') THEN 'awaiting_confirmation' ELSE 'accepted' END,
+         pending_confirmation_by = CASE WHEN status IN ('pending', 'countered') THEN 'client' ELSE pending_confirmation_by END
+       WHERE id = $1
+         AND (status IN ('pending', 'countered') OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'broker'))
+       RETURNING *`,
       [id]
     );
     return result.rows[0] || null;
   }
 
-  // Client rejects a broker's counter-offer — atomic compare-and-swap from 'countered'.
+  // Client rejects a broker's counter-offer (from 'countered'), or rejects a broker's prior
+  // mutual-confirmation commitment (from 'awaiting_confirmation' with pending_confirmation_by
+  // = 'broker') — atomic compare-and-swap either way.
   static async clientRejectIfCountered(id) {
     const result = await pool.query(
-      `UPDATE job_requests SET status = 'declined' WHERE id = $1 AND status = 'countered' RETURNING *`,
+      `UPDATE job_requests
+       SET status = 'declined'
+       WHERE id = $1
+         AND (status = 'countered' OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'broker'))
+       RETURNING *`,
+      [id]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Fixes the same bug as DriverRequestModel.rollbackAccepted: when finalizeJobRequest() fails
+  // after this row was already flipped to 'accepted' (the booking was won by the other
+  // negotiation path in the meantime), the caller must roll back by CAS-ing from the row's
+  // actual current status ('accepted'), not blindly overwrite it.
+  static async rollbackAccepted(id) {
+    const result = await pool.query(
+      `UPDATE job_requests SET status = 'declined' WHERE id = $1 AND status = 'accepted' RETURNING *`,
       [id]
     );
     return result.rows[0] || null;

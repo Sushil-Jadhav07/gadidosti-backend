@@ -70,10 +70,12 @@ class DriverRequestModel {
   }
 
   // Declines every other still-open request for the same booking once one is accepted —
-  // e.g. the client had requested two trucks in parallel.
+  // e.g. the client had requested two trucks in parallel. Includes 'awaiting_confirmation' —
+  // a sibling parked mid-handshake on a booking that's just been won elsewhere must die too,
+  // otherwise it could still complete its own second-confirm CAS after the fact (zombie state).
   static async declineOthersForBooking(bookingId, exceptRequestId) {
     await pool.query(
-      `UPDATE driver_requests SET status = 'declined' WHERE booking_id = $1 AND id != $2 AND status IN ('pending', 'countered')`,
+      `UPDATE driver_requests SET status = 'declined' WHERE booking_id = $1 AND id != $2 AND status IN ('pending', 'countered', 'awaiting_confirmation')`,
       [bookingId, exceptRequestId]
     );
   }
@@ -83,7 +85,7 @@ class DriverRequestModel {
   // declineAllForBooking).
   static async declineAllForBooking(bookingId) {
     await pool.query(
-      `UPDATE driver_requests SET status = 'declined' WHERE booking_id = $1 AND status IN ('pending', 'countered')`,
+      `UPDATE driver_requests SET status = 'declined' WHERE booking_id = $1 AND status IN ('pending', 'countered', 'awaiting_confirmation')`,
       [bookingId]
     );
   }
@@ -104,18 +106,48 @@ class DriverRequestModel {
     return result.rows[0] || null;
   }
 
+  // Also valid out of 'awaiting_confirmation' when the CLIENT committed first and the
+  // respondent is now rejecting that commitment instead of confirming it.
   static async respondentDecline(id) {
     const result = await pool.query(
-      `UPDATE driver_requests SET status = 'declined' WHERE id = $1 AND status = 'pending' RETURNING *`,
+      `UPDATE driver_requests
+       SET status = 'declined'
+       WHERE id = $1
+         AND (status = 'pending' OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'client'))
+       RETURNING *`,
       [id]
     );
     return result.rows[0] || null;
   }
 
-  // Driver (or broker) accepts at the current amount — no counter needed.
+  // Driver (or broker) agrees at the current amount — dual-purpose, mutual-confirmation CAS.
+  // From 'pending': this is the FIRST side to commit — parks at 'awaiting_confirmation'
+  // (pending_confirmation_by = 'respondent') and waits for the client to also confirm; nothing
+  // is finalized yet. From 'awaiting_confirmation' with pending_confirmation_by = 'client': the
+  // client already committed, so this call is the second, finalizing confirmation — status
+  // flips straight to 'accepted'. The caller (controller) branches on the returned row's
+  // status to know which case happened.
   static async respondentAccept(id) {
     const result = await pool.query(
-      `UPDATE driver_requests SET status = 'accepted' WHERE id = $1 AND status = 'pending' RETURNING *`,
+      `UPDATE driver_requests SET
+         status = CASE WHEN status = 'pending' THEN 'awaiting_confirmation' ELSE 'accepted' END,
+         pending_confirmation_by = CASE WHEN status = 'pending' THEN 'respondent' ELSE pending_confirmation_by END
+       WHERE id = $1
+         AND (status = 'pending' OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'client'))
+       RETURNING *`,
+      [id]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Fixes a real bug: when finalizeDriverRequest() fails after this row was already flipped to
+  // 'accepted' by the CAS above (the booking was won by the other negotiation path in the
+  // meantime), the caller must roll this row back to 'declined' — but it must CAS from the
+  // row's *actual* current status ('accepted'), not 'pending', or the UPDATE silently no-ops
+  // and leaves the row permanently stuck 'accepted' with no real trip behind it.
+  static async rollbackAccepted(id) {
+    const result = await pool.query(
+      `UPDATE driver_requests SET status = 'declined' WHERE id = $1 AND status = 'accepted' RETURNING *`,
       [id]
     );
     return result.rows[0] || null;
@@ -136,18 +168,33 @@ class DriverRequestModel {
     return result.rows[0] || null;
   }
 
-  // Client locks in the driver/broker's current offer — atomic compare-and-swap.
+  // Client locks in the driver/broker's current offer — same dual-purpose mutual-confirmation
+  // CAS as respondentAccept above, mirrored: from 'pending'/'countered' this is the client
+  // committing first (parks at 'awaiting_confirmation', pending_confirmation_by = 'client');
+  // from 'awaiting_confirmation' with pending_confirmation_by = 'respondent', this is the
+  // client's finalizing confirmation of the respondent's prior commitment -> 'accepted'.
   static async clientAcceptIfCountered(id) {
     const result = await pool.query(
-      `UPDATE driver_requests SET status = 'accepted' WHERE id = $1 AND status IN ('pending', 'countered') RETURNING *`,
+      `UPDATE driver_requests SET
+         status = CASE WHEN status IN ('pending', 'countered') THEN 'awaiting_confirmation' ELSE 'accepted' END,
+         pending_confirmation_by = CASE WHEN status IN ('pending', 'countered') THEN 'client' ELSE pending_confirmation_by END
+       WHERE id = $1
+         AND (status IN ('pending', 'countered') OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'respondent'))
+       RETURNING *`,
       [id]
     );
     return result.rows[0] || null;
   }
 
+  // Also valid out of 'awaiting_confirmation' when the RESPONDENT committed first and the
+  // client is now rejecting that commitment instead of confirming it.
   static async clientRejectIfCountered(id) {
     const result = await pool.query(
-      `UPDATE driver_requests SET status = 'declined' WHERE id = $1 AND status = 'countered' RETURNING *`,
+      `UPDATE driver_requests
+       SET status = 'declined'
+       WHERE id = $1
+         AND (status = 'countered' OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'respondent'))
+       RETURNING *`,
       [id]
     );
     return result.rows[0] || null;

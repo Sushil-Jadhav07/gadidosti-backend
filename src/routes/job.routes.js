@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const {
-  listJobRequests, assignDriver, declineJobRequest,
+  listJobRequests, assignDriver, declineJobRequest, acceptJobRequest,
   counterJobRequest, clientAcceptOffer, clientRejectOffer, clientCounterOffer,
 } = require('../controllers/job.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
@@ -139,6 +139,44 @@ router.post('/jobs/:id/assign-driver', authenticate, authorize('broker'), assign
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/jobs/requests/:id/decline', authenticate, authorize('broker'), declineJobRequest);
+
+/**
+ * @swagger
+ * /api/jobs/requests/{id}/accept:
+ *   patch:
+ *     tags: [Jobs]
+ *     summary: Broker agrees to the current amount (mutual-confirmation)
+ *     description: |
+ *       Dual-purpose — see docs/MUTUAL_CONFIRMATION_FLOW.md. If the client hasn't already
+ *       accepted, this only commits the broker's own side (response status becomes
+ *       "awaiting_confirmation", nothing is finalized yet). If the client had already
+ *       accepted first, this call is the finalizing confirmation and the booking is
+ *       confirmed immediately.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Either "waiting for the client to confirm" (request) or "Booking confirmed" (booking)
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       400:
+ *         description: Not awaiting your response, or already actioned
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Booking is no longer available (won by another path in the meantime)
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/jobs/requests/:id/accept', authenticate, authorize('broker'), acceptJobRequest);
 
 /**
  * @swagger

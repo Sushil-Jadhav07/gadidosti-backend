@@ -5,6 +5,14 @@ against the driver/broker/client negotiation system, **and** the client's abilit
 booking before pickup (§9), **and** the Pay Now/Pay Later payment step shown right after
 negotiation finalizes (§10). Read §1–8 top to bottom as a sequence; §9 and §10 each stand alone.
 
+> **⚠️ Superseded in part**: §4's "whose turn" table and endpoint descriptions, and §8's worked
+> example, describe **accepting as immediately finalizing the booking**. That's no longer true —
+> accepting is now a two-phase mutual-confirmation handshake (the first side to accept only
+> commits their own side; the booking finalizes once the *other* side also accepts). See
+> **`docs/MUTUAL_CONFIRMATION_FLOW.md`** for the current behavior, endpoint-by-endpoint — it
+> supersedes those specific parts of this doc. Everything else here (Path A/B concept, timers,
+> notifications, cancellation, payment) is still accurate.
+
 Base URL: your API host, e.g. `https://api.yourdomain.com`. Every endpoint below is prefixed
 with `/api`. Every request needs `Authorization: Bearer <access_token>` (obtained from the
 normal login endpoint, not covered here). Every response is:
@@ -129,13 +137,20 @@ Returned by every endpoint in this section under a `request` key:
 }
 ```
 - `status`: `pending` (someone owes a response) → `countered` (client owes a response) →
-  `accepted` (finalized, trip exists) | `declined` | `expired`.
-- **Whose turn it is** — this is the one field your UI logic actually branches on:
-  | `status` | `driverTimedOut` | Whose turn |
-  |---|---|---|
-  | `pending` | `false` | driver |
-  | `pending` | `true` | broker |
-  | `countered` | — | client |
+  `awaiting_confirmation` (one side accepted, the other must now confirm/decline — see
+  `MUTUAL_CONFIRMATION_FLOW.md`, this row is new) → `accepted` (finalized, trip exists) |
+  `declined` | `expired`.
+- `pendingConfirmationBy` (new field, `"client"` | `"respondent"` | `null`): only meaningful
+  while `status === "awaiting_confirmation"` — tells you which side already committed, i.e.
+  whose turn it now is. See `MUTUAL_CONFIRMATION_FLOW.md` for the full state machine.
+- **Whose turn it is** — this is the field your UI logic actually branches on:
+  | `status` | `driverTimedOut` | `pendingConfirmationBy` | Whose turn |
+  |---|---|---|---|
+  | `pending` | `false` | — | driver |
+  | `pending` | `true` | — | broker |
+  | `countered` | — | — | client |
+  | `awaiting_confirmation` | — | `"client"` | driver/broker (confirm or decline, no counter) |
+  | `awaiting_confirmation` | — | `"respondent"` | client (confirm or decline, no counter) |
 - `jobRequestId`: non-null only for Path B origin (lets you know this came from a broker
   assignment, not a direct pick — cosmetic, doesn't change what actions are valid).
 - `offerHistory`: full back-and-forth, oldest first — render this as the negotiation thread if
@@ -183,10 +198,13 @@ row it didn't create itself** (see §3).
 
 #### `PATCH /api/driver-requests/{id}/accept`
 Driver (while it's their turn) or broker (once `driverTimedOut` is `true`). **No body.**
-Accepting here means "yes, at the price currently on the request" — the client still has to
-call `client-accept` to actually finalize it (the client already set that price, so this step
-is really just "yes I'll do it," not a new number).
-**200:** `{ "request": { ..., "status": "accepted" } }`, message `"Accepted — booking confirmed"`
+**Dual-purpose (mutual-confirmation — see `MUTUAL_CONFIRMATION_FLOW.md` for the full picture):**
+if the client hasn't already accepted, this only commits the driver/broker's own side —
+**200:** `{ "request": { ..., "status": "awaiting_confirmation", "pendingConfirmationBy":
+"respondent" } }`, message `"Accepted — waiting for the client to confirm"`. If the client had
+already accepted first, this call *is* the finalizing confirmation —
+**200:** `{ "request": { ..., "status": "accepted" } }`, message `"Accepted — booking confirmed"`.
+Check the response's `status`/message to know which case you got.
 **Errors:** `400` not your turn / already actioned · `403` not yours to respond to.
 
 #### `PATCH /api/driver-requests/{id}/decline`
@@ -199,8 +217,12 @@ Driver → broker, same turn rules.
 **200:** `{ "request": { ..., "status": "countered" } }` — now it's the **client's** turn.
 
 #### `PATCH /api/driver-requests/{id}/client-accept`
-Client only. **This is the finalize step — creates the trip.** No body.
-**200:** `{ "request": { ..., "status": "accepted" } }`, message `"Booking confirmed"`
+Client only. No body. **Same dual-purpose mutual-confirmation pattern as `accept` above** — if
+the driver/broker hasn't already accepted, this only commits the client's side (**200:**
+`{ "request": { ..., "status": "awaiting_confirmation", "pendingConfirmationBy": "client" } }`,
+message `"Accepted — waiting for the driver to confirm"`); if they had already accepted first,
+this is the finalize step that creates the trip (**200:** `{ "request": { ..., "status":
+"accepted" } }`, message `"Booking confirmed"`).
 **Errors:** `400` not awaiting your response · `403` not your booking · `409` booking was won
 some other way in the meantime (race — show "this offer is no longer available" and refresh).
 
@@ -350,16 +372,22 @@ notification endpoint exists; it's the same general notifications list every oth
    -> 200 { request: { id: "dr1", status: "pending", driverTimedOut: false, amount: 4350 } }
 
 5. [driver app] PATCH /api/driver-requests/dr1/accept
-   -> 200 { request: { id: "dr1", status: "accepted", amount: 4350 } }
+   -> 200 { request: { id: "dr1", status: "awaiting_confirmation", pendingConfirmationBy: "respondent", amount: 4350 } }
+   Nothing finalized yet — driver app shows a waiting badge.
 
-6. [client app] PATCH /api/driver-requests/dr1/client-accept
+6. [client app, socket event driver-request-updated arrives with the same payload as step 5]
+   Client app shows "This driver accepted — Confirm / Decline" (no Counter).
+
+7. [client app] PATCH /api/driver-requests/dr1/client-accept
    -> 200 { request: { id: "dr1", status: "accepted", amount: 4350 } }
    -> trip now exists. GET /api/bookings/{bk} will show status "assigned".
 ```
 
-Steps 5 and 6 are both real accepts — step 5 is the driver saying "yes I'll drive it," step 6
-is the client's final confirmation that actually creates the trip. Both are required in that
-order; there's no shortcut where step 5 alone finalizes anything.
+Steps 5 and 7 are both real accepts — step 5 is the driver saying "yes I'll drive it" (a
+first-mover commit, not yet final), step 7 is the client's confirmation that actually finalizes
+the booking and creates the trip. Both are required, in either order — see
+`MUTUAL_CONFIRMATION_FLOW.md` for the full two-phase-commit state machine and what happens if
+the client had committed first instead.
 
 ---
 

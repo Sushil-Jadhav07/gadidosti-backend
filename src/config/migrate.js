@@ -885,6 +885,20 @@ const runMigrations = async (client) => {
       );
     `);
 
+    // ── MUTUAL-CONFIRMATION NEGOTIATION (mirrors db/32negotiation_mutual_confirm.sql) ──
+    // Either side accepting a negotiation now only commits their own side — the booking/trip
+    // only finalizes once the OTHER side also explicitly confirms. pending_confirmation_by
+    // records who committed first so the other party's UI knows it's their turn.
+    await client.query(`
+      ALTER TYPE driver_request_status ADD VALUE IF NOT EXISTS 'awaiting_confirmation';
+      ALTER TABLE driver_requests ADD COLUMN IF NOT EXISTS pending_confirmation_by TEXT
+        CHECK (pending_confirmation_by IN ('client', 'respondent'));
+
+      ALTER TYPE job_status ADD VALUE IF NOT EXISTS 'awaiting_confirmation';
+      ALTER TABLE job_requests ADD COLUMN IF NOT EXISTS pending_confirmation_by TEXT
+        CHECK (pending_confirmation_by IN ('client', 'broker'));
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
