@@ -130,7 +130,7 @@ class DriverRequestModel {
   static async respondentAccept(id) {
     const result = await pool.query(
       `UPDATE driver_requests SET
-         status = CASE WHEN status = 'pending' THEN 'awaiting_confirmation' ELSE 'accepted' END,
+         status = (CASE WHEN status = 'pending' THEN 'awaiting_confirmation' ELSE 'accepted' END)::driver_request_status,
          pending_confirmation_by = CASE WHEN status = 'pending' THEN 'respondent' ELSE pending_confirmation_by END
        WHERE id = $1
          AND (status = 'pending' OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'client'))
@@ -176,7 +176,7 @@ class DriverRequestModel {
   static async clientAcceptIfCountered(id) {
     const result = await pool.query(
       `UPDATE driver_requests SET
-         status = CASE WHEN status IN ('pending', 'countered') THEN 'awaiting_confirmation' ELSE 'accepted' END,
+         status = (CASE WHEN status IN ('pending', 'countered') THEN 'awaiting_confirmation' ELSE 'accepted' END)::driver_request_status,
          pending_confirmation_by = CASE WHEN status IN ('pending', 'countered') THEN 'client' ELSE pending_confirmation_by END
        WHERE id = $1
          AND (status IN ('pending', 'countered') OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'respondent'))

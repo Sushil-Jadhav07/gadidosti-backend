@@ -156,6 +156,11 @@ const assignDriver = async (req, res, next) => {
       // so re-fetch through the joined query before using it in a response or a socket push.
       const fresh = await DriverRequestModel.findById(driverRequest.id);
       emitDriverRequestUpdate(driverId, fresh);
+      // Also push to the client — they never call this endpoint themselves, but their app
+      // (ChooseBroker.jsx) needs to find out a driver_requests row now exists for their
+      // booking so it can hand off from "waiting for your broker to assign a driver" straight
+      // into the driver negotiation, instead of only discovering it on the next poll tick.
+      emitDriverRequestUpdate(booking.client_id, fresh);
 
       await AuditLogModel.log({
         userId: req.user.id,

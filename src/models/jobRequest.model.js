@@ -132,7 +132,7 @@ class JobRequestModel {
   static async brokerAccept(id, brokerId) {
     const result = await pool.query(
       `UPDATE job_requests SET
-         status = CASE WHEN status = 'pending' THEN 'awaiting_confirmation' ELSE 'accepted' END,
+         status = (CASE WHEN status = 'pending' THEN 'awaiting_confirmation' ELSE 'accepted' END)::job_status,
          pending_confirmation_by = CASE WHEN status = 'pending' THEN 'broker' ELSE pending_confirmation_by END
        WHERE id = $1 AND broker_id = $2
          AND (status = 'pending' OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'client'))
@@ -149,7 +149,7 @@ class JobRequestModel {
   static async clientAcceptIfCountered(id) {
     const result = await pool.query(
       `UPDATE job_requests SET
-         status = CASE WHEN status IN ('pending', 'countered') THEN 'awaiting_confirmation' ELSE 'accepted' END,
+         status = (CASE WHEN status IN ('pending', 'countered') THEN 'awaiting_confirmation' ELSE 'accepted' END)::job_status,
          pending_confirmation_by = CASE WHEN status IN ('pending', 'countered') THEN 'client' ELSE pending_confirmation_by END
        WHERE id = $1
          AND (status IN ('pending', 'countered') OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'broker'))
