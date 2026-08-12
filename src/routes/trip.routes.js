@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const {
-  listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
+  listTrips, getActiveTrip, getUpcomingTrip, getTrip, getTripByBooking, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
   reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
 } = require('../controllers/trip.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
@@ -116,6 +116,39 @@ router.get('/trips/upcoming', authenticate, authorize('driver'), getUpcomingTrip
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/trips/:id', authenticate, authorize('broker', 'driver', 'admin'), getTrip);
+
+/**
+ * @swagger
+ * /api/trips/booking/{bookingId}:
+ *   get:
+ *     tags: [Trips]
+ *     summary: Find the trip linked to a booking (broker/driver/admin)
+ *     description: Lets a booking-detail page that only knows the booking id discover its trip — e.g. a broker's JobDetail.jsx wiring up the delivery-completion flow. 404 if no trip exists yet (booking still mid-negotiation).
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Trip fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: You do not have access to this trip
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: No trip exists yet for this booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/trips/booking/:bookingId', authenticate, authorize('broker', 'driver', 'admin'), getTripByBooking);
 
 /**
  * @swagger
@@ -494,7 +527,7 @@ router.patch('/trips/:id/incidents/:incidentId/mechanic', authenticate, authoriz
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/trips/:id/pod', authenticate, authorize('driver'), upload.array('files', TripPodPhotoModel.MAX_PHOTOS_PER_TRIP), uploadPod);
+router.post('/trips/:id/pod', authenticate, authorize('driver', 'broker'), upload.array('files', TripPodPhotoModel.MAX_PHOTOS_PER_TRIP), uploadPod);
 
 /**
  * @swagger
@@ -545,7 +578,7 @@ router.post('/trips/:id/pod', authenticate, authorize('driver'), upload.array('f
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.patch('/trips/:id/collect-payment', authenticate, authorize('driver'), collectPaymentValidation, validate, collectPayment);
+router.patch('/trips/:id/collect-payment', authenticate, authorize('driver', 'broker'), collectPaymentValidation, validate, collectPayment);
 
 /**
  * @swagger

@@ -53,11 +53,17 @@ class TripModel {
     return result.rows[0] || null;
   }
 
-  // Driver's current in-progress trip — anything not yet delivered/completed/cancelled.
+  // Driver's current in-progress trip — anything not yet completed/cancelled. Deliberately
+  // INCLUDES 'delivered': that status means "physically dropped off, but POD/payment not
+  // closed out yet" — still the driver's responsibility, and MyTrip.jsx's resume-on-relogin
+  // logic (loadTrip -> deliveryFlowActive) depends on this endpoint still returning the trip
+  // so DeliveryCompletionFlow can pick back up where the driver left off. Excluding
+  // 'delivered' here used to mean a driver who closed the app mid-completion (before POD/
+  // payment) would come back to "no active trip" and have no way to finish it.
   static async findActiveByDriver(driverId) {
     const result = await pool.query(
       `${SELECT_WITH_JOINS} WHERE tr.driver_id = $1
-       AND tr.status NOT IN ('delivered', 'completed', 'cancelled')
+       AND tr.status NOT IN ('completed', 'cancelled')
        ORDER BY tr.created_at DESC LIMIT 1`,
       [driverId]
     );

@@ -248,6 +248,24 @@ const getTrip = async (req, res, next) => {
   }
 };
 
+// ─── GET /api/trips/booking/:bookingId ────────────────────────────────────────
+// Lets a broker's booking-detail page (JobDetail.jsx) find the trip for a booking it only
+// knows the booking id for — mirrors GET /api/driver-requests/booking/:bookingId's existing
+// "discover the linked record" pattern. 404 (not 200 with trip: null) if no trip exists yet
+// (booking still mid-negotiation) — same shape as that endpoint.
+const getTripByBooking = async (req, res, next) => {
+  try {
+    const trip = await TripModel.findByBookingId(req.params.bookingId);
+    if (!trip) return errorResponse(res, 404, 'No trip exists yet for this booking');
+    if (!assertCanView(trip, req.user)) return errorResponse(res, 403, 'You do not have access to this trip');
+
+    const timeline = await TripModel.getTimeline(trip.id);
+    return successResponse(res, 200, 'Trip fetched', { trip: await projectTrip(trip, timeline) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── PATCH /api/trips/:id/status ──────────────────────────────────────────────
 const updateTripStatus = async (req, res, next) => {
   try {
@@ -721,7 +739,12 @@ const uploadPod = async (req, res, next) => {
 
     const trip = await TripModel.findById(id);
     if (!trip) return errorResponse(res, 404, 'Trip not found');
-    if (trip.driver_id !== req.user.id) return errorResponse(res, 403, 'Not your trip');
+    // Normally the driver themselves; also allowed for the trip's own broker, so they can
+    // finish uploading proof of delivery on a driver's behalf if the driver's logged out/
+    // unreachable — same reasoning as collectPayment below.
+    if (trip.driver_id !== req.user.id && trip.broker_id !== req.user.id) {
+      return errorResponse(res, 403, 'Not your trip');
+    }
     if (!['in_transit', 'delivered'].includes(trip.status)) {
       return errorResponse(res, 409, 'Proof of delivery can only be uploaded while the trip is in transit or delivered');
     }
@@ -764,7 +787,7 @@ const uploadPod = async (req, res, next) => {
       ipAddress: req.ip,
     });
 
-    logger.info(`${uploadedUrls.length} POD photo(s) uploaded for trip ${id} by driver ${req.user.id}`);
+    logger.info(`${uploadedUrls.length} POD photo(s) uploaded for trip ${id} by ${req.user.role} ${req.user.id}`);
     const allPhotos = await TripPodPhotoModel.findByTrip(id);
     return successResponse(res, 200, 'Proof of delivery uploaded', { podPhotos: allPhotos.map((p) => p.url) });
   } catch (err) {
@@ -773,10 +796,12 @@ const uploadPod = async (req, res, next) => {
 };
 
 // ─── PATCH /api/trips/:id/collect-payment ─────────────────────────────────────
-// Last step of the driver's delivery-completion flow when the booking was paid_status=
-// 'pending' (i.e. COD, not paid up front at booking time) — records how the driver actually
-// collected it (UPI via their saved QR, or cash). Only valid once, going pending -> paid;
-// re-running it on an already-paid booking 409s rather than silently overwriting mode/paid_at.
+// Last step of the delivery-completion flow when the booking was paid_status='pending' (i.e.
+// COD, not paid up front at booking time) — records how payment was actually collected (UPI
+// via a saved QR, or cash). Normally the driver; also allowed for the trip's own broker, so
+// they can close this out if the driver's logged out/unreachable after marking delivered. Only
+// valid once, going pending -> paid; re-running it on an already-paid booking 409s rather than
+// silently overwriting mode/paid_at.
 const collectPayment = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -784,7 +809,9 @@ const collectPayment = async (req, res, next) => {
 
     const trip = await TripModel.findById(id);
     if (!trip) return errorResponse(res, 404, 'Trip not found');
-    if (trip.driver_id !== req.user.id) return errorResponse(res, 403, 'Not your trip');
+    if (trip.driver_id !== req.user.id && trip.broker_id !== req.user.id) {
+      return errorResponse(res, 403, 'Not your trip');
+    }
     if (trip.booking_payment_status !== 'pending') {
       return errorResponse(res, 409, 'Payment has already been recorded for this booking');
     }
@@ -792,20 +819,30 @@ const collectPayment = async (req, res, next) => {
     await BookingModel.update(trip.booking_id, { payment_status: 'paid', payment_mode: mode, paid_at: new Date() });
 
     const modeLabel = mode === 'upi' ? 'UPI' : 'cash';
+    const collectorLabel = req.user.id === trip.broker_id ? (trip.broker_name || 'the broker') : (trip.driver_name || 'the driver');
     if (trip.client_id) {
       await NotificationModel.create({
         userId: trip.client_id,
         title: 'Payment Received',
-        message: `Your payment for ${trip.booking_number || 'your booking'} was collected by the driver via ${modeLabel}. Your receipt is ready to download.`,
+        message: `Your payment for ${trip.booking_number || 'your booking'} was collected by ${collectorLabel} via ${modeLabel}. Your receipt is ready to download.`,
         type: 'payment',
         meta: { trip_id: id, booking_id: trip.booking_id, mode },
       });
     }
-    if (trip.broker_id) {
+    if (trip.broker_id && trip.broker_id !== req.user.id) {
       await NotificationModel.create({
         userId: trip.broker_id,
         title: 'Payment Collected',
         message: `Driver ${trip.driver_name || ''} collected payment for ${trip.booking_number || 'a booking'} via ${modeLabel}.`,
+        type: 'payment',
+        meta: { trip_id: id, booking_id: trip.booking_id, mode },
+      });
+    }
+    if (trip.driver_id && trip.driver_id !== req.user.id) {
+      await NotificationModel.create({
+        userId: trip.driver_id,
+        title: 'Payment Collected',
+        message: `Your broker collected payment for ${trip.booking_number || 'a booking'} via ${modeLabel} on your behalf.`,
         type: 'payment',
         meta: { trip_id: id, booking_id: trip.booking_id, mode },
       });
@@ -820,7 +857,7 @@ const collectPayment = async (req, res, next) => {
       ipAddress: req.ip,
     });
 
-    logger.info(`Payment collected for trip ${id} via ${mode} by driver ${req.user.id}`);
+    logger.info(`Payment collected for trip ${id} via ${mode} by ${req.user.role} ${req.user.id}`);
     return successResponse(res, 200, 'Payment recorded', { paymentStatus: 'paid', paymentMode: mode });
   } catch (err) {
     next(err);
@@ -856,6 +893,6 @@ const getPodFile = async (req, res, next) => {
 };
 
 module.exports = {
-  listTrips, getActiveTrip, getUpcomingTrip, getTrip, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
+  listTrips, getActiveTrip, getUpcomingTrip, getTrip, getTripByBooking, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
   reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
 };
