@@ -139,7 +139,10 @@ Returned by every endpoint in this section under a `request` key:
 - `status`: `pending` (someone owes a response) → `countered` (client owes a response) →
   `awaiting_confirmation` (one side accepted, the other must now confirm/decline — see
   `MUTUAL_CONFIRMATION_FLOW.md`, this row is new) → `accepted` (finalized, trip exists) |
-  `declined` | `expired`.
+  `declined`. **No `expired` value exists for `driver_requests`** (unlike `job_requests`, which
+  does have one but never actually sets it either — see `NEGOTIATION_TIMERS_GUIDE.md`) — when
+  the 5-minute broker-response window also lapses, the request is set straight to `declined`,
+  not a separate "expired" state.
 - `pendingConfirmationBy` (new field, `"client"` | `"respondent"` | `null`): only meaningful
   while `status === "awaiting_confirmation"` — tells you which side already committed, i.e.
   whose turn it now is. See `MUTUAL_CONFIRMATION_FLOW.md` for the full state machine.
@@ -336,12 +339,16 @@ stale negotiation screen is a bad experience).
 
 | Timer | Duration | What happens |
 |---|---|---|
-| Driver response window | 2 minutes | No response → `driverTimedOut` flips to `true`, broker notified, broker can now act instead |
-| Total expiry | 5 minutes from creation | No response from either → request `expired`. Path A falls back to Path B (already running in parallel). Path B: broker needs to assign a different driver. |
+| Driver response window | 2 minutes from creation (or from the client's last counter) | No response → `driverTimedOut` flips to `true`, broker notified, broker can now act instead |
+| Broker response window | 5 minutes **after** `driverTimedOut` flips (≈7 min total from creation, not 5) | No response from the broker either → request → `declined` (not `expired` — see §4). Path A falls back to Path B (already running in parallel). Path B: broker needs to assign a different driver. |
 
 Both are enforced by a server cron sweep that runs every minute — so there can be up to ~60s of
 lag between "2 minutes elapsed" and `driverTimedOut` actually flipping. Don't build tight
 client-side assumptions around the exact second.
+
+**For the full picture — including exactly how the reference apps surface this in their UI
+(spoiler: no live countdown, just a text-label swap on `driverTimedOut`) — see
+`NEGOTIATION_TIMERS_GUIDE.md`, a dedicated doc for this.**
 
 ---
 
