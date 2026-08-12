@@ -1,9 +1,12 @@
 const logger = require('../../utils/logger');
 
-// Third-party GPS tracker feed (Roadcast Tech Solutions' "Bolt Pull API" — see the vendor's
-// PDF spec). One fixed external vendor, not a swappable provider like payment/push/storage,
-// so this skips the Fake+index.js indirection those use — there's nothing to swap it with.
-const BASE_URL = 'https://pullapi-s2.track360.co.in/api/v1/auth/pull_api';
+// Third-party GPS tracker feed (Roadcast Tech Solutions' "Track PULL API" — see the vendor's
+// PDF spec, v1.3). One fixed external vendor, not a swappable provider like payment/push/
+// storage, so this skips the Fake+index.js indirection those use — there's nothing to swap it
+// with. Endpoint is pullapi-**s1** (not s2) — this was the actual cause of the "User not found"
+// error previously flagged for follow-up with Roadcast; the credentials were fine, the account
+// just isn't provisioned on the s2 server.
+const BASE_URL = 'https://pullapi-s1.track360.co.in/api/v1/auth/pull_api';
 const REQUEST_TIMEOUT_MS = 8000;
 
 const getJson = async (params) => {

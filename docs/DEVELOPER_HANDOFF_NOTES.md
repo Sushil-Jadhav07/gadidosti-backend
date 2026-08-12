@@ -511,8 +511,12 @@ one.
 
 ## 5. Third-party GPS tracking (Bolt / Roadcast) — admin only
 
-⚠️ **Current vendor credentials are rejected** ("User not found") — app owner needs to follow
-up with Roadcast. Everything below works once fixed.
+The previous "User not found" error was caused by hitting the wrong vendor server —
+`BoltTrackingProvider.js` was pointed at `pullapi-s2.track360.co.in`, but this account is
+provisioned on `pullapi-s1.track360.co.in` (confirmed against the vendor's own PDF spec, all of
+whose sample requests use `s1`). **Fixed** — the endpoint now matches the spec exactly. Verify
+`BOLT_API_USERNAME`/`BOLT_API_PASSWORD` are still set correctly in `.env` and re-test; if it
+still fails after this fix, it's a genuine credentials issue worth following up with Roadcast.
 
 ### `GET /api/tracking/devices`
 **Auth:** admin only
