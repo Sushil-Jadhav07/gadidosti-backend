@@ -2,7 +2,8 @@
 
 A self-contained guide for whoever is building/integrating a client (web, mobile, whatever)
 against the driver/broker/client negotiation system, **and** the client's ability to cancel a
-booking before pickup (§9). Read §1–8 top to bottom as a sequence; §9 stands alone.
+booking before pickup (§9), **and** the Pay Now/Pay Later payment step shown right after
+negotiation finalizes (§10). Read §1–8 top to bottom as a sequence; §9 and §10 each stand alone.
 
 Base URL: your API host, e.g. `https://api.yourdomain.com`. Every endpoint below is prefixed
 with `/api`. Every request needs `Authorization: Bearer <access_token>` (obtained from the
@@ -458,4 +459,111 @@ a hardcoded default.
 
 5. [client app] Update local booking state to "Cancelled", hide the Cancel action (already
    handled by the status-based isCancellable check above), show a confirmation toast.
+```
+
+---
+
+## 10. Payment — Pay Now / Pay Later, shown right after negotiation finalizes
+
+Another separate feature that plugs into the same lifecycle. **Already implemented and live in
+the reference web client** — this is the exact spec to replicate.
+
+### When this screen appears
+
+**Not at booking creation, and not mid-negotiation.** It appears exactly once, immediately after
+the finalize step succeeds — i.e. right after `client-accept` returns `200` in either Path A
+(`PATCH /api/driver-requests/{id}/client-accept`) or Path B
+(`PATCH /api/jobs/requests/{id}/client-accept`). At that point `booking.status` has just become
+`assigned` and a trip now exists. Show two buttons, **Pay Now** and **Pay Later**:
+
+- **Pay Now** → open your payment UI (UPI/card/netbanking/wallet — the reference client's
+  `PaymentSheet` is a simulated checkout since no real gateway is wired up yet). On successful
+  payment, call `PATCH /api/bookings/{id}/pay` (below), then show the booking-confirmed screen.
+- **Pay Later** → skip payment entirely, go straight to the booking-confirmed screen. No API
+  call needed — `payment_status` simply stays `pending`, exactly as it already was.
+
+There's no separate "later" flow to build beyond that — a client who chose Pay Later can always
+pay from the booking detail screen afterward (same `PATCH /api/bookings/{id}/pay` call, gated
+on `payment_status === "pending"`), it's the same endpoint either way.
+
+### `PATCH /api/bookings/{id}/pay`
+**Auth:** client only, must own the booking.
+**Request body:**
+```json
+{ "payment_mode": "upi" }
+```
+`payment_mode` is optional free-text — pass whatever you used (`"upi"`, `"cards"`,
+`"netbanking"`, `"wallet"`, or your own values); it's stored as-is and shown to the driver/broker
+in their notification. Omit it if you don't track a mode.
+**Response 200:**
+```json
+{ "booking": { /* full booking shape — paymentStatus is now "paid" */ } }
+```
+**Errors:**
+- `403` — not your booking
+- `404` — booking not found
+- `409` — `"This booking is already paid"` or `"This booking is cancelled"`
+
+### How the driver finds out — in real time, over the same socket
+
+This is the part worth building properly rather than relying on the driver's next screen
+refresh: the moment `payBooking` succeeds server-side, it pushes to **both** the assigned driver
+and broker, over the **same socket connection** described in §5 (no second connection, no new
+auth) — just a different event name:
+
+- **Event:** `booking-payment-updated`
+- **Room:** `user:{yourOwnUserId}` — same auto-join as everything else in this doc, nothing extra
+  to subscribe to.
+- **Payload:**
+```json
+{
+  "bookingId": "bk1",
+  "bookingNumber": "BKG-202608-001",
+  "paymentStatus": "paid",
+  "paymentMode": "upi"
+}
+```
+This is intentionally a small delta payload (not the full booking shape) — on receipt, match
+`bookingId` against whatever booking/trip you're currently displaying and just flip that one
+field locally; no re-fetch required. The reference driver app
+(`gadidosti-broker-driver/src/hooks/useBookingPaymentSocket.js`) does exactly this against its
+active-trip screen, and also shows a small toast + a green "Paid" badge next to the trip status
+badge the instant it arrives — useful so the driver knows not to collect cash/UPI on delivery.
+
+A DB-backed notification (`type: "payment"`, title `"Payment Received"`) is created for the same
+two users as a fallback/notification-center entry, same as every other feature in this doc — but
+the socket event is what makes it feel instant; don't rely on the notifications list alone if
+you want a live badge.
+
+### What this means for the delivery-completion / COD flow
+
+If a booking is already `paymentStatus: "paid"` by the time the driver reaches the
+delivery-completion step, **skip the "collect payment" screen entirely** — there's nothing left
+to collect. The reference driver app's `DeliveryCompletionFlow.jsx` already branches on this
+(`trip.paymentStatus === "pending"` decides whether a "Payments" step exists at all in that
+wizard) — replicate the same check: only show your COD-collection UI
+(`PATCH /api/trips/{id}/collect-payment`) when payment status is still `pending`.
+
+### Worked example
+
+```
+1. [client app] PATCH /api/driver-requests/dr1/client-accept
+   -> 200 { request: { id: "dr1", status: "accepted", amount: 4350 } }
+   booking.status is now "assigned". Show the Pay Now / Pay Later screen.
+
+2a. User taps "Pay Later":
+    -> no API call. Show booking-confirmed screen immediately.
+
+2b. User taps "Pay Now", completes a simulated UPI payment in your payment UI:
+    -> PATCH /api/bookings/bk1/pay  { "payment_mode": "upi" }
+    -> 200 { booking: { id: "bk1", paymentStatus: "paid", paymentMode: "upi", ... } }
+    -> Show booking-confirmed screen.
+
+3. [driver app, already connected via socket per §5] receives, within ~1s of step 2b:
+   event "booking-payment-updated"
+   payload: { bookingId: "bk1", bookingNumber: "BKG-202608-001", paymentStatus: "paid", paymentMode: "upi" }
+   -> Flip local trip.paymentStatus to "paid", show a "Paid" badge, toast "Payment received".
+
+4. [driver app, later, delivery-completion step] trip.paymentStatus is "paid" ->
+   the wizard skips straight to completion, no "collect payment" screen shown.
 ```

@@ -15,6 +15,7 @@ const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 const { haversineKm, AVERAGE_SPEED_KMPH } = require('../utils/geo');
 const { projectDriverRequest } = require('./driverRequest.controller');
+const { getIO } = require('../realtime/socket');
 
 const projectBooking = (row, timeline, role) => {
   const base = {
@@ -324,6 +325,31 @@ const payBooking = async (req, res, next) => {
       payment_mode: payment_mode || null,
       paid_at: new Date(),
     });
+
+    // Whoever's assigned to this booking (driver/broker) should see "paid" without having to
+    // reach the delivery-completion screen first — a trip may already exist by this point
+    // (booking status 'assigned' or later), so prefer its driver_id/broker_id, falling back to
+    // the booking row's own for the rare case a trip hasn't been created yet.
+    const trip = await TripModel.findByBookingId(id);
+    const driverId = trip?.driver_id || booking.driver_id;
+    const brokerId = trip?.broker_id || booking.broker_id;
+    const modeLabel = payment_mode ? payment_mode.toUpperCase() : 'the app';
+    for (const [userId, title] of [[driverId, 'Payment Received'], [brokerId, 'Payment Received']]) {
+      if (!userId) continue;
+      await NotificationModel.create({
+        userId,
+        title,
+        message: `The client paid for booking ${booking.booking_number} via ${modeLabel} — no COD collection needed.`,
+        type: 'payment',
+        meta: { booking_id: id, payment_mode: payment_mode || null },
+      });
+      getIO()?.to(`user:${userId}`).emit('booking-payment-updated', {
+        bookingId: id,
+        bookingNumber: booking.booking_number,
+        paymentStatus: 'paid',
+        paymentMode: payment_mode || null,
+      });
+    }
 
     await AuditLogModel.log({
       userId: req.user.id,
