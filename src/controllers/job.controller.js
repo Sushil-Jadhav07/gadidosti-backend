@@ -71,6 +71,28 @@ const listJobRequests = async (req, res, next) => {
   }
 };
 
+// ─── GET /api/bookings/:id/offers ──────────────────────────────────────────────
+// Client's own view of every broker offer for one of their bookings — the counterpart to
+// listJobRequests (a broker's view of offers they've sent). Registered under booking.routes.js
+// since the URL is booking-scoped, but lives here since it needs projectJobRequest/JobRequestModel.
+// Referenced by the broker-broadcast client screens (ChooseBroker.jsx, BookingDetail.jsx's
+// OffersPanel) to poll every job_requests row for this booking, including declined ones (shown
+// disabled/greyed rather than hidden) so the client can see the full picture of who responded.
+const getBookingOffers = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const booking = await BookingModel.findById(id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+
+    const rows = await JobRequestModel.findByBookingId(id);
+    return successResponse(res, 200, 'Offers fetched', { offers: rows.map(projectJobRequest), bookingStatus: booking.status });
+  } catch (err) {
+    next(err);
+  }
+};
+
 const assignDriver = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -525,6 +547,6 @@ const clientCounterOffer = async (req, res, next) => {
 };
 
 module.exports = {
-  listJobRequests, assignDriver, declineJobRequest, acceptJobRequest,
+  listJobRequests, getBookingOffers, assignDriver, declineJobRequest, acceptJobRequest,
   counterJobRequest, clientAcceptOffer, clientRejectOffer, clientCounterOffer,
 };

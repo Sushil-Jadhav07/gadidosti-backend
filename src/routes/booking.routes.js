@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, deleteBooking, getClientAnalytics } = require('../controllers/booking.controller');
+const { getBookingOffers } = require('../controllers/job.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
@@ -261,6 +262,44 @@ router.get('/bookings/:id', authenticate, getBooking);
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/bookings/:id/track', authenticate, trackBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/offers:
+ *   get:
+ *     tags: [Bookings]
+ *     summary: List every broker offer (job_requests row) for one of the client's own bookings
+ *     description: |
+ *       Client-only. The counterpart to GET /api/jobs/requests (a broker's view of offers they've
+ *       sent) — this is the client's view of every broker who's responded to a broadcast booking.
+ *       Includes declined offers (not just still-open ones) so the client's UI can show the full
+ *       picture, e.g. greyed out rather than removed. Polled by the client app's broker-broadcast
+ *       negotiation screen (ChooseBroker.jsx) every few seconds while offers are still open.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Offers fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/bookings/:id/offers', authenticate, authorize('client'), getBookingOffers);
 
 /**
  * @swagger
