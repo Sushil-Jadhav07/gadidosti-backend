@@ -127,10 +127,19 @@ The moment either side finalizes it:
 **What to do when you receive that:** the `driver-request-updated` payload is still the
 negotiation shape (§2) — it is **not** the trip object. Immediately call:
 ```
-GET /api/trips/upcoming   // if you haven't started it yet — status still "confirmed"
+GET /api/trips/active
 ```
 and navigate to your "My Trip" / trip-detail screen with whatever it returns. From this point
 on, everything is trip-scoped (§5), not negotiation-scoped.
+
+**Use `/trips/active`, not `/trips/upcoming`, here** — despite the name, `/trips/active` returns
+any trip that isn't `delivered`/`completed`/`cancelled`, which includes one that was *just*
+created (it starts at `status: "confirmed"`, before you've even tapped "Start Trip to Pickup").
+`/trips/upcoming` deliberately excludes whatever `/trips/active` already returned — it only ever
+has something in it in the rare case you already have an active trip in progress *and* a second
+one is already queued behind it. Polling `/trips/upcoming` right after acceptance will correctly
+return "no upcoming trip" forever, even though the trip absolutely exists — see
+`DRIVER_APP_TRIP_ID_ISSUE.md` for the full diagnosis if this bites you.
 
 ---
 
@@ -242,7 +251,7 @@ poll `GET /api/trips/active` on screen focus / app resume rather than expecting 
    -> 200 { request: { id: "dr1", status: "accepted", amount: 4500 } }
    Booking is finalized right now — a trip already exists.
 
-3. GET /api/trips/upcoming
+3. GET /api/trips/active
    -> 200 { trip: { id: "t1", status: "confirmed", bookingId: "bk1", stops: [pickup, drop], paymentStatus: "pending", ... } }
    Navigate to "My Trip" with this.
 
