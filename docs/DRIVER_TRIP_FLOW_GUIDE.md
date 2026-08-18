@@ -31,9 +31,7 @@ Events you'll receive on it over the course of one job:
 |---|---|---|
 | `driver-request-updated` | New offer, any negotiation action, trip created | §2–§4 below |
 | `booking-payment-updated` | Client pays via the app (Pay Now) | §5 below |
-
-**There is no socket event for trip status changes themselves** (en_route_pickup, picked_up,
-etc.) — that part is poll-based. See §6.
+| `trip-status-updated` | Trip status changes (en_route_pickup, picked_up, delivered, etc.) | §6 below |
 
 ---
 
@@ -230,13 +228,28 @@ This is the end of the flow for this booking.
 
 ---
 
-## 6. No live push for trip status — this part is poll-based
+## 6. Live push for trip status — `trip-status-updated`
 
-Unlike negotiation (§2–§4) and payment (§5), a trip's own status changes don't emit a socket
-event to anyone. Your app already knows the new status immediately because *you're* the one who
-just PATCHed it — update your local state from that response directly. For anything else that
-might have changed the trip out from under you (broker reassigned it after an incident, etc.),
-poll `GET /api/trips/active` on screen focus / app resume rather than expecting a push.
+Every `PATCH /api/trips/{id}/status` call now pushes to **everyone party to the trip** — the
+booking's client, its broker, and its driver alike — over the same socket connection from §1, no
+extra setup needed:
+
+```
+event: trip-status-updated
+payload: { ...full trip shape, same as GET /api/trips/{id} ... }
+```
+
+You already know the new status immediately when *you're* the one who just called the PATCH —
+update local state from that response directly, same as before. This event matters for the
+*other* parties: the client's tracking screen and the broker's job-detail screen update live now
+without polling, and it also covers cases where someone else changed the trip out from under you
+(e.g. a broker completing delivery on a driver's behalf, or a reassignment after an incident).
+
+Match on the payload's `id` (or `bookingId`) against whatever trip/booking you're currently
+displaying before applying it — same pattern as `driver-request-updated`/`booking-payment-updated`.
+**Keep polling `GET /api/trips/active` as a fallback regardless** (on screen focus/app resume) —
+sockets can still drop; this event makes updates arrive instantly when connected, it doesn't
+replace the safety net.
 
 ---
 

@@ -14,6 +14,7 @@ const logger = require('../utils/logger');
 const { getStorageProvider } = require('../providers/storage');
 const { toAbsoluteUrl } = require('../utils/fileUrl');
 const { haversineKm, AVERAGE_SPEED_KMPH } = require('../utils/geo');
+const { getIO } = require('../realtime/socket');
 
 const storageProvider = getStorageProvider();
 const STATUS_STEPS = ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
@@ -136,6 +137,20 @@ const projectTrip = async (row, timeline) => {
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   };
+};
+
+// Live push the instant a trip's status changes — client, broker, and driver all get it, so
+// none of their screens need a reload/re-poll to reflect "picked up"/"in transit"/etc. Mirrors
+// the emitDriverRequestUpdate/emitJobRequestUpdate pattern already used for negotiation and
+// payment events; this was the one remaining poll-only gap (see DRIVER_TRIP_FLOW_GUIDE.md §6,
+// written before this existed — now out of date on that point).
+const emitTripStatusUpdate = async (row, timeline) => {
+  const io = getIO();
+  if (!io) return;
+  const payload = await projectTrip(row, timeline);
+  for (const userId of [row.client_id, row.broker_id, row.driver_id]) {
+    if (userId) io.to(`user:${userId}`).emit('trip-status-updated', payload);
+  }
 };
 
 const assertCanView = (trip, user) => {
@@ -403,6 +418,7 @@ const updateTripStatus = async (req, res, next) => {
     logger.info(`Trip ${id} status -> ${status} by ${req.user.id}`);
     const full = await TripModel.findById(id);
     const timeline = await TripModel.getTimeline(id);
+    await emitTripStatusUpdate(full || trip, timeline);
     return successResponse(res, 200, 'Trip status updated', { trip: await projectTrip(full || trip, timeline) });
   } catch (err) {
     next(err);
