@@ -26,6 +26,17 @@ class RefreshTokenModel {
     return result.rows[0] || null;
   }
 
+  // Any still-valid (not revoked, not expired) session for this user — used to enforce
+  // single-active-session login for drivers (see auth.controller.js's login/verifyOtp/
+  // googleSignIn). Just existence, not the token itself — the caller never needs to see it.
+  static async findActiveForUser(userId) {
+    const result = await pool.query(
+      `SELECT id FROM refresh_tokens WHERE user_id = $1 AND is_revoked = false AND expires_at > NOW() LIMIT 1`,
+      [userId]
+    );
+    return result.rows[0] || null;
+  }
+
   // Revoke one token
   static async revoke(tokenHash) {
     await pool.query(

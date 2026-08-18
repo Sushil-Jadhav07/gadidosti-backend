@@ -543,6 +543,14 @@ const updateDriver = async (req, res, next) => {
 
     const { license_no, license_expiry, aadhaar, truck_id, avatar, status } = req.body;
 
+    // A driver mid-delivery shouldn't be marked offline — that's the one state a client/broker
+    // tracking screen actively relies on the driver being reachable for. Only 'offline' is
+    // blocked; 'available' is still allowed (e.g. correcting a stuck status once a trip is
+    // truly wrapped up but this field lags).
+    if (status === 'offline' && driver.status === 'on_trip') {
+      return errorResponse(res, 409, 'This driver has an active trip — cannot be marked offline until it ends.');
+    }
+
     if (truck_id) {
       const truck = await TruckModel.findById(truck_id);
       if (!truck) return errorResponse(res, 404, 'Truck not found');

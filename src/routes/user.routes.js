@@ -8,6 +8,7 @@ const {
   getAllUsers,
   getUserById,
   updateUserStatus,
+  forceLogoutUser,
   deleteUser,
 } = require('../controllers/user.controller');
 const {
@@ -505,6 +506,39 @@ router.get('/admin/users/:id', authenticate, authorize('admin'), getUserById);
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.patch('/admin/users/:id/status', authenticate, authorize('admin'), updateUserStatusValidation, validate, updateUserStatus);
+
+/**
+ * @swagger
+ * /api/admin/users/{id}/force-logout:
+ *   post:
+ *     tags: [Users]
+ *     summary: End every active session for a user (admin only)
+ *     description: |
+ *       Revokes every refresh token for this user. Primarily the escape hatch for driver
+ *       accounts stuck behind the single-active-session login rule (see the login endpoint) —
+ *       if a driver's app was killed/lost connectivity without calling logout, their session
+ *       stays "active" and blocks any new login until it naturally expires (up to 30 days) or
+ *       this is called.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: All sessions ended
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: User not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/admin/users/:id/force-logout', authenticate, authorize('admin'), forceLogoutUser);
 
 /**
  * @swagger

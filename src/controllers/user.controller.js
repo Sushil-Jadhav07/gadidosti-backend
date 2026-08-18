@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const UserModel = require('../models/user.model');
+const RefreshTokenModel = require('../models/refreshToken.model');
 const AuditLogModel = require('../models/auditLog.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
@@ -149,6 +150,37 @@ const updateUserStatus = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/admin/users/:id/force-logout ───────────────────────────────────
+// The operational escape hatch for the single-active-session rule on driver logins (see
+// auth.controller.js's hasBlockingDriverSession): if a driver's app was killed/lost
+// connectivity without ever calling logout, their session stays "active" (blocking any new
+// login) for up to the refresh token's own 30-day expiry — this is the only way to unblock
+// them before that. Revokes every refresh token for the user, same mechanism already used by
+// the password-reset flow, just exposed here as a deliberate admin action instead of a
+// side-effect of another one.
+const forceLogoutUser = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const targetUser = await UserModel.findById(id);
+    if (!targetUser) return errorResponse(res, 404, 'User not found');
+
+    await RefreshTokenModel.revokeAllForUser(id);
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'USER_FORCE_LOGOUT',
+      entity: 'users',
+      entityId: id,
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Admin ${req.user.id} force-logged-out user ${id}`);
+    return successResponse(res, 200, 'All sessions for this user have been ended — they can log in again now.');
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── DELETE /api/admin/users/:id ─────────────────────────────────────────────
 const deleteUser = async (req, res, next) => {
   try {
@@ -190,5 +222,6 @@ module.exports = {
   getAllUsers,
   getUserById,
   updateUserStatus,
+  forceLogoutUser,
   deleteUser,
 };

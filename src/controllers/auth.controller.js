@@ -13,6 +13,34 @@ const pool = require('../config/db');
 
 const smsProvider = getSmsProvider();
 
+// Single-active-session enforcement — drivers only. A driver logged in on one device blocks a
+// second login with the same credentials anywhere else until that session ends (explicit
+// logout, or an admin force-clears it — see forceLogoutUser below). This is a login-time BLOCK,
+// not a kick-the-old-session-out — the new login attempt fails, the existing session is
+// untouched. Deliberately scoped to role === 'driver' only: client/broker/admin logins are
+// unaffected (a broker legitimately using multiple tabs/devices, for instance, shouldn't be
+// blocked by this).
+//
+// Risk this introduces, by design of a stateless-JWT system: if a driver's app is killed/loses
+// connectivity without ever calling POST /auth/logout, their refresh_tokens row stays "valid"
+// (not revoked) until its own 30-day expiry — they'd be locked out of their own account for up
+// to 30 days with no self-service way out (they can't call logout without already being
+// authenticated on the blocked device). forceLogoutUser exists specifically as the operational
+// escape hatch for that — instruct support to use it if a driver reports being unable to log
+// back in after losing their old session.
+const ACTIVE_DRIVER_SESSION_MESSAGE =
+  'This account is already logged in on another device. Log out there first, or contact support to reset your session.';
+
+// Returns true if this login attempt should be blocked. Deliberately returns a boolean (checked
+// with `if (await hasBlockingDriverSession(user)) return errorResponse(...)` at each call site)
+// rather than throwing — the global error handler replaces thrown errors' messages with a
+// generic "Internal server error" in production (see errorHandler.middleware.js), which would
+// silently swallow this specific, safe-to-show message.
+const hasBlockingDriverSession = async (user) => {
+  if (user.role !== 'driver') return false;
+  return !!(await RefreshTokenModel.findActiveForUser(user.id));
+};
+
 // ─── POST /api/auth/register ─────────────────────────────────────────────────
 const register = async (req, res, next) => {
   try {
@@ -144,6 +172,8 @@ const login = async (req, res, next) => {
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
     if (!isPasswordValid) return errorResponse(res, 401, 'Invalid credentials');
 
+    if (await hasBlockingDriverSession(user)) return errorResponse(res, 409, ACTIVE_DRIVER_SESSION_MESSAGE);
+
     const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
     const accessToken  = generateAccessToken(tokenPayload);
     const refreshToken = generateRefreshToken(tokenPayload);
@@ -268,6 +298,8 @@ const verifyOtp = async (req, res, next) => {
     if (!user) return errorResponse(res, 404, 'User not found');
 
     if (purpose === 'login') {
+      if (await hasBlockingDriverSession(user)) return errorResponse(res, 409, ACTIVE_DRIVER_SESSION_MESSAGE);
+
       const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
       const accessToken  = generateAccessToken(tokenPayload);
       const refreshToken = generateRefreshToken(tokenPayload);
@@ -495,6 +527,7 @@ const googleSignIn = async (req, res, next) => {
 
     if (user.status === 'blocked') return errorResponse(res, 403, 'Your account has been blocked. Contact support.');
     if (user.status === 'inactive') return errorResponse(res, 403, 'Account is inactive');
+    if (await hasBlockingDriverSession(user)) return errorResponse(res, 409, ACTIVE_DRIVER_SESSION_MESSAGE);
 
     const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
     const accessToken  = generateAccessToken(tokenPayload);
