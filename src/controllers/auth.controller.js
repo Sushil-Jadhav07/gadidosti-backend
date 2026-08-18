@@ -9,36 +9,39 @@ const { generateAccessToken, generateRefreshToken, verifyRefreshToken, hashToken
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 const { getSmsProvider } = require('../providers/sms');
+const { getIO } = require('../realtime/socket');
 const pool = require('../config/db');
 
 const smsProvider = getSmsProvider();
 
-// Single-active-session enforcement — drivers only. A driver logged in on one device blocks a
-// second login with the same credentials anywhere else until that session ends (explicit
-// logout, or an admin force-clears it — see forceLogoutUser below). This is a login-time BLOCK,
-// not a kick-the-old-session-out — the new login attempt fails, the existing session is
-// untouched. Deliberately scoped to role === 'driver' only: client/broker/admin logins are
-// unaffected (a broker legitimately using multiple tabs/devices, for instance, shouldn't be
-// blocked by this).
+// Single-active-session enforcement — driver and broker accounts. Logging in on a new device no
+// longer BLOCKS the new login (that was the first version of this — it turned out to have a bad
+// failure mode: an abandoned old session with no clean logout could lock the account out of
+// logging in anywhere for up to 30 days). Instead: the new login always succeeds, and it
+// silently revokes whatever session was active before it, pushing a live 'session-terminated'
+// socket event to that old session so it can show a "logged out — logged in elsewhere" message
+// and clean itself up immediately if it's still connected. Deliberately scoped to driver and
+// broker accounts only — client and admin logins are unaffected.
 //
-// Risk this introduces, by design of a stateless-JWT system: if a driver's app is killed/loses
-// connectivity without ever calling POST /auth/logout, their refresh_tokens row stays "valid"
-// (not revoked) until its own 30-day expiry — they'd be locked out of their own account for up
-// to 30 days with no self-service way out (they can't call logout without already being
-// authenticated on the blocked device). forceLogoutUser exists specifically as the operational
-// escape hatch for that — instruct support to use it if a driver reports being unable to log
-// back in after losing their old session.
-const ACTIVE_DRIVER_SESSION_MESSAGE =
-  'This account is already logged in on another device. Log out there first, or contact support to reset your session.';
+// This is "soft" enforcement, by nature of a stateless-JWT system: the old session's ACCESS
+// token is still technically valid until its own expiry even after this runs (only the refresh
+// token is revoked, which only stops it from getting a NEW access token) — the actual kick-out
+// depends on the old client being connected and reacting to the socket push. Good enough for
+// "don't let two people be logged in at once in practice"; not a substitute for real per-request
+// session-token validation if that's ever needed.
+const SINGLE_SESSION_ROLES = ['driver', 'broker'];
 
-// Returns true if this login attempt should be blocked. Deliberately returns a boolean (checked
-// with `if (await hasBlockingDriverSession(user)) return errorResponse(...)` at each call site)
-// rather than throwing — the global error handler replaces thrown errors' messages with a
-// generic "Internal server error" in production (see errorHandler.middleware.js), which would
-// silently swallow this specific, safe-to-show message.
-const hasBlockingDriverSession = async (user) => {
-  if (user.role !== 'driver') return false;
-  return !!(await RefreshTokenModel.findActiveForUser(user.id));
+const terminateExistingSessionIfAny = async (user) => {
+  if (!SINGLE_SESSION_ROLES.includes(user.role)) return;
+  const active = await RefreshTokenModel.findActiveForUser(user.id);
+  if (!active) return;
+
+  await RefreshTokenModel.revokeAllForUser(user.id);
+  getIO()?.to(`user:${user.id}`).emit('session-terminated', {
+    reason: 'logged_in_elsewhere',
+    message: 'Your account was used to log in on another device. You have been logged out here.',
+  });
+  logger.info(`Session terminated for ${user.role} ${user.id} — new login on another device`);
 };
 
 // ─── POST /api/auth/register ─────────────────────────────────────────────────
@@ -172,7 +175,7 @@ const login = async (req, res, next) => {
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
     if (!isPasswordValid) return errorResponse(res, 401, 'Invalid credentials');
 
-    if (await hasBlockingDriverSession(user)) return errorResponse(res, 409, ACTIVE_DRIVER_SESSION_MESSAGE);
+    await terminateExistingSessionIfAny(user);
 
     const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
     const accessToken  = generateAccessToken(tokenPayload);
@@ -298,7 +301,7 @@ const verifyOtp = async (req, res, next) => {
     if (!user) return errorResponse(res, 404, 'User not found');
 
     if (purpose === 'login') {
-      if (await hasBlockingDriverSession(user)) return errorResponse(res, 409, ACTIVE_DRIVER_SESSION_MESSAGE);
+      await terminateExistingSessionIfAny(user);
 
       const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
       const accessToken  = generateAccessToken(tokenPayload);
@@ -527,7 +530,7 @@ const googleSignIn = async (req, res, next) => {
 
     if (user.status === 'blocked') return errorResponse(res, 403, 'Your account has been blocked. Contact support.');
     if (user.status === 'inactive') return errorResponse(res, 403, 'Account is inactive');
-    if (await hasBlockingDriverSession(user)) return errorResponse(res, 409, ACTIVE_DRIVER_SESSION_MESSAGE);
+    await terminateExistingSessionIfAny(user);
 
     const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
     const accessToken  = generateAccessToken(tokenPayload);
