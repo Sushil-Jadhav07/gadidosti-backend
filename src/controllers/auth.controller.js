@@ -14,34 +14,39 @@ const pool = require('../config/db');
 
 const smsProvider = getSmsProvider();
 
-// Single-active-session enforcement — driver and broker accounts. Logging in on a new device no
-// longer BLOCKS the new login (that was the first version of this — it turned out to have a bad
-// failure mode: an abandoned old session with no clean logout could lock the account out of
-// logging in anywhere for up to 30 days). Instead: the new login always succeeds, and it
-// silently revokes whatever session was active before it, pushing a live 'session-terminated'
-// socket event to that old session so it can show a "logged out — logged in elsewhere" message
-// and clean itself up immediately if it's still connected. Deliberately scoped to driver and
-// broker accounts only — client and admin logins are unaffected.
+// Single-active-session enforcement — driver and broker accounts — final design (third pass).
+// v1 blocked the second login with a 409 and did nothing else; its problem was purely
+// operational (an abandoned old session with no clean logout could lock an account out of
+// logging in anywhere for up to 30 days — see forceLogoutUser/the SQL note in
+// DRIVER_SESSION_AND_OFFLINE_RULES.md for the escape hatches that exist because of that). v2
+// flipped it around entirely — new login always succeeds, old session gets silently kicked out
+// — but that's the wrong shape for this: the FIRST device is the legitimate one and shouldn't
+// ever be force-logged-out by someone else attempting to log in.
 //
-// This is "soft" enforcement, by nature of a stateless-JWT system: the old session's ACCESS
-// token is still technically valid until its own expiry even after this runs (only the refresh
-// token is revoked, which only stops it from getting a NEW access token) — the actual kick-out
-// depends on the old client being connected and reacting to the socket push. Good enough for
-// "don't let two people be logged in at once in practice"; not a substitute for real per-request
-// session-token validation if that's ever needed.
+// This version: the second login attempt is BLOCKED (like v1 — nothing about the existing
+// session changes, no token revoked, no forced logout), and the existing session gets a
+// real-time, single-acknowledgment security alert that someone just tried. It's purely
+// informational — "someone tried to use your account from elsewhere" — not an action the first
+// device needs to respond to or a choice between two options.
 const SINGLE_SESSION_ROLES = ['driver', 'broker'];
+const ACTIVE_SESSION_MESSAGE =
+  'This account is already logged in on another device. Log out there first, or contact support to reset your session.';
 
-const terminateExistingSessionIfAny = async (user) => {
-  if (!SINGLE_SESSION_ROLES.includes(user.role)) return;
+// Returns true if this login attempt should be blocked (and, as a side effect, alerts the
+// existing session if so). Returns a boolean rather than throwing for the same reason as
+// before — the global error handler swaps thrown errors' messages for a generic "Internal
+// server error" in production (see errorHandler.middleware.js), which would swallow this
+// specific, safe-to-show message.
+const rejectIfActiveSession = async (user) => {
+  if (!SINGLE_SESSION_ROLES.includes(user.role)) return false;
   const active = await RefreshTokenModel.findActiveForUser(user.id);
-  if (!active) return;
+  if (!active) return false;
 
-  await RefreshTokenModel.revokeAllForUser(user.id);
-  getIO()?.to(`user:${user.id}`).emit('session-terminated', {
-    reason: 'logged_in_elsewhere',
-    message: 'Your account was used to log in on another device. You have been logged out here.',
+  getIO()?.to(`user:${user.id}`).emit('login-attempt-alert', {
+    message: 'Someone just tried to log in to your account from another device. If this wasn\'t you, please contact support.',
   });
-  logger.info(`Session terminated for ${user.role} ${user.id} — new login on another device`);
+  logger.info(`Blocked login for ${user.role} ${user.id} — already has an active session`);
+  return true;
 };
 
 // ─── POST /api/auth/register ─────────────────────────────────────────────────
@@ -175,7 +180,7 @@ const login = async (req, res, next) => {
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
     if (!isPasswordValid) return errorResponse(res, 401, 'Invalid credentials');
 
-    await terminateExistingSessionIfAny(user);
+    if (await rejectIfActiveSession(user)) return errorResponse(res, 409, ACTIVE_SESSION_MESSAGE);
 
     const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
     const accessToken  = generateAccessToken(tokenPayload);
@@ -301,7 +306,7 @@ const verifyOtp = async (req, res, next) => {
     if (!user) return errorResponse(res, 404, 'User not found');
 
     if (purpose === 'login') {
-      await terminateExistingSessionIfAny(user);
+      if (await rejectIfActiveSession(user)) return errorResponse(res, 409, ACTIVE_SESSION_MESSAGE);
 
       const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
       const accessToken  = generateAccessToken(tokenPayload);
@@ -530,7 +535,7 @@ const googleSignIn = async (req, res, next) => {
 
     if (user.status === 'blocked') return errorResponse(res, 403, 'Your account has been blocked. Contact support.');
     if (user.status === 'inactive') return errorResponse(res, 403, 'Account is inactive');
-    await terminateExistingSessionIfAny(user);
+    if (await rejectIfActiveSession(user)) return errorResponse(res, 409, ACTIVE_SESSION_MESSAGE);
 
     const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
     const accessToken  = generateAccessToken(tokenPayload);
