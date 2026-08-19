@@ -636,10 +636,16 @@ const myAssignedTruck = async (req, res, next) => {
 // Pinged periodically by the driver's own app while online, even before a trip starts.
 const updateDriverLocation = async (req, res, next) => {
   try {
-    const { lat, lng } = req.body;
+    const { lat, lng, heading } = req.body;
+    // Distinct from `heading === undefined` — an omitted field vs. an explicit `heading: null`
+    // must be told apart here, before either collapses to the same SQL NULL parameter and
+    // becomes indistinguishable to the model's COALESCE (see updateLocation).
+    const headingProvided = Object.prototype.hasOwnProperty.call(req.body, 'heading');
 
-    const updated = await DriverProfileModel.updateLocation(req.user.id, { lat, lng });
+    const updated = await DriverProfileModel.updateLocation(req.user.id, { lat, lng, heading, headingProvided });
     if (!updated) return errorResponse(res, 404, 'Driver profile not found');
+
+    const headingNum = updated.current_heading == null ? null : Number(updated.current_heading);
 
     // Pushes to anyone watching this truck via socket join-truck-tracking (e.g. a client on
     // the booking Truck step) — no-op if nobody's joined that room, or if this driver has no
@@ -649,6 +655,7 @@ const updateDriverLocation = async (req, res, next) => {
         truckId: updated.truck_id,
         lat: Number(updated.current_lat),
         lng: Number(updated.current_lng),
+        heading: headingNum,
         lastLocationAt: updated.last_location_at,
       });
     }
@@ -657,6 +664,7 @@ const updateDriverLocation = async (req, res, next) => {
       location: {
         lat: Number(updated.current_lat),
         lng: Number(updated.current_lng),
+        heading: headingNum,
         lastLocationAt: updated.last_location_at,
       },
     });

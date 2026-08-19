@@ -192,10 +192,16 @@ const trackBooking = async (req, res, next) => {
       etaMinutes = Math.round((distanceRemainingKm / AVERAGE_SPEED_KMPH) * 60);
     }
 
+    // Only sourced from driver_profiles.current_heading — trips has no heading column, so the
+    // terminal (frozen-location) branch above never has one to show; direction of travel isn't
+    // meaningful for an already-delivered shipment anyway.
+    const hasHeading = !isTerminal && hasLocation && location.current_heading != null;
+
     return successResponse(res, 200, 'Booking location fetched', {
       status: booking.status,
       driverLat: hasLocation ? Number(location.current_lat) : null,
       driverLng: hasLocation ? Number(location.current_lng) : null,
+      driverHeading: hasHeading ? Number(location.current_heading) : null,
       lastLocationAt: location ? location.last_location_at : null,
       isTerminal,
       deliveredAt: trip?.delivered_at || null,

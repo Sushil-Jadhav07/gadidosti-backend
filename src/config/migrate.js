@@ -899,6 +899,15 @@ const runMigrations = async (client) => {
         CHECK (pending_confirmation_by IN ('client', 'broker'));
     `);
 
+    // ── DRIVER HEADING (compass bearing on driver_profiles, mirrors db/33driver_heading.sql) ──
+    // Direction of travel in degrees (0-360), reported alongside current_lat/current_lng.
+    // Nullable — the device omits it whenever GPS can't determine heading (e.g. stationary),
+    // and the location-update handler leaves this column untouched on that fix rather than
+    // overwriting a valid value with unknown.
+    await client.query(`
+      ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS current_heading NUMERIC(5,1);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

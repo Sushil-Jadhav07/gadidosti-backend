@@ -103,33 +103,40 @@ directly) now rejects `status: "offline"` with **`409`** if the driver's current
 ### What the Flutter app should add — matching the web driver app
 
 The web driver app (`gadidosti-broker-driver`) has an Online/Offline switch in its top header.
-It already had logic to keep location pings flowing during an active trip regardless of the
-toggle (`driverTrackingEnabledProvider`'s Flutter equivalent — `driverOnlineProvider ||
-driverActiveTripIdProvider is set`, which your app already has per
-`driver_tracking_state_provider.dart`) — but the switch itself could still be visually flipped
-off, which was misleading even though tracking secretly kept running. That's now fixed there and
-should be matched here:
-
-**In `driver_home_screen.dart`'s online `Switch`**, block turning it off while
-`driverActiveTripIdProvider` is set — don't just rely on the backend guard (that endpoint isn't
-even one the driver app calls; this toggle is local-only, same as the web app), disable the
-interaction itself:
+**First pass at this had a real bug worth avoiding here**: it only blocked the *click* that would
+turn the switch off while a trip was active — but the switch's displayed value still came from
+the raw local toggle preference, not from whether the driver was effectively online. So a driver
+who never explicitly toggled Online before a trip landed on them (e.g. direct-assign, or a
+broker-assigned job) could sit there showing **"Offline" for the entire trip** — confusing and
+just wrong, even though location was quietly being tracked anyway (trip presence already forces
+tracking regardless of the toggle — see `driverTrackingEnabledProvider`/
+`driver_tracking_state_provider.dart`, which your app already has). Fixed on the web side by
+computing the **displayed** value as `rawPreference || hasActiveTrip`, not the raw preference
+alone — do the same here:
 
 ```dart
 final hasActiveTrip = (ref.watch(driverActiveTripIdProvider) ?? '').trim().isNotEmpty;
-final isOnline = ref.watch(driverOnlineProvider);
+final rawOnlinePreference = ref.watch(driverOnlineProvider);
+
+// This — NOT rawOnlinePreference directly — is what the Switch's `value` should read. An
+// active trip always displays as "online," regardless of what the driver last toggled.
+final effectiveOnline = rawOnlinePreference || hasActiveTrip;
 
 Switch(
-  value: isOnline,
-  onChanged: (isOnline && hasActiveTrip)
-      ? null // disabled — can't turn off while on an active trip; turning ON is still fine
+  value: effectiveOnline,
+  onChanged: hasActiveTrip
+      ? null // fully disabled during an active trip — nothing to toggle either direction,
+             // since the effective state is already forced "online" by the trip itself
       : (value) => ref.read(driverOnlineProvider.notifier).state = value,
   ...
 )
 ```
-Consider also wrapping it in a `Tooltip`/showing a small inline note ("Can't go offline during
-an active trip") when disabled, matching the title-attribute hint added to the web version's
-button.
+Note `onChanged` is now disabled based on `hasActiveTrip` alone (not `rawOnlinePreference &&
+hasActiveTrip` as an earlier draft of this had it) — once there's an active trip there's nothing
+meaningful left to toggle in either direction, so lock it outright rather than only blocking the
+turn-off half. Consider also wrapping it in a `Tooltip`/showing a small inline note ("Can't go
+offline during an active trip") when disabled, matching the title-attribute hint on the web
+version's button.
 
 ---
 

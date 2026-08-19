@@ -156,22 +156,29 @@ class DriverProfileModel {
   // nothing else ever flipped them back on when GPS resumed, leaving them permanently
   // invisible to TruckModel.findNearby despite actively reporting a live location.
   // 'on_trip' is left untouched — a ping mid-trip shouldn't make the driver bookable again.
-  static async updateLocation(userId, { lat, lng }) {
+  // heading is optional — the device omits it whenever GPS can't determine direction (e.g.
+  // stationary) — and an omitted field must keep whatever heading was last stored rather than
+  // being clobbered with NULL. headingProvided disambiguates that from an explicit
+  // `heading: null` (which does overwrite, clearing it) — a plain COALESCE($4, current_heading)
+  // can't tell the two apart, since both an omitted field and an explicit null collapse to the
+  // same NULL query parameter before COALESCE ever sees them.
+  static async updateLocation(userId, { lat, lng, heading, headingProvided }) {
     const result = await pool.query(
       `UPDATE driver_profiles
        SET current_lat = $1, current_lng = $2, last_location_at = NOW(), updated_at = NOW(),
+           current_heading = CASE WHEN $5 THEN $4 ELSE current_heading END,
            stale_notified_at = NULL,
            status = CASE WHEN status = 'offline' THEN 'available' ELSE status END
        WHERE user_id = $3
-       RETURNING user_id, truck_id, current_lat, current_lng, last_location_at, status`,
-      [lat, lng, userId]
+       RETURNING user_id, truck_id, current_lat, current_lng, current_heading, last_location_at, status`,
+      [lat, lng, userId, heading ?? null, !!headingProvided]
     );
     return result.rows[0] || null;
   }
 
   static async findLocation(userId) {
     const result = await pool.query(
-      `SELECT current_lat, current_lng, last_location_at FROM driver_profiles WHERE user_id = $1`,
+      `SELECT current_lat, current_lng, current_heading, last_location_at FROM driver_profiles WHERE user_id = $1`,
       [userId]
     );
     return result.rows[0] || null;
