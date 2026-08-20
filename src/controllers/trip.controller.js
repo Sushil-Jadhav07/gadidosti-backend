@@ -128,10 +128,16 @@ const projectTrip = async (row, timeline) => {
   podUrl: row.pod_url,
   podPhotos: podPhotos.map((p) => p.url),
   // Drives the driver app's delivery-completion flow: whether the Payments step is needed
-  // at all (paymentStatus), what to show on it (amountToCollect), and the driver's saved
-  // UPI QR to display for the client to scan (driverQrUrl — null until they've uploaded one).
+  // at all (paymentStatus — now 'pending' OR 'partial', not just 'pending', since a >5k
+  // booking may have had only a 20% advance paid upfront), what to show on it
+  // (amountToCollect — the true REMAINING balance, not the full booking amount, so a booking
+  // that already had its advance paid doesn't ask the driver to collect the whole thing again),
+  // and the driver's saved UPI QR to display for the client to scan (driverQrUrl — null until
+  // they've uploaded one).
   paymentStatus: row.booking_payment_status,
-  amountToCollect: row.booking_amount != null ? Number(row.booking_amount) : null,
+  amountToCollect: row.booking_amount != null
+    ? Number(row.booking_amount) - Number(row.booking_amount_paid || 0)
+    : null,
   driverQrUrl: row.payment_qr_url || null,
   timeline: timeline.map((t) => ({ step: t.step, done: t.done, time: t.occurred_at })),
   createdAt: row.created_at,
@@ -828,11 +834,19 @@ const collectPayment = async (req, res, next) => {
     if (trip.driver_id !== req.user.id && trip.broker_id !== req.user.id) {
       return errorResponse(res, 403, 'Not your trip');
     }
-    if (trip.booking_payment_status !== 'pending') {
+    // 'partial' means a 20% advance was already paid up front (see booking.controller.js's
+    // payBooking) — this step is still needed to collect the remaining balance, only a fully
+    // 'paid' booking has nothing left to collect.
+    if (!['pending', 'partial'].includes(trip.booking_payment_status)) {
       return errorResponse(res, 409, 'Payment has already been recorded for this booking');
     }
 
-    await BookingModel.update(trip.booking_id, { payment_status: 'paid', payment_mode: mode, paid_at: new Date() });
+    await BookingModel.update(trip.booking_id, {
+      payment_status: 'paid',
+      payment_mode: mode,
+      amount_paid: trip.booking_amount,
+      paid_at: new Date(),
+    });
 
     const modeLabel = mode === 'upi' ? 'UPI' : 'cash';
     const collectorLabel = req.user.id === trip.broker_id ? (trip.broker_name || 'the broker') : (trip.driver_name || 'the driver');

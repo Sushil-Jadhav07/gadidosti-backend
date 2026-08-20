@@ -17,6 +17,13 @@ const { haversineKm, AVERAGE_SPEED_KMPH } = require('../utils/geo');
 const { projectDriverRequest } = require('./driverRequest.controller');
 const { getIO } = require('../realtime/socket');
 
+// Above this amount, Pay Later is no longer offered — the client must pay at least a 20%
+// advance to confirm the booking (Pay Now for the full amount is still always available too).
+// Mirrored in gadidosti-client's RequestDriver.jsx to decide which buttons to show; kept in
+// sync manually since there's no shared config endpoint for this yet.
+const ADVANCE_PAYMENT_THRESHOLD = 5000;
+const ADVANCE_PAYMENT_PCT = 0.2;
+
 const projectBooking = (row, timeline, role) => {
   const base = {
     id: row.id,
@@ -47,6 +54,7 @@ const projectBooking = (row, timeline, role) => {
     amount: row.amount,
     paymentStatus: row.payment_status,
     paymentMode: row.payment_mode || null,
+    amountPaid: row.amount_paid != null ? Number(row.amount_paid) : 0,
     paidAt: row.paid_at || null,
     driver: { name: row.driver_name || null, phone: row.driver_phone || null },
     truckReg: row.truck_reg || null,
@@ -318,17 +326,35 @@ const cancelBooking = async (req, res, next) => {
 const payBooking = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { payment_mode } = req.body;
+    const { payment_mode, pay_type = 'full' } = req.body;
+    if (!['full', 'advance'].includes(pay_type)) {
+      return errorResponse(res, 422, "pay_type must be 'full' or 'advance'");
+    }
 
     const booking = await BookingModel.findById(id);
     if (!booking) return errorResponse(res, 404, 'Booking not found');
     if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
-    if (booking.payment_status === 'paid') return errorResponse(res, 409, 'This booking is already paid');
+    if (['paid', 'partial'].includes(booking.payment_status)) {
+      return errorResponse(res, 409, 'A payment has already been recorded for this booking');
+    }
     if (booking.status === 'cancelled') return errorResponse(res, 409, 'This booking is cancelled');
 
+    // The 20% advance only exists as an alternative to Pay Later above ADVANCE_PAYMENT_THRESHOLD
+    // (see gadidosti-client's RequestDriver.jsx, which is the only caller that ever sends
+    // pay_type: 'advance') — reject it here too rather than trusting the client not to send it
+    // for a cheap booking, since that would let someone underpay a sub-threshold booking.
+    if (pay_type === 'advance' && Number(booking.amount) <= ADVANCE_PAYMENT_THRESHOLD) {
+      return errorResponse(res, 422, `Advance payment only applies to bookings over ₹${ADVANCE_PAYMENT_THRESHOLD}`);
+    }
+
+    const amountPaid = pay_type === 'advance'
+      ? Math.round(Number(booking.amount) * ADVANCE_PAYMENT_PCT * 100) / 100
+      : Number(booking.amount);
+
     await BookingModel.update(id, {
-      payment_status: 'paid',
+      payment_status: pay_type === 'advance' ? 'partial' : 'paid',
       payment_mode: payment_mode || null,
+      amount_paid: amountPaid,
       paid_at: new Date(),
     });
 
@@ -340,20 +366,26 @@ const payBooking = async (req, res, next) => {
     const driverId = trip?.driver_id || booking.driver_id;
     const brokerId = trip?.broker_id || booking.broker_id;
     const modeLabel = payment_mode ? payment_mode.toUpperCase() : 'the app';
+    const remaining = Math.round((Number(booking.amount) - amountPaid) * 100) / 100;
+    const paymentStatus = pay_type === 'advance' ? 'partial' : 'paid';
+    const notificationMessage = pay_type === 'advance'
+      ? `The client paid a 20% advance (₹${amountPaid}) for booking ${booking.booking_number} via ${modeLabel} — ₹${remaining} remains to collect on delivery.`
+      : `The client paid for booking ${booking.booking_number} via ${modeLabel} — no COD collection needed.`;
     for (const [userId, title] of [[driverId, 'Payment Received'], [brokerId, 'Payment Received']]) {
       if (!userId) continue;
       await NotificationModel.create({
         userId,
         title,
-        message: `The client paid for booking ${booking.booking_number} via ${modeLabel} — no COD collection needed.`,
+        message: notificationMessage,
         type: 'payment',
-        meta: { booking_id: id, payment_mode: payment_mode || null },
+        meta: { booking_id: id, payment_mode: payment_mode || null, pay_type, amount_paid: amountPaid },
       });
       getIO()?.to(`user:${userId}`).emit('booking-payment-updated', {
         bookingId: id,
         bookingNumber: booking.booking_number,
-        paymentStatus: 'paid',
+        paymentStatus,
         paymentMode: payment_mode || null,
+        amountPaid,
       });
     }
 
@@ -362,11 +394,11 @@ const payBooking = async (req, res, next) => {
       action: 'BOOKING_PAID_BY_CLIENT',
       entity: 'bookings',
       entityId: id,
-      meta: { payment_mode: payment_mode || null },
+      meta: { payment_mode: payment_mode || null, pay_type, amount_paid: amountPaid },
       ipAddress: req.ip,
     });
 
-    logger.info(`Booking ${id} marked paid by client ${req.user.id} (mode: ${payment_mode || 'unspecified'})`);
+    logger.info(`Booking ${id} marked ${paymentStatus} by client ${req.user.id} (mode: ${payment_mode || 'unspecified'}, pay_type: ${pay_type})`);
     const full = await BookingModel.findById(id);
     const timeline = await BookingModel.getTimeline(id);
     return successResponse(res, 200, 'Payment recorded', { booking: projectBooking(full, timeline, req.user.role) });
@@ -452,6 +484,7 @@ const quoteBooking = async (req, res, next) => {
     const {
       truck_category, transport_type = 'intra', distance,
       capacity_used_pct, duration_min, duration_in_traffic_min,
+      pickup_lat, pickup_lng,
     } = req.body;
 
     const breakdown = await PricingModel.estimate({
@@ -461,6 +494,8 @@ const quoteBooking = async (req, res, next) => {
       capacityUsedPct: capacity_used_pct,
       durationMin: duration_min,
       durationInTrafficMin: duration_in_traffic_min,
+      pickupLat: pickup_lat,
+      pickupLng: pickup_lng,
     });
 
     return successResponse(res, 200, 'Pricing estimate calculated', breakdown);
@@ -498,6 +533,8 @@ const createBooking = async (req, res, next) => {
         distance,
         durationMin: duration_min,
         durationInTrafficMin: duration_in_traffic_min,
+        pickupLat: pickup_lat,
+        pickupLng: pickup_lng,
       });
       amount = amount != null ? amount : pricingBreakdown.total;
       platformFee = pricingBreakdown.platformFee;

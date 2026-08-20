@@ -908,6 +908,16 @@ const runMigrations = async (client) => {
       ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS current_heading NUMERIC(5,1);
     `);
 
+    // ── BOOKING PARTIAL PAYMENT (mirrors db/34booking_partial_payment.sql) ──
+    // Bookings over the advance threshold can be confirmed with a 20% advance instead of full
+    // payment — 'partial' sits between 'pending' and 'paid'; amount_paid tracks how much of
+    // bookings.amount has actually been paid so far, so the driver app's collect-payment step
+    // can show the true remaining balance instead of always the full booking amount.
+    await client.query(`
+      ALTER TYPE payment_status ADD VALUE IF NOT EXISTS 'partial';
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(12,2) NOT NULL DEFAULT 0;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

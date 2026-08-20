@@ -1,7 +1,16 @@
 const pool = require('../config/db');
+const TruckModel = require('./truck.model');
 
 // Fixed singleton row id — see db/10settings_pricing.sql
 const PRICING_CONFIG_ID = '00000000-0000-0000-0000-000000000001';
+
+// Supply-based pricing: when more than this many available trucks are within radius of the
+// pickup point, this is treated as a high-activity pickup zone and the fare surges by
+// SUPPLY_SURGE_MULTIPLIER. Radius matches NearbyTrucksMap.jsx's default search radius, so
+// "nearby" means the same thing here as it does on the client's own truck-selection map.
+const NEARBY_SURGE_THRESHOLD_TRUCKS = 5;
+const NEARBY_SURGE_RADIUS_KM = 10;
+const NEARBY_SURGE_MULTIPLIER = 1.05;
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
@@ -51,12 +60,28 @@ class PricingModel {
   // getDistance, which the frontend calls first), a traffic surge multiplier is layered on
   // top of the existing static rate; when omitted, trafficMultiplier is 1.0 (no surge, no
   // behavior change from before this multiplier existed).
-  static async estimate({ truckCategory, transportType, distance, capacityUsedPct, durationMin, durationInTrafficMin }) {
+  static async estimate({
+    truckCategory, transportType, distance, capacityUsedPct, durationMin, durationInTrafficMin,
+    pickupLat, pickupLng,
+  }) {
     const configRow = await this.getConfig();
     if (!configRow) throw new Error('Pricing configuration not found');
     const config = configRow.config;
     const dist = Number(distance) || 0;
     const trafficMultiplier = getTrafficMultiplier(durationMin, durationInTrafficMin);
+
+    // Only computed when the caller actually has a pickup point (quoteBooking/createBooking
+    // both do; anything calling estimate() without coordinates just gets no surge, same as
+    // omitting durationMin/durationInTrafficMin skips the traffic multiplier above).
+    let nearbyTruckCount = null;
+    let supplyMultiplier = 1;
+    if (pickupLat != null && pickupLng != null) {
+      const nearby = await TruckModel.findNearby({
+        lat: pickupLat, lng: pickupLng, radiusKm: NEARBY_SURGE_RADIUS_KM, limit: 1,
+      });
+      nearbyTruckCount = nearby.total;
+      if (nearbyTruckCount > NEARBY_SURGE_THRESHOLD_TRUCKS) supplyMultiplier = NEARBY_SURGE_MULTIPLIER;
+    }
 
     if (truckCategory === 'part') {
       const cfg = config.partTruck || {};
@@ -66,13 +91,17 @@ class PricingModel {
       const fullTruckCost = dist * (config.interCity?.baseRatePerKm || 0);
       const totalTruckCost = round2(fullTruckCost * (pct / 100));
       const trafficSurcharge = round2(totalTruckCost * (trafficMultiplier - 1));
-      const adjustedTruckCost = round2(totalTruckCost + trafficSurcharge);
+      const supplySurcharge = round2(totalTruckCost * (supplyMultiplier - 1));
+      const adjustedTruckCost = round2(totalTruckCost + trafficSurcharge + supplySurcharge);
       const platformFee = round2(adjustedTruckCost * (cfg.platformFee || 0));
       return {
         totalTruckCost,
         capacityUsedPct: pct,
         trafficMultiplier,
         trafficSurcharge,
+        nearbyTruckCount,
+        supplyMultiplier,
+        supplySurcharge,
         platformFee,
         total: round2(adjustedTruckCost + platformFee),
         distance: dist,
@@ -86,7 +115,8 @@ class PricingModel {
       const toll = cfg.tollHandling === 'fixed' ? Number(cfg.tollFixedAmount || 0) : Number(cfg.tollFixedAmount || 0);
       const subtotal = round2(baseFare + fuel + toll);
       const trafficSurcharge = round2(subtotal * (trafficMultiplier - 1));
-      const adjustedSubtotal = round2(subtotal + trafficSurcharge);
+      const supplySurcharge = round2(subtotal * (supplyMultiplier - 1));
+      const adjustedSubtotal = round2(subtotal + trafficSurcharge + supplySurcharge);
       const platformFee = round2(adjustedSubtotal * (cfg.platformFee || 0));
       const total = round2(adjustedSubtotal + platformFee);
       return {
@@ -98,6 +128,9 @@ class PricingModel {
         toll,
         trafficMultiplier,
         trafficSurcharge,
+        nearbyTruckCount,
+        supplyMultiplier,
+        supplySurcharge,
         platformFee,
         total,
       };
@@ -109,10 +142,14 @@ class PricingModel {
     const distanceFare = round2(dist * (cfg.perKmRate || 0) * (cfg.demandMultiplier || 1));
     const subtotal = round2(baseFare + distanceFare);
     const trafficSurcharge = round2(subtotal * (trafficMultiplier - 1));
-    const adjustedSubtotal = round2(subtotal + trafficSurcharge);
+    const supplySurcharge = round2(subtotal * (supplyMultiplier - 1));
+    const adjustedSubtotal = round2(subtotal + trafficSurcharge + supplySurcharge);
     const platformFee = round2(adjustedSubtotal * (cfg.platformFee || 0));
     const total = round2(adjustedSubtotal + platformFee);
-    return { baseFare, distance: dist, distanceFare, subtotal, trafficMultiplier, trafficSurcharge, platformFee, total };
+    return {
+      baseFare, distance: dist, distanceFare, subtotal, trafficMultiplier, trafficSurcharge,
+      nearbyTruckCount, supplyMultiplier, supplySurcharge, platformFee, total,
+    };
   }
 }
 
