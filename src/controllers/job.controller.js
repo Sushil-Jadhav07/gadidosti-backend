@@ -6,7 +6,10 @@ const DriverProfileModel = require('../models/driverProfile.model');
 const DriverRequestModel = require('../models/driverRequest.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
-const { projectDriverRequest, emitDriverRequestUpdate } = require('./driverRequest.controller');
+const {
+  projectDriverRequest, emitDriverRequestUpdate,
+  MAX_COUNTERS_PER_SIDE, countClientCounters, countRespondentCounters,
+} = require('./driverRequest.controller');
 const { getIO } = require('../realtime/socket');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
@@ -43,6 +46,11 @@ const projectJobRequest = (row) => ({
   pendingConfirmationBy: row.pending_confirmation_by || null,
   // Negotiation back-and-forth: [{ by: 'client'|'broker', amount, note, at }], oldest first.
   offerHistory: row.offer_history || [],
+  // Lets each frontend hide its own Counter button once its side has used up its counters —
+  // see MAX_COUNTERS_PER_SIDE in driverRequest.controller.js (shared with that subsystem).
+  clientCountersUsed: countClientCounters(row.offer_history),
+  respondentCountersUsed: countRespondentCounters(row.offer_history),
+  maxCountersPerSide: MAX_COUNTERS_PER_SIDE,
   timestamp: timeAgo(row.created_at),
 });
 
@@ -276,6 +284,9 @@ const counterJobRequest = async (req, res, next) => {
     if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
     if (jobRequest.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your job request');
     if (jobRequest.status !== 'pending') return errorResponse(res, 400, `Job request is not awaiting your response (${jobRequest.status})`);
+    if (countRespondentCounters(jobRequest.offer_history) >= MAX_COUNTERS_PER_SIDE) {
+      return errorResponse(res, 400, `You've reached the limit of ${MAX_COUNTERS_PER_SIDE} counter-offers — please accept or decline instead`);
+    }
 
     const updated = await JobRequestModel.brokerCounter(id, { amount, note });
     if (!updated) return errorResponse(res, 400, 'Job request is already actioned');
@@ -522,6 +533,9 @@ const clientCounterOffer = async (req, res, next) => {
     if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
     if (jobRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
     if (!['pending', 'countered'].includes(jobRequest.status)) return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
+    if (countClientCounters(jobRequest.offer_history) >= MAX_COUNTERS_PER_SIDE) {
+      return errorResponse(res, 400, `You've reached the limit of ${MAX_COUNTERS_PER_SIDE} counter-offers — please accept or decline instead`);
+    }
 
     const updated = await JobRequestModel.clientCounter(id, { amount, note });
     if (!updated) return errorResponse(res, 400, 'Offer is already actioned');

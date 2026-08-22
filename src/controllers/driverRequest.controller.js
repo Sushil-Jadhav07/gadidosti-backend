@@ -12,6 +12,14 @@ const logger = require('../utils/logger');
 
 const STATUS_STEPS = ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
 
+// Each side gets at most this many counter-offers before they're limited to Accept/Decline —
+// keeps negotiation from dragging out indefinitely. offer_history's very first entry is always
+// the seed starting price (set once in DriverRequestModel.create), never a real counter action
+// by either side, so it's excluded from both counts below.
+const MAX_COUNTERS_PER_SIDE = 2;
+const countClientCounters = (offerHistory) => (offerHistory || []).filter((entry, i) => i > 0 && entry.by === 'client').length;
+const countRespondentCounters = (offerHistory) => (offerHistory || []).filter((entry, i) => i > 0 && entry.by !== 'client').length;
+
 const projectDriverRequest = (row) => ({
   id: row.id,
   bookingId: row.booking_id,
@@ -45,6 +53,11 @@ const projectDriverRequest = (row) => ({
   pendingConfirmationBy: row.pending_confirmation_by || null,
   // Full back-and-forth: [{ by: 'client'|'driver'|'broker', amount, note, at }], oldest first.
   offerHistory: row.offer_history || [],
+  // Lets each frontend hide its own Counter button once its side has used up its counters,
+  // without re-deriving the count itself — see MAX_COUNTERS_PER_SIDE above.
+  clientCountersUsed: countClientCounters(row.offer_history),
+  respondentCountersUsed: countRespondentCounters(row.offer_history),
+  maxCountersPerSide: MAX_COUNTERS_PER_SIDE,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -272,6 +285,9 @@ const counterDriverRequest = async (req, res, next) => {
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (!assertCanRespond(driverRequest, req.user)) return errorResponse(res, 403, 'Not yours to respond to');
     if (driverRequest.status !== 'pending') return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
+    if (countRespondentCounters(driverRequest.offer_history) >= MAX_COUNTERS_PER_SIDE) {
+      return errorResponse(res, 400, `You've reached the limit of ${MAX_COUNTERS_PER_SIDE} counter-offers — please accept or decline instead`);
+    }
 
     const updated = await DriverRequestModel.respondentCounter(driverRequest.id, { amount, note, actor: req.user.role });
     if (!updated) return errorResponse(res, 400, 'Request is already actioned');
@@ -412,6 +428,9 @@ const clientCounterDriverRequest = async (req, res, next) => {
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (driverRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
     if (!['pending', 'countered'].includes(driverRequest.status)) return errorResponse(res, 400, `Request is not open for negotiation (${driverRequest.status})`);
+    if (countClientCounters(driverRequest.offer_history) >= MAX_COUNTERS_PER_SIDE) {
+      return errorResponse(res, 400, `You've reached the limit of ${MAX_COUNTERS_PER_SIDE} counter-offers — please accept or find another driver instead`);
+    }
 
     const updated = await DriverRequestModel.clientCounter(driverRequest.id, { amount, note });
     if (!updated) return errorResponse(res, 400, 'Request is already actioned');
@@ -499,4 +518,5 @@ module.exports = {
   clientAcceptDriverRequest, clientRejectDriverRequest, clientCounterDriverRequest,
   listDriverRequests, getDriverRequest, getDriverRequestForBooking,
   projectDriverRequest, emitDriverRequestUpdate,
+  MAX_COUNTERS_PER_SIDE, countClientCounters, countRespondentCounters,
 };
