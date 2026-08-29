@@ -918,6 +918,38 @@ const runMigrations = async (client) => {
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS amount_paid NUMERIC(12,2) NOT NULL DEFAULT 0;
     `);
 
+    // ── CLIENT SAVED DATA (mirrors db/35client_saved_data.sql) ──
+    // Saved addresses (named, with an optional floor/unit detail and Google-picked lat/lng) and
+    // saved payment methods (non-sensitive display data only — no real gateway exists yet, see
+    // PaymentSheet.jsx) for reuse across bookings.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS saved_addresses (
+        id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        client_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        label        TEXT NOT NULL,
+        address      TEXT NOT NULL,
+        floor        TEXT,
+        lat          NUMERIC(9,6),
+        lng          NUMERIC(9,6),
+        city         TEXT,
+        is_default   BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_saved_addresses_client ON saved_addresses(client_id);
+
+      CREATE TABLE IF NOT EXISTS saved_payment_methods (
+        id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        client_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        method_type  TEXT NOT NULL CHECK (method_type IN ('upi', 'card', 'netbanking', 'wallet')),
+        label        TEXT NOT NULL,
+        details      JSONB NOT NULL DEFAULT '{}'::jsonb,
+        is_default   BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_saved_payment_methods_client ON saved_payment_methods(client_id);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
