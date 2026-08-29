@@ -38,6 +38,11 @@ const ACTIVE_SESSION_MESSAGE =
 // server error" in production (see errorHandler.middleware.js), which would swallow this
 // specific, safe-to-show message.
 const rejectIfActiveSession = async (user) => {
+  // Off outside production — local/staging testing routinely needs the same driver/broker
+  // account logged in on more than one device at once (two browser tabs, an emulator plus a
+  // real phone, etc.), and this block has no useful purpose there. Same NODE_ENV convention
+  // already used for dev_otp below.
+  if (process.env.NODE_ENV !== 'production') return false;
   if (!SINGLE_SESSION_ROLES.includes(user.role)) return false;
   const active = await RefreshTokenModel.findActiveForUser(user.id);
   if (!active) return false;

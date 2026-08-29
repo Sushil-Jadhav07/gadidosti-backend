@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.env
+.env.*
+!.env.example
+.git
+.github
+logs    
+*.sql
+uploads
+docs
+API_DOCUMENTATION.md
+API_GUIDE.md
+README.md
