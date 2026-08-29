@@ -924,19 +924,26 @@ const runMigrations = async (client) => {
     // PaymentSheet.jsx) for reuse across bookings.
     await client.query(`
       CREATE TABLE IF NOT EXISTS saved_addresses (
-        id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-        client_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        label        TEXT NOT NULL,
-        address      TEXT NOT NULL,
-        floor        TEXT,
-        lat          NUMERIC(9,6),
-        lng          NUMERIC(9,6),
-        city         TEXT,
-        is_default   BOOLEAN NOT NULL DEFAULT FALSE,
-        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        id             UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        client_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        label          TEXT NOT NULL,
+        address        TEXT NOT NULL,
+        floor          TEXT,
+        lat            NUMERIC(9,6),
+        lng            NUMERIC(9,6),
+        city           TEXT,
+        address_type   TEXT NOT NULL DEFAULT 'pickup' CHECK (address_type IN ('pickup', 'dropoff')),
+        contact_name   TEXT,
+        contact_phone  TEXT,
+        is_default     BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
       CREATE INDEX IF NOT EXISTS idx_saved_addresses_client ON saved_addresses(client_id);
+      ALTER TABLE saved_addresses ADD COLUMN IF NOT EXISTS address_type TEXT NOT NULL DEFAULT 'pickup'
+        CHECK (address_type IN ('pickup', 'dropoff'));
+      ALTER TABLE saved_addresses ADD COLUMN IF NOT EXISTS contact_name TEXT;
+      ALTER TABLE saved_addresses ADD COLUMN IF NOT EXISTS contact_phone TEXT;
 
       CREATE TABLE IF NOT EXISTS saved_payment_methods (
         id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

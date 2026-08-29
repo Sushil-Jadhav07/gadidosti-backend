@@ -2,6 +2,8 @@ const SavedAddressModel = require('../models/savedAddress.model');
 const SavedPaymentMethodModel = require('../models/savedPaymentMethod.model');
 const { successResponse, errorResponse } = require('../utils/response');
 
+const ADDRESS_TYPES = ['pickup', 'dropoff'];
+
 const projectAddress = (row) => ({
   id: row.id,
   label: row.label,
@@ -10,6 +12,9 @@ const projectAddress = (row) => ({
   lat: row.lat != null ? Number(row.lat) : null,
   lng: row.lng != null ? Number(row.lng) : null,
   city: row.city || null,
+  addressType: row.address_type || 'pickup',
+  contactName: row.contact_name || null,
+  contactPhone: row.contact_phone || null,
   isDefault: row.is_default,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -28,9 +33,12 @@ const listAddresses = async (req, res, next) => {
 // ─── POST /api/addresses ───────────────────────────────────────────────────
 const createAddress = async (req, res, next) => {
   try {
-    const { label, address, floor, lat, lng, city } = req.body;
+    const { label, address, floor, lat, lng, city, address_type, contact_name, contact_phone } = req.body;
     if (!label?.trim()) return errorResponse(res, 422, 'A name for this address is required (e.g. "Home", "Warehouse")');
     if (!address?.trim()) return errorResponse(res, 422, 'The address itself is required');
+    if (address_type != null && !ADDRESS_TYPES.includes(address_type)) {
+      return errorResponse(res, 422, `address_type must be one of: ${ADDRESS_TYPES.join(', ')}`);
+    }
 
     const created = await SavedAddressModel.create({
       clientId: req.user.id,
@@ -40,6 +48,9 @@ const createAddress = async (req, res, next) => {
       lat: lat != null ? Number(lat) : null,
       lng: lng != null ? Number(lng) : null,
       city: city?.trim() || null,
+      addressType: address_type || 'pickup',
+      contactName: contact_name?.trim() || null,
+      contactPhone: contact_phone?.trim() || null,
     });
     return successResponse(res, 201, 'Address saved', { address: projectAddress(created) });
   } catch (err) {
@@ -51,9 +62,12 @@ const createAddress = async (req, res, next) => {
 const updateAddress = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { label, address, floor, lat, lng, city } = req.body;
+    const { label, address, floor, lat, lng, city, address_type, contact_name, contact_phone } = req.body;
     if (label != null && !label.trim()) return errorResponse(res, 422, 'Name cannot be empty');
     if (address != null && !address.trim()) return errorResponse(res, 422, 'Address cannot be empty');
+    if (address_type != null && !ADDRESS_TYPES.includes(address_type)) {
+      return errorResponse(res, 422, `address_type must be one of: ${ADDRESS_TYPES.join(', ')}`);
+    }
 
     // Explicit whitelist — never pass req.body straight through to the model's dynamic
     // UPDATE ... SET builder, which turns object keys directly into SQL column names.
@@ -64,6 +78,9 @@ const updateAddress = async (req, res, next) => {
       lat: lat !== undefined ? (lat != null ? Number(lat) : null) : undefined,
       lng: lng !== undefined ? (lng != null ? Number(lng) : null) : undefined,
       city: city !== undefined ? (city?.trim() || null) : undefined,
+      address_type: address_type || undefined,
+      contact_name: contact_name !== undefined ? (contact_name?.trim() || null) : undefined,
+      contact_phone: contact_phone !== undefined ? (contact_phone?.trim() || null) : undefined,
     });
     if (!updated) return errorResponse(res, 404, 'Address not found');
     return successResponse(res, 200, 'Address updated', { address: projectAddress(updated) });

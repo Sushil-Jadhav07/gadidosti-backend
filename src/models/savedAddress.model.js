@@ -17,7 +17,7 @@ class SavedAddressModel {
   // A first saved address becomes the default automatically — nothing else would ever set one
   // otherwise, and "no default among several saved addresses" isn't a useful state for
   // BookTruck.jsx to prefill from.
-  static async create({ clientId, label, address, floor, lat, lng, city }) {
+  static async create({ clientId, label, address, floor, lat, lng, city, addressType, contactName, contactPhone }) {
     const { rows: existing } = await pool.query(
       `SELECT COUNT(*) FROM saved_addresses WHERE client_id = $1`,
       [clientId]
@@ -25,10 +25,13 @@ class SavedAddressModel {
     const isDefault = parseInt(existing[0].count, 10) === 0;
 
     const result = await pool.query(
-      `INSERT INTO saved_addresses (client_id, label, address, floor, lat, lng, city, is_default)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO saved_addresses (client_id, label, address, floor, lat, lng, city, address_type, contact_name, contact_phone, is_default)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
-      [clientId, label, address, floor || null, lat ?? null, lng ?? null, city || null, isDefault]
+      [
+        clientId, label, address, floor || null, lat ?? null, lng ?? null, city || null,
+        addressType || 'pickup', contactName || null, contactPhone || null, isDefault,
+      ]
     );
     return result.rows[0];
   }
