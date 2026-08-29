@@ -122,11 +122,14 @@ const projectPaymentMethod = (row) => ({
 
 const METHOD_TYPES = ['upi', 'card', 'netbanking', 'wallet'];
 // Defense in depth — no caller of this controller currently sends these, but `details` is a
-// free-form JSONB blob and PaymentSheet.jsx is a simulated checkout a client could paste
-// anything into, so anything resembling a full card number, expiry, or PIN/CVV is stripped
-// unconditionally before it ever reaches the database. Only non-sensitive display data (a UPI
-// ID, a card's brand + last 4 digits, a bank name) is ever meant to be stored here.
-const FORBIDDEN_DETAIL_KEYS = ['cvv', 'cvv2', 'pin', 'cardnumber', 'card_number', 'number', 'expiry', 'expirydate', 'expiry_date'];
+// free-form JSONB blob and PaymentMethods.jsx's add form is a simulated card-entry UI a client
+// could paste anything into, so anything resembling a full card number or PIN/CVV is stripped
+// unconditionally before it ever reaches the database — that's "Sensitive Authentication Data"
+// under PCI-DSS, which must never be retained after authorization, real gateway or not. Expiry
+// month/year is deliberately NOT on this list: it's ordinary "Cardholder Data" (same category
+// as the last-4-digits/brand this table already stores), not Sensitive Authentication Data —
+// real card-on-file APIs (Stripe, etc.) return exp_month/exp_year for exactly this reason.
+const FORBIDDEN_DETAIL_KEYS = ['cvv', 'cvv2', 'pin', 'cardnumber', 'card_number', 'number'];
 const sanitizeDetails = (details) => {
   if (!details || typeof details !== 'object') return {};
   const clean = {};
