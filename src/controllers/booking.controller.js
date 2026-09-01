@@ -101,6 +101,16 @@ const projectBooking = (row, timeline, role) => {
     base.deletedBy = row.deleted_by || null;
   }
 
+  // The pickup verification code — client-only, deliberately never sent to driver/broker/admin
+  // projections. The whole point is that the driver has to ask the client for it out loud, not
+  // read it off their own screen; it never expires on its own, only once pickup_otp_verified_at
+  // is set (see trip.controller.js's updateTripStatus, which is what actually checks it against
+  // what the driver types in).
+  if (role === 'client') {
+    base.pickupOtp = row.trip_pickup_otp_code || null;
+    base.pickupOtpVerified = !!row.trip_pickup_otp_verified_at;
+  }
+
   return base;
 };
 
@@ -215,6 +225,13 @@ const trackBooking = async (req, res, next) => {
       deliveredAt: trip?.delivered_at || null,
       distanceRemainingKm: distanceRemainingKm != null ? Math.round(distanceRemainingKm * 100) / 100 : null,
       etaMinutes,
+      // Client-only — never sent to driver/broker/admin (same gating as projectBooking's
+      // pickupOtp). The driver has to ask the client for this out loud, not read it from their
+      // own screen. See trip.controller.js's updateTripStatus for where it's actually checked.
+      ...(req.user.role === 'client' ? {
+        pickupOtp: trip?.pickup_otp_code || null,
+        pickupOtpVerified: !!trip?.pickup_otp_verified_at,
+      } : {}),
       incident: incident ? {
         reason: incident.reason,
         notes: incident.notes,

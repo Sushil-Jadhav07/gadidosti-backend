@@ -20,7 +20,9 @@ const SELECT_WITH_JOINS = `
          trip.delivered_at AS trip_delivered_at,
          trip.current_lat AS trip_current_lat,
          trip.current_lng AS trip_current_lng,
-         trip.stops AS trip_stops
+         trip.stops AS trip_stops,
+         trip.pickup_otp_code AS trip_pickup_otp_code,
+         trip.pickup_otp_verified_at AS trip_pickup_otp_verified_at
   FROM bookings b
   LEFT JOIN users broker ON broker.id = b.broker_id
   LEFT JOIN users client ON client.id = b.client_id

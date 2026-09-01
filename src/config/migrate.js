@@ -957,6 +957,15 @@ const runMigrations = async (client) => {
       CREATE INDEX IF NOT EXISTS idx_saved_payment_methods_client ON saved_payment_methods(client_id);
     `);
 
+    // ── TRIP PICKUP OTP (mirrors db/36trip_pickup_otp.sql) ──
+    // Separate from the login OTP system (otps table) — generated once per trip, shown
+    // persistently to the client only, never expires on its own (only once verified). No
+    // drop-off/delivery OTP.
+    await client.query(`
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS pickup_otp_code TEXT;
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS pickup_otp_verified_at TIMESTAMPTZ;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

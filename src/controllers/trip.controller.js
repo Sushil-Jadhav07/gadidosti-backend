@@ -291,7 +291,7 @@ const getTripByBooking = async (req, res, next) => {
 const updateTripStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { status } = req.body;
+    const { status, pickup_otp } = req.body;
 
     const trip = await TripModel.findById(id);
     if (!trip) return errorResponse(res, 404, 'Trip not found');
@@ -317,6 +317,19 @@ const updateTripStatus = async (req, res, next) => {
           res, 409,
           `You're ${distanceKm.toFixed(1)}km from ${pointLabel} — move within ${PICKUP_PROXIMITY_KM * 1000}m to mark this as ${status === 'picked_up' ? 'picked up' : 'delivered'}.`
         );
+      }
+    }
+
+    // Pickup verification code — driver must ask the client for it (it's shown persistently in
+    // their app, see booking.controller.js's projectBooking) and type it in here. Same
+    // driver-only scope as the GPS-proximity check above; broker/admin can still override
+    // manually. No equivalent check for 'delivered' — there's no drop-off/delivery OTP.
+    if (req.user.role === 'driver' && status === 'picked_up') {
+      if (!trip.pickup_otp_code) {
+        // Trips created before this feature shipped have no code at all — don't lock drivers
+        // out of a pre-existing trip that was never going to have one.
+      } else if (!pickup_otp || String(pickup_otp).trim() !== trip.pickup_otp_code) {
+        return errorResponse(res, 409, 'Ask the customer for their pickup code and enter it to confirm pickup.');
       }
     }
 
