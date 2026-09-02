@@ -20,6 +20,10 @@ const authenticate = async (req, res, next) => {
     if (user.status === 'inactive')  return errorResponse(res, 403, 'Account is inactive');
 
     req.user = user;
+    // Heartbeat for the single-active-session staleness check (auth.controller.js's
+    // rejectIfActiveSession) — drivers only, fire-and-forget so it never adds latency to the
+    // request it rides along with.
+    if (user.role === 'driver') UserModel.touchLastActive(user.id).catch(() => {});
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {

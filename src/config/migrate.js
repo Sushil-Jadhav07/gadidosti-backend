@@ -966,6 +966,14 @@ const runMigrations = async (client) => {
       ALTER TABLE trips ADD COLUMN IF NOT EXISTS pickup_otp_verified_at TIMESTAMPTZ;
     `);
 
+    // ── USER LAST ACTIVE (mirrors db/37user_last_active.sql) ──
+    // Touched on every authenticated driver request (auth.middleware.js) — lets
+    // rejectIfActiveSession (auth.controller.js) tell an abandoned session apart from one
+    // that's genuinely still in use.
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

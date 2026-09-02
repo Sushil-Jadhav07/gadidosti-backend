@@ -14,21 +14,30 @@ const pool = require('../config/db');
 
 const smsProvider = getSmsProvider();
 
-// Single-active-session enforcement — driver and broker accounts — final design (third pass).
+// Single-active-session enforcement — driver accounts only — final design (fourth pass).
 // v1 blocked the second login with a 409 and did nothing else; its problem was purely
 // operational (an abandoned old session with no clean logout could lock an account out of
 // logging in anywhere for up to 30 days — see forceLogoutUser/the SQL note in
 // DRIVER_SESSION_AND_OFFLINE_RULES.md for the escape hatches that exist because of that). v2
 // flipped it around entirely — new login always succeeds, old session gets silently kicked out
 // — but that's the wrong shape for this: the FIRST device is the legitimate one and shouldn't
-// ever be force-logged-out by someone else attempting to log in.
+// ever be force-logged-out by someone else attempting to log in. v3 added the real-time alert
+// below but still covered broker accounts too, which brokers routinely hit in normal use
+// (switching between a laptop and a phone) with no fleet/truck-sharing reason a driver has to
+// only ever be logged in once — scoped down to drivers only here.
 //
-// This version: the second login attempt is BLOCKED (like v1 — nothing about the existing
-// session changes, no token revoked, no forced logout), and the existing session gets a
-// real-time, single-acknowledgment security alert that someone just tried. It's purely
-// informational — "someone tried to use your account from elsewhere" — not an action the first
-// device needs to respond to or a choice between two options.
-const SINGLE_SESSION_ROLES = ['driver', 'broker'];
+// The second login attempt is BLOCKED (nothing about the existing session changes, no token
+// revoked, no forced logout), and the existing session gets a real-time, single-acknowledgment
+// security alert that someone just tried. It's purely informational — "someone tried to use
+// your account from elsewhere" — not an action the first device needs to respond to.
+//
+// v4 (this pass) adds a staleness window: the old session only actually blocks a new login if
+// it's been active — made an authenticated request (see auth.middleware.js's touchLastActive
+// call) — within the last STALE_SESSION_MS. A driver who closed the app, lost their phone, or
+// just went out of signal range stops blocking their own re-login elsewhere after a minute,
+// instead of needing to wait out the refresh token's full 30-day life or contact support.
+const SINGLE_SESSION_ROLES = ['driver'];
+const STALE_SESSION_MS = 60 * 1000;
 const ACTIVE_SESSION_MESSAGE =
   'This account is already logged in on another device. Log out there first, or contact support to reset your session.';
 
@@ -38,14 +47,18 @@ const ACTIVE_SESSION_MESSAGE =
 // server error" in production (see errorHandler.middleware.js), which would swallow this
 // specific, safe-to-show message.
 const rejectIfActiveSession = async (user) => {
-  // Off outside production — local/staging testing routinely needs the same driver/broker
-  // account logged in on more than one device at once (two browser tabs, an emulator plus a
-  // real phone, etc.), and this block has no useful purpose there. Same NODE_ENV convention
-  // already used for dev_otp below.
+  // Off outside production — local/staging testing routinely needs the same driver account
+  // logged in on more than one device at once (two browser tabs, an emulator plus a real
+  // phone, etc.), and this block has no useful purpose there. Same NODE_ENV convention already
+  // used for dev_otp below.
   if (process.env.NODE_ENV !== 'production') return false;
   if (!SINGLE_SESSION_ROLES.includes(user.role)) return false;
   const active = await RefreshTokenModel.findActiveForUser(user.id);
   if (!active) return false;
+
+  const lastActive = await UserModel.getLastActiveAt(user.id);
+  const staleMs = lastActive ? Date.now() - new Date(lastActive).getTime() : Infinity;
+  if (staleMs > STALE_SESSION_MS) return false;
 
   getIO()?.to(`user:${user.id}`).emit('login-attempt-alert', {
     message: 'Someone just tried to log in to your account from another device. If this wasn\'t you, please contact support.',

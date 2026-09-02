@@ -23,6 +23,18 @@ class UserModel {
     return result.rows[0];
   }
 
+  // Heartbeat for the single-active-session staleness check (auth.controller.js's
+  // rejectIfActiveSession) — touched on every authenticated driver request (auth.middleware.js),
+  // fire-and-forget, never awaited by the request itself.
+  static async touchLastActive(userId) {
+    await pool.query(`UPDATE users SET last_active_at = NOW() WHERE id = $1`, [userId]);
+  }
+
+  static async getLastActiveAt(userId) {
+    const result = await pool.query(`SELECT last_active_at FROM users WHERE id = $1`, [userId]);
+    return result.rows[0]?.last_active_at || null;
+  }
+
   // Find by ID
   static async findById(id) {
     const result = await pool.query(
