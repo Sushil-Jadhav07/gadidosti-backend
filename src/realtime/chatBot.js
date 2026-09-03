@@ -4,7 +4,7 @@
 // (findOrCreateByBooking seeds the greeting) and chatService.js (handleBotAction drives this).
 const BOT_SENDER_ID = '00000000-0000-0000-0000-000000000001';
 
-const GREETING = "Hi! I'm the SSK Assistant. How can I help with this trip?";
+const GREETING = "Hi! I'm the Gadidosti Assistant. How can I help with this trip?";
 
 const MENU_ROOT = [
   { id: 'track', label: 'Where is my truck?' },

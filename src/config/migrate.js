@@ -983,13 +983,20 @@ const runMigrations = async (client) => {
 
     await client.query(`
       INSERT INTO users (id, name, phone, role, status, is_phone_verified, is_email_verified)
-      VALUES ('00000000-0000-0000-0000-000000000001', 'SSK Assistant', NULL, 'bot', 'active', true, true)
+      VALUES ('00000000-0000-0000-0000-000000000001', 'Gadidosti Assistant', NULL, 'bot', 'active', true, true)
       ON CONFLICT (id) DO NOTHING;
 
       ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS stage TEXT NOT NULL DEFAULT 'bot'
         CHECK (stage IN ('bot', 'human'));
 
       ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS meta JSONB;
+    `);
+
+    // ── RENAME CHAT BOT (mirrors db/39rename_chat_bot.sql) ──
+    // The INSERT above uses ON CONFLICT DO NOTHING, so an environment that already ran it with
+    // the old "SSK Assistant" name needs this explicit UPDATE too.
+    await client.query(`
+      UPDATE users SET name = 'Gadidosti Assistant' WHERE id = '00000000-0000-0000-0000-000000000001';
     `);
 
     console.log('✅ Migrations complete!');

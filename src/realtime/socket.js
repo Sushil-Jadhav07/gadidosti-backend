@@ -47,6 +47,10 @@ const initSocket = (server) => {
     // controller push straight to a specific user via getIO()?.to(`user:${id}`).emit(...),
     // same pattern as driverRequest.controller.js / driverRequestTimeoutSweep.js.
     socket.join(`user:${socket.user.id}`);
+    // Lets any REST controller push straight to every connected admin at once (e.g.
+    // trip.controller.js's emitTripStatusUpdate, for the admin dashboard's live booking view)
+    // without needing to know which specific admins are online.
+    if (socket.user.role === 'admin') socket.join('admins');
 
     // ─── join-thread — verifies chat access before letting the socket into the room ──────────
     socket.on('join-thread', async ({ threadId } = {}, ack) => {

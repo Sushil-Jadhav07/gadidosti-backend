@@ -16,7 +16,7 @@ COMMIT;
 -- Singleton system user the scripted quick-reply bot posts as. Fixed id (not
 -- uuid_generate_v4()) so it's the same row on every environment and every re-run.
 INSERT INTO users (id, name, phone, role, status, is_phone_verified, is_email_verified)
-VALUES ('00000000-0000-0000-0000-000000000001', 'SSK Assistant', NULL, 'bot', 'active', true, true)
+VALUES ('00000000-0000-0000-0000-000000000001', 'Gadidosti Assistant', NULL, 'bot', 'active', true, true)
 ON CONFLICT (id) DO NOTHING;
 
 -- 'bot' = client is still in the scripted quick-reply menu, nobody else has been pulled in yet.

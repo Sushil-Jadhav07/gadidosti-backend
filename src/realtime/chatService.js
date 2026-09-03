@@ -140,7 +140,7 @@ const postBotMessage = async ({ threadId, text, quickReplies }) => {
     message: text,
     meta: quickReplies ? { quickReplies } : null,
   });
-  return projectMessage({ ...row, sender_name: 'SSK Assistant', sender_role: 'bot' });
+  return projectMessage({ ...row, sender_name: 'Gadidosti Assistant', sender_role: 'bot' });
 };
 
 // Flips a thread to 'human' and notifies the assigned driver/broker — exactly once

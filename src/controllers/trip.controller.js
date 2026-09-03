@@ -157,6 +157,9 @@ const emitTripStatusUpdate = async (row, timeline) => {
   for (const userId of [row.client_id, row.broker_id, row.driver_id]) {
     if (userId) io.to(`user:${userId}`).emit('trip-status-updated', payload);
   }
+  // Every admin socket auto-joins 'admins' (see socket.js) — lets the admin dashboard's booking
+  // detail view update live too, without needing to know in advance which booking it's watching.
+  io.to('admins').emit('trip-status-updated', payload);
 };
 
 const assertCanView = (trip, user) => {
