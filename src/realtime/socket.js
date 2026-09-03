@@ -3,6 +3,7 @@ const { verifyAccessToken } = require('../utils/jwt');
 const UserModel = require('../models/user.model');
 const ChatMessageModel = require('../models/chatMessage.model');
 const chatService = require('./chatService');
+const { broadcastMessage, broadcastEscalation } = require('./chatBroadcast');
 const logger = require('../utils/logger');
 const allowedOrigins = require('../config/corsOrigins');
 
@@ -65,21 +66,39 @@ const initSocket = (server) => {
       if (threadId) socket.leave(`thread:${threadId}`);
     });
 
-    // ─── send-message — the real-time write path; shares postMessage with the REST POST ───────
-    // fallback in chat.controller.js so the two can never write the message differently.
+    // ─── send-message — the real-time write path; shares postMessage/maybeAutoEscalate with the
+    // REST POST fallback in chat.controller.js so the two can never write the message
+    // differently (see that controller's sendMessage for the identical shape this mirrors).
     socket.on('send-message', async ({ threadId, message } = {}, ack) => {
       try {
         const text = String(message || '').trim();
         if (!text) return ack?.({ success: false, message: 'Message cannot be empty' });
 
         const { thread, booking, error } = await chatService.getThreadWithBooking(threadId);
-        if (error || !chatService.canSend(booking, socket.user)) {
+        if (error) return ack?.({ success: false, message: 'Chat not found' });
+        if (chatService.isLocked(booking)) return ack?.({ success: false, message: 'This trip is complete — the chat has closed.' });
+        if (!chatService.canSend(booking, socket.user)) {
           return ack?.({ success: false, message: 'You are not a participant in this chat' });
         }
 
-        const projected = await chatService.postMessage({ threadId: thread.id, booking, sender: socket.user, message: text });
-        io.to(`thread:${thread.id}`).emit('new-message', projected);
-        ack?.({ success: true, message: projected });
+        const projected = await chatService.postMessage({ threadId: thread.id, booking, sender: socket.user, message: text, stage: thread.stage });
+        broadcastMessage(io, {
+          threadId: thread.id,
+          booking,
+          projected,
+          notifyUserIds: thread.stage === 'bot' ? [] : chatService.recipientIds(booking, socket.user.id),
+        });
+
+        let botMessage = null;
+        if (thread.stage === 'bot' && socket.user.role === 'client') {
+          botMessage = await chatService.maybeAutoEscalate({ thread, booking, sender: socket.user });
+          if (botMessage) {
+            broadcastMessage(io, { threadId: thread.id, booking, projected: botMessage });
+            broadcastEscalation(io, { threadId: thread.id, booking, byName: socket.user.name });
+          }
+        }
+
+        ack?.({ success: true, message: projected, botMessage });
       } catch {
         ack?.({ success: false, message: 'Failed to send message' });
       }

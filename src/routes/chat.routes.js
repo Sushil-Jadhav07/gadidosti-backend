@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { getThreadForBooking, listMessages, sendMessage, markThreadRead, getUnreadCount } = require('../controllers/chat.controller');
+const { getThreadForBooking, listThreads, listMessages, sendMessage, sendBotAction, markThreadRead, getUnreadCount } = require('../controllers/chat.controller');
 const { authenticate } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { sendMessageValidation } = require('../validations/chat.validation');
@@ -47,6 +47,32 @@ const { sendMessageValidation } = require('../validations/chat.validation');
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/chat/bookings/:bookingId/thread', authenticate, getThreadForBooking);
+
+/**
+ * @swagger
+ * /api/chat/threads:
+ *   get:
+ *     tags: [Chat]
+ *     summary: List every chat thread the caller can see
+ *     description: Client/broker/driver get their own threads (derived from bookings.client_id/broker_id/driver_id); admin gets every thread that exists. Powers the chat-list screen in every dashboard — each item includes a last-message preview and the caller's own unread count.
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Threads fetched
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         threads: { type: array, items: { type: object } }
+ */
+router.get('/chat/threads', authenticate, listThreads);
 
 /**
  * @swagger
@@ -137,6 +163,62 @@ router.get('/chat/threads/:threadId/messages', authenticate, listMessages);
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/chat/threads/:threadId/messages', authenticate, sendMessageValidation, validate, sendMessage);
+
+/**
+ * @swagger
+ * /api/chat/threads/{threadId}/bot-action:
+ *   post:
+ *     tags: [Chat]
+ *     summary: Client taps one of the scripted assistant's quick-reply buttons
+ *     description: Client-only, and only while the thread is still in the 'bot' stage. Posts the tapped option as the client's own message, then the bot's scripted reply — some replies escalate the thread to 'human' (pulls in the assigned driver/broker) and notify them.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: threadId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [actionId]
+ *             properties:
+ *               actionId: { type: string, description: "One of the ids offered in the greeting/reply's meta.quickReplies" }
+ *     responses:
+ *       201:
+ *         description: Handled
+ *         content:
+ *           application/json:
+ *             schema:
+ *               allOf:
+ *                 - $ref: '#/components/schemas/SuccessResponse'
+ *                 - type: object
+ *                   properties:
+ *                     data:
+ *                       type: object
+ *                       properties:
+ *                         messages:  { type: array, items: { $ref: '#/components/schemas/ChatMessage' } }
+ *                         escalated: { type: boolean }
+ *       400:
+ *         description: Unknown actionId
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       403:
+ *         description: Not the client on this booking, or the trip's chat has already closed
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Thread has already been escalated to a human
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/chat/threads/:threadId/bot-action', authenticate, sendBotAction);
 
 /**
  * @swagger

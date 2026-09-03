@@ -1,11 +1,11 @@
 const pool = require('../config/db');
 
 class ChatMessageModel {
-  static async create({ threadId, senderId, message }) {
+  static async create({ threadId, senderId, message, meta }) {
     const result = await pool.query(
-      `INSERT INTO chat_messages (thread_id, sender_id, message)
-       VALUES ($1, $2, $3) RETURNING *`,
-      [threadId, senderId, message]
+      `INSERT INTO chat_messages (thread_id, sender_id, message, meta)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [threadId, senderId, message, meta ? JSON.stringify(meta) : null]
     );
     return result.rows[0];
   }

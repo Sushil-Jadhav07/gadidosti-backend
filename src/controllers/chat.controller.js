@@ -1,7 +1,11 @@
 const ChatMessageModel = require('../models/chatMessage.model');
+const ChatThreadModel = require('../models/chatThread.model');
 const chatService = require('../realtime/chatService');
+const { broadcastMessage, broadcastEscalation } = require('../realtime/chatBroadcast');
 const { getIO } = require('../realtime/socket');
 const { successResponse, errorResponse } = require('../utils/response');
+
+const LOCKED_MESSAGE = 'This trip is complete — the chat has closed.';
 
 // ─── GET /api/chat/bookings/:bookingId/thread ─────────────────────────────────
 // Get-or-create the thread for a booking — the entry point every frontend calls before it
@@ -13,9 +17,27 @@ const getThreadForBooking = async (req, res, next) => {
     if (error === 'forbidden') return errorResponse(res, 403, "You do not have access to this booking's chat");
 
     return successResponse(res, 200, 'Thread fetched', {
-      thread: { id: thread.id, bookingId: booking.id, bookingNumber: booking.booking_number },
+      thread: {
+        id: thread.id,
+        bookingId: booking.id,
+        bookingNumber: booking.booking_number,
+        stage: thread.stage,
+        isLocked: chatService.isLocked(booking),
+      },
       canSend: chatService.canSend(booking, req.user),
     });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/chat/threads ─────────────────────────────────────────────────────
+// Every thread the caller participates in (client/broker/driver) — or every thread that
+// exists, for admin. Powers the chat-list screen in every dashboard.
+const listThreads = async (req, res, next) => {
+  try {
+    const rows = await ChatThreadModel.listForUser(req.user);
+    return successResponse(res, 200, 'Threads fetched', { threads: rows.map(chatService.projectThreadListItem) });
   } catch (err) {
     next(err);
   }
@@ -45,14 +67,60 @@ const sendMessage = async (req, res, next) => {
   try {
     const { thread, booking, error } = await chatService.getThreadWithBooking(req.params.threadId);
     if (error) return errorResponse(res, 404, 'Thread not found');
+    if (chatService.isLocked(booking)) return errorResponse(res, 403, LOCKED_MESSAGE);
     if (!chatService.canSend(booking, req.user)) return errorResponse(res, 403, 'You are not a participant in this chat');
 
     const { message } = req.body;
-    const projected = await chatService.postMessage({ threadId: thread.id, booking, sender: req.user, message });
+    const projected = await chatService.postMessage({ threadId: thread.id, booking, sender: req.user, message, stage: thread.stage });
 
-    getIO()?.to(`thread:${thread.id}`).emit('new-message', projected);
+    const io = getIO();
+    broadcastMessage(io, {
+      threadId: thread.id,
+      booking,
+      projected,
+      notifyUserIds: thread.stage === 'bot' ? [] : chatService.recipientIds(booking, req.user.id),
+    });
 
-    return successResponse(res, 201, 'Message sent', { message: projected });
+    // The client typed free text instead of using the quick-reply menu while still in the
+    // 'bot' stage — the scripted bot can't parse arbitrary text, so this connects them to a
+    // human the same way tapping "Talk to my driver/broker" would.
+    let botMessage = null;
+    if (thread.stage === 'bot' && req.user.role === 'client') {
+      botMessage = await chatService.maybeAutoEscalate({ thread, booking, sender: req.user });
+      if (botMessage) {
+        broadcastMessage(io, { threadId: thread.id, booking, projected: botMessage });
+        broadcastEscalation(io, { threadId: thread.id, booking, byName: req.user.name });
+      }
+    }
+
+    return successResponse(res, 201, 'Message sent', { message: projected, botMessage });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/chat/threads/:threadId/bot-action ──────────────────────────────
+// Client taps one of the bot's quick-reply buttons — client-only (the scripted bot is a
+// client-facing feature; a driver/broker/admin sending free text goes through sendMessage as
+// normal, since by the time they're in the thread it's already escalated to 'human').
+const sendBotAction = async (req, res, next) => {
+  try {
+    const { thread, booking, error } = await chatService.getThreadWithBooking(req.params.threadId);
+    if (error) return errorResponse(res, 404, 'Thread not found');
+    if (req.user.role !== 'client') return errorResponse(res, 403, 'Only the client can use the assistant menu');
+    if (!chatService.isParticipant(booking, req.user.id)) return errorResponse(res, 403, 'You are not a participant in this chat');
+    if (chatService.isLocked(booking)) return errorResponse(res, 403, LOCKED_MESSAGE);
+    if (thread.stage !== 'bot') return errorResponse(res, 409, 'This chat has already been connected to a person');
+
+    const { actionId } = req.body;
+    const result = await chatService.handleBotAction({ thread, booking, sender: req.user, actionId });
+    if (result.error === 'invalid_action') return errorResponse(res, 400, 'Unknown option');
+
+    const io = getIO();
+    result.messages.forEach((projected) => broadcastMessage(io, { threadId: thread.id, booking, projected }));
+    if (result.escalated) broadcastEscalation(io, { threadId: thread.id, booking, byName: req.user.name });
+
+    return successResponse(res, 201, 'Handled', { messages: result.messages, escalated: result.escalated });
   } catch (err) {
     next(err);
   }
@@ -86,4 +154,4 @@ const getUnreadCount = async (req, res, next) => {
   }
 };
 
-module.exports = { getThreadForBooking, listMessages, sendMessage, markThreadRead, getUnreadCount };
+module.exports = { getThreadForBooking, listThreads, listMessages, sendMessage, sendBotAction, markThreadRead, getUnreadCount };

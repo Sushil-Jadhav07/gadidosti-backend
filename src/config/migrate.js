@@ -974,6 +974,24 @@ const runMigrations = async (client) => {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active_at TIMESTAMPTZ;
     `);
 
+    // ── CHAT BOT + LOCK (mirrors db/38chat_bot_and_lock.sql) ──
+    // Own client.query() call — ALTER TYPE ... ADD VALUE cannot be used in the same
+    // transaction as its first reference (the bot user INSERT right below, in the next call).
+    await client.query(`
+      ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'bot';
+    `);
+
+    await client.query(`
+      INSERT INTO users (id, name, phone, role, status, is_phone_verified, is_email_verified)
+      VALUES ('00000000-0000-0000-0000-000000000001', 'SSK Assistant', NULL, 'bot', 'active', true, true)
+      ON CONFLICT (id) DO NOTHING;
+
+      ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS stage TEXT NOT NULL DEFAULT 'bot'
+        CHECK (stage IN ('bot', 'human'));
+
+      ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS meta JSONB;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
