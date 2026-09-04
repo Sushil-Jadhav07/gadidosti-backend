@@ -6,7 +6,7 @@ const PaymentProvider = require('./PaymentProvider');
 // (mark paid unconditionally), just moved behind the PaymentProvider interface.
 class FakePaymentProvider extends PaymentProvider {
   async createOrder({ bookingId, amount }) {
-    return { orderId: `FAKE-ORDER-${bookingId}-${uuidv4().slice(0, 8)}`, amount, currency: 'INR', status: 'created' };
+    return { orderId: `FAKE-ORDER-${bookingId}-${uuidv4().slice(0, 8)}`, amount, currency: 'INR', status: 'created', provider: 'fake' };
   }
 
   async verifyPayment({ orderId }) {

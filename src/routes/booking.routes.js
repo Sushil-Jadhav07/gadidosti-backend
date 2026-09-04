@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, deleteBooking, getClientAnalytics } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, deleteBooking, getClientAnalytics } = require('../controllers/booking.controller');
 const { getBookingOffers } = require('../controllers/job.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -460,6 +460,104 @@ router.patch('/bookings/:id/cancel', authenticate, authorize('client'), cancelBo
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/bookings/:id/pay', authenticate, authorize('client'), payBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/payment/order:
+ *   post:
+ *     tags: [Bookings]
+ *     summary: Create a gateway payment order (client) — the real-money counterpart to PATCH .../pay
+ *     description: |
+ *       Opens an order with the active PaymentProvider (a real Razorpay order when
+ *       PAYMENT_PROVIDER=razorpay, a mock one in fake/demo mode) for the client's checkout
+ *       widget to run against. Doesn't touch payment_status — only .../payment/verify does that,
+ *       after the signature checks out.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               pay_type: { type: string, enum: [full, advance], default: full }
+ *     responses:
+ *       200:
+ *         description: Order created
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Already paid, or booking is cancelled
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/bookings/:id/payment/order', authenticate, authorize('client'), createPaymentOrder);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/payment/verify:
+ *   post:
+ *     tags: [Bookings]
+ *     summary: Verify a completed gateway payment and record it (client)
+ *     description: |
+ *       Called once the checkout widget (e.g. Razorpay Checkout) reports success — verifies the
+ *       gateway's signature server-side before recording anything as paid, then behaves exactly
+ *       like PATCH .../pay from that point on (notifies driver/broker, logs the audit event).
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [order_id]
+ *             properties:
+ *               order_id: { type: string, description: "The orderId returned by .../payment/order" }
+ *               pay_type: { type: string, enum: [full, advance], default: full }
+ *               payment_mode: { type: string, default: razorpay }
+ *               razorpay_payment_id: { type: string }
+ *               razorpay_signature: { type: string }
+ *     responses:
+ *       200:
+ *         description: Payment verified and recorded
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       402:
+ *         description: Signature verification failed
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Already paid, or booking is cancelled
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/bookings/:id/payment/verify', authenticate, authorize('client'), verifyBookingPayment);
 
 /**
  * @swagger

@@ -16,6 +16,7 @@ const logger = require('../utils/logger');
 const { haversineKm, AVERAGE_SPEED_KMPH } = require('../utils/geo');
 const { projectDriverRequest } = require('./driverRequest.controller');
 const { getIO } = require('../realtime/socket');
+const { getPaymentProvider } = require('../providers/payment');
 
 // Above this amount, Pay Later is no longer offered — the client must pay at least a 20%
 // advance to confirm the booking (Pay Now for the full amount is still always available too).
@@ -335,11 +336,98 @@ const cancelBooking = async (req, res, next) => {
   }
 };
 
+// Shared eligibility check for anything that's about to take the client's money — the direct
+// /pay endpoint (fake/manual mode), and both ends of the real-gateway flow below (order
+// creation AND verification both re-check this, since time passes between the two and another
+// payment could've landed, or the booking could've been cancelled, in between).
+const checkPayable = (booking, userId, pay_type) => {
+  if (!booking) return { status: 404, message: 'Booking not found' };
+  if (booking.client_id !== userId) return { status: 403, message: 'Not your booking' };
+  if (['paid', 'partial'].includes(booking.payment_status)) {
+    return { status: 409, message: 'A payment has already been recorded for this booking' };
+  }
+  if (booking.status === 'cancelled') return { status: 409, message: 'This booking is cancelled' };
+  // The 20% advance only exists as an alternative to Pay Later above ADVANCE_PAYMENT_THRESHOLD
+  // (see gadidosti-client's RequestDriver.jsx, which is the only caller that ever sends
+  // pay_type: 'advance') — reject it here too rather than trusting the client not to send it
+  // for a cheap booking, since that would let someone underpay a sub-threshold booking.
+  if (pay_type === 'advance' && Number(booking.amount) <= ADVANCE_PAYMENT_THRESHOLD) {
+    return { status: 422, message: `Advance payment only applies to bookings over ₹${ADVANCE_PAYMENT_THRESHOLD}` };
+  }
+  return null;
+};
+
+const computeAmountPaid = (booking, pay_type) => (
+  pay_type === 'advance'
+    ? Math.round(Number(booking.amount) * ADVANCE_PAYMENT_PCT * 100) / 100
+    : Number(booking.amount)
+);
+
+// Actually records a completed payment — DB update, driver/broker notification + live push,
+// audit log, and the re-projected booking to hand back. Used by both the direct /pay endpoint
+// (fake/manual "mark paid") and /payment/verify (real gateway, only reached after the
+// signature checks out) so the two can never diverge in what "paid" actually does.
+const finalizePayment = async ({ id, booking, pay_type, payment_mode, user }) => {
+  const amountPaid = computeAmountPaid(booking, pay_type);
+  const paymentStatus = pay_type === 'advance' ? 'partial' : 'paid';
+
+  await BookingModel.update(id, {
+    payment_status: paymentStatus,
+    payment_mode: payment_mode || null,
+    amount_paid: amountPaid,
+    paid_at: new Date(),
+  });
+
+  // Whoever's assigned to this booking (driver/broker) should see "paid" without having to
+  // reach the delivery-completion screen first — a trip may already exist by this point
+  // (booking status 'assigned' or later), so prefer its driver_id/broker_id, falling back to
+  // the booking row's own for the rare case a trip hasn't been created yet.
+  const trip = await TripModel.findByBookingId(id);
+  const driverId = trip?.driver_id || booking.driver_id;
+  const brokerId = trip?.broker_id || booking.broker_id;
+  const modeLabel = payment_mode ? payment_mode.toUpperCase() : 'the app';
+  const remaining = Math.round((Number(booking.amount) - amountPaid) * 100) / 100;
+  const notificationMessage = pay_type === 'advance'
+    ? `The client paid a 20% advance (₹${amountPaid}) for booking ${booking.booking_number} via ${modeLabel} — ₹${remaining} remains to collect on delivery.`
+    : `The client paid for booking ${booking.booking_number} via ${modeLabel} — no COD collection needed.`;
+  for (const [userId, title] of [[driverId, 'Payment Received'], [brokerId, 'Payment Received']]) {
+    if (!userId) continue;
+    await NotificationModel.create({
+      userId,
+      title,
+      message: notificationMessage,
+      type: 'payment',
+      meta: { booking_id: id, payment_mode: payment_mode || null, pay_type, amount_paid: amountPaid },
+    });
+    getIO()?.to(`user:${userId}`).emit('booking-payment-updated', {
+      bookingId: id,
+      bookingNumber: booking.booking_number,
+      paymentStatus,
+      paymentMode: payment_mode || null,
+      amountPaid,
+    });
+  }
+
+  await AuditLogModel.log({
+    userId: user.id,
+    action: 'BOOKING_PAID_BY_CLIENT',
+    entity: 'bookings',
+    entityId: id,
+    meta: { payment_mode: payment_mode || null, pay_type, amount_paid: amountPaid },
+    ipAddress: user.ip,
+  });
+
+  logger.info(`Booking ${id} marked ${paymentStatus} by client ${user.id} (mode: ${payment_mode || 'unspecified'}, pay_type: ${pay_type})`);
+  const full = await BookingModel.findById(id);
+  const timeline = await BookingModel.getTimeline(id);
+  return { booking: projectBooking(full, timeline, user.role) };
+};
+
 // ─── PATCH /api/bookings/:id/pay ──────────────────────────────────────────────
-// Client marks a booking as paid — used both by the post-confirmation "Continue to Payment"
-// step (RequestDriver.jsx / ChooseBroker.jsx) and BookingDetail.jsx's standalone "Pay Now"
-// fallback. No real payment gateway is wired up yet (PaymentSheet is a simulated checkout);
-// this just records the client's completed payment and how they said they paid.
+// Client marks a booking as paid directly — no gateway round-trip, used by the "Pay Later"
+// fallback and PAYMENT_PROVIDER=fake's simulated checkout (PaymentSheet.jsx completes its fake
+// animation, then calls straight here). Real gateway payments go through
+// createPaymentOrder/verifyBookingPayment below instead.
 const payBooking = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -349,76 +437,62 @@ const payBooking = async (req, res, next) => {
     }
 
     const booking = await BookingModel.findById(id);
-    if (!booking) return errorResponse(res, 404, 'Booking not found');
-    if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
-    if (['paid', 'partial'].includes(booking.payment_status)) {
-      return errorResponse(res, 409, 'A payment has already been recorded for this booking');
-    }
-    if (booking.status === 'cancelled') return errorResponse(res, 409, 'This booking is cancelled');
+    const ineligible = checkPayable(booking, req.user.id, pay_type);
+    if (ineligible) return errorResponse(res, ineligible.status, ineligible.message);
 
-    // The 20% advance only exists as an alternative to Pay Later above ADVANCE_PAYMENT_THRESHOLD
-    // (see gadidosti-client's RequestDriver.jsx, which is the only caller that ever sends
-    // pay_type: 'advance') — reject it here too rather than trusting the client not to send it
-    // for a cheap booking, since that would let someone underpay a sub-threshold booking.
-    if (pay_type === 'advance' && Number(booking.amount) <= ADVANCE_PAYMENT_THRESHOLD) {
-      return errorResponse(res, 422, `Advance payment only applies to bookings over ₹${ADVANCE_PAYMENT_THRESHOLD}`);
-    }
+    const result = await finalizePayment({ id, booking, pay_type, payment_mode, user: { ...req.user, ip: req.ip } });
+    return successResponse(res, 200, 'Payment recorded', result);
+  } catch (err) {
+    next(err);
+  }
+};
 
-    const amountPaid = pay_type === 'advance'
-      ? Math.round(Number(booking.amount) * ADVANCE_PAYMENT_PCT * 100) / 100
-      : Number(booking.amount);
-
-    await BookingModel.update(id, {
-      payment_status: pay_type === 'advance' ? 'partial' : 'paid',
-      payment_mode: payment_mode || null,
-      amount_paid: amountPaid,
-      paid_at: new Date(),
-    });
-
-    // Whoever's assigned to this booking (driver/broker) should see "paid" without having to
-    // reach the delivery-completion screen first — a trip may already exist by this point
-    // (booking status 'assigned' or later), so prefer its driver_id/broker_id, falling back to
-    // the booking row's own for the rare case a trip hasn't been created yet.
-    const trip = await TripModel.findByBookingId(id);
-    const driverId = trip?.driver_id || booking.driver_id;
-    const brokerId = trip?.broker_id || booking.broker_id;
-    const modeLabel = payment_mode ? payment_mode.toUpperCase() : 'the app';
-    const remaining = Math.round((Number(booking.amount) - amountPaid) * 100) / 100;
-    const paymentStatus = pay_type === 'advance' ? 'partial' : 'paid';
-    const notificationMessage = pay_type === 'advance'
-      ? `The client paid a 20% advance (₹${amountPaid}) for booking ${booking.booking_number} via ${modeLabel} — ₹${remaining} remains to collect on delivery.`
-      : `The client paid for booking ${booking.booking_number} via ${modeLabel} — no COD collection needed.`;
-    for (const [userId, title] of [[driverId, 'Payment Received'], [brokerId, 'Payment Received']]) {
-      if (!userId) continue;
-      await NotificationModel.create({
-        userId,
-        title,
-        message: notificationMessage,
-        type: 'payment',
-        meta: { booking_id: id, payment_mode: payment_mode || null, pay_type, amount_paid: amountPaid },
-      });
-      getIO()?.to(`user:${userId}`).emit('booking-payment-updated', {
-        bookingId: id,
-        bookingNumber: booking.booking_number,
-        paymentStatus,
-        paymentMode: payment_mode || null,
-        amountPaid,
-      });
+// ─── POST /api/bookings/:id/payment/order ──────────────────────────────────────
+// Client wants to pay online — opens a gateway order (a real Razorpay order when
+// PAYMENT_PROVIDER=razorpay, a mock one in fake/demo mode) for the client's checkout widget to
+// run against. Doesn't touch payment_status at all yet — only verifyBookingPayment does that,
+// once the signature actually checks out.
+const createPaymentOrder = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { pay_type = 'full' } = req.body;
+    if (!['full', 'advance'].includes(pay_type)) {
+      return errorResponse(res, 422, "pay_type must be 'full' or 'advance'");
     }
 
-    await AuditLogModel.log({
-      userId: req.user.id,
-      action: 'BOOKING_PAID_BY_CLIENT',
-      entity: 'bookings',
-      entityId: id,
-      meta: { payment_mode: payment_mode || null, pay_type, amount_paid: amountPaid },
-      ipAddress: req.ip,
-    });
+    const booking = await BookingModel.findById(id);
+    const ineligible = checkPayable(booking, req.user.id, pay_type);
+    if (ineligible) return errorResponse(res, ineligible.status, ineligible.message);
 
-    logger.info(`Booking ${id} marked ${paymentStatus} by client ${req.user.id} (mode: ${payment_mode || 'unspecified'}, pay_type: ${pay_type})`);
-    const full = await BookingModel.findById(id);
-    const timeline = await BookingModel.getTimeline(id);
-    return successResponse(res, 200, 'Payment recorded', { booking: projectBooking(full, timeline, req.user.role) });
+    const amount = computeAmountPaid(booking, pay_type);
+    const order = await getPaymentProvider().createOrder({ bookingId: id, amount });
+    return successResponse(res, 200, 'Order created', { order, pay_type });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/bookings/:id/payment/verify ─────────────────────────────────────
+// Client's checkout widget completed — verify the gateway's signature server-side (never trust
+// a bare "it succeeded" from the frontend) before recording anything as paid.
+const verifyBookingPayment = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { order_id, pay_type = 'full', payment_mode = 'razorpay', ...payload } = req.body;
+    if (!order_id) return errorResponse(res, 422, 'order_id is required');
+    if (!['full', 'advance'].includes(pay_type)) {
+      return errorResponse(res, 422, "pay_type must be 'full' or 'advance'");
+    }
+
+    const booking = await BookingModel.findById(id);
+    const ineligible = checkPayable(booking, req.user.id, pay_type);
+    if (ineligible) return errorResponse(res, ineligible.status, ineligible.message);
+
+    const verification = await getPaymentProvider().verifyPayment({ orderId: order_id, payload });
+    if (!verification.success) return errorResponse(res, 402, 'Payment verification failed');
+
+    const result = await finalizePayment({ id, booking, pay_type, payment_mode, user: { ...req.user, ip: req.ip } });
+    return successResponse(res, 200, 'Payment verified', result);
   } catch (err) {
     next(err);
   }
@@ -709,4 +783,4 @@ const getClientAnalytics = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, deleteBooking, getClientAnalytics };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, deleteBooking, getClientAnalytics };
