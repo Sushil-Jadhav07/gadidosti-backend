@@ -664,7 +664,6 @@ const options = {
             },
             paymentStatus:  { type: 'string', enum: ['paid', 'pending', 'refunded'], description: "The linked booking's payment_status — drives whether the driver app's delivery-completion flow needs its Payments step." },
             amountToCollect: { type: 'number', nullable: true, description: "The linked booking's amount — what to show on the driver app's Payments step." },
-            driverQrUrl:    { type: 'string', nullable: true, description: "The assigned driver's saved UPI QR image URL (driver_profiles.payment_qr_url), set via POST /api/vehicles/drivers/me/payment-qr. Null until they've uploaded one." },
             timeline: {
               type: 'array',
               items: { type: 'object', properties: { step: { type: 'string' }, done: { type: 'boolean' }, time: { type: 'string', format: 'date-time', nullable: true } } },

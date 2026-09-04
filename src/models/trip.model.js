@@ -7,15 +7,13 @@ const SELECT_WITH_JOINS = `
          client.id    AS client_id,    client.name  AS client_name, client.phone AS client_phone,
          b.truck_id, b.booking_number, t.registration AS truck_reg,
          b.payment_status AS booking_payment_status, b.amount AS booking_amount,
-         b.amount_paid AS booking_amount_paid,
-         dp.payment_qr_url
+         b.amount_paid AS booking_amount_paid
   FROM trips tr
   JOIN bookings b       ON b.id = tr.booking_id
   JOIN users client     ON client.id = b.client_id
   LEFT JOIN users broker ON broker.id = tr.broker_id
   LEFT JOIN users driver ON driver.id = tr.driver_id
   LEFT JOIN trucks t     ON t.id = b.truck_id
-  LEFT JOIN driver_profiles dp ON dp.user_id = tr.driver_id
 `;
 
 class TripModel {

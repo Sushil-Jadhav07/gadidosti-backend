@@ -673,43 +673,8 @@ const updateDriverLocation = async (req, res, next) => {
   }
 };
 
-// POST /api/driver/payment-qr — the driver's personal UPI QR image, uploaded once and reused
-// across every trip's Payments step. Re-uploading replaces it (old file is left as an orphan
-// in kyc_files when STORAGE_PROVIDER=postgres — same tradeoff already accepted elsewhere for
-// low-frequency re-uploads, e.g. KYC documents). Same multer/upload pattern as trip POD photos.
-const uploadPaymentQr = async (req, res, next) => {
-  try {
-    if (!req.file) return errorResponse(res, 422, 'No file uploaded — attach it as multipart form field "file"');
-
-    const { url } = await storageProvider.upload({
-      buffer: req.file.buffer,
-      filename: req.file.originalname,
-      mimeType: req.file.mimetype,
-      documentKey: 'payment_qr',
-      folder: `driver-qr/${req.user.id}`,
-    });
-    const absoluteUrl = toAbsoluteUrl(req, url);
-
-    const updated = await DriverProfileModel.updatePaymentQr(req.user.id, absoluteUrl);
-    if (!updated) return errorResponse(res, 404, 'Driver profile not found');
-
-    await AuditLogModel.log({
-      userId: req.user.id,
-      action: 'DRIVER_PAYMENT_QR_UPLOADED',
-      entity: 'driver_profiles',
-      entityId: req.user.id,
-      ipAddress: req.ip,
-    });
-
-    logger.info(`Payment QR uploaded for driver ${req.user.id}`);
-    return successResponse(res, 200, 'Payment QR uploaded', { paymentQrUrl: updated.payment_qr_url });
-  } catch (err) {
-    next(err);
-  }
-};
-
 module.exports = {
   createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
-  myAssignedTruck, updateDriverLocation, uploadPaymentQr,
+  myAssignedTruck, updateDriverLocation,
 };

@@ -4,11 +4,10 @@ const router = express.Router();
 const {
   createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
-  myAssignedTruck, updateDriverLocation, uploadPaymentQr,
+  myAssignedTruck, updateDriverLocation,
 } = require('../controllers/vehicle.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
-const upload = require('../middleware/upload.middleware');
 const driverLocationRateLimit = require('../middleware/driverLocationRateLimit.middleware');
 const {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
@@ -522,50 +521,6 @@ router.get('/vehicles/drivers/me/truck', authenticate, authorize('driver'), myAs
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/vehicles/drivers/me/location', authenticate, authorize('driver'), driverLocationRateLimit, updateDriverLocationValidation, validate, updateDriverLocation);
-
-/**
- * @swagger
- * /api/vehicles/drivers/me/payment-qr:
- *   post:
- *     tags: [Vehicles]
- *     summary: Upload/replace the authenticated driver's personal UPI QR (driver)
- *     description: Uploaded once, reused across every trip's Payments step — re-uploading replaces the saved image.
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         multipart/form-data:
- *           schema:
- *             type: object
- *             properties:
- *               file: { type: string, format: binary }
- *     responses:
- *       200:
- *         description: Payment QR uploaded
- *         content:
- *           application/json:
- *             schema:
- *               allOf:
- *                 - $ref: '#/components/schemas/SuccessResponse'
- *                 - type: object
- *                   properties:
- *                     data:
- *                       type: object
- *                       properties:
- *                         paymentQrUrl: { type: string }
- *       404:
- *         description: Driver profile not found
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- *       422:
- *         description: No file uploaded
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- */
-router.post('/vehicles/drivers/me/payment-qr', authenticate, authorize('driver'), upload.single('file'), uploadPaymentQr);
 
 /**
  * @swagger

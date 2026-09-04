@@ -129,16 +129,13 @@ const projectTrip = async (row, timeline) => {
   podPhotos: podPhotos.map((p) => p.url),
   // Drives the driver app's delivery-completion flow: whether the Payments step is needed
   // at all (paymentStatus — now 'pending' OR 'partial', not just 'pending', since a >5k
-  // booking may have had only a 20% advance paid upfront), what to show on it
+  // booking may have had only a 20% advance paid upfront), and what to show on it
   // (amountToCollect — the true REMAINING balance, not the full booking amount, so a booking
-  // that already had its advance paid doesn't ask the driver to collect the whole thing again),
-  // and the driver's saved UPI QR to display for the client to scan (driverQrUrl — null until
-  // they've uploaded one).
+  // that already had its advance paid doesn't ask the driver to collect the whole thing again).
   paymentStatus: row.booking_payment_status,
   amountToCollect: row.booking_amount != null
     ? Number(row.booking_amount) - Number(row.booking_amount_paid || 0)
     : null,
-  driverQrUrl: row.payment_qr_url || null,
   timeline: timeline.map((t) => ({ step: t.step, done: t.done, time: t.occurred_at })),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
