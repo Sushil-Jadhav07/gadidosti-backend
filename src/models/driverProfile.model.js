@@ -244,6 +244,21 @@ class DriverProfileModel {
     return this.findById(userId);
   }
 
+  // The driver's own UPI VPA — used to generate a fresh, amount-included UPI QR on the
+  // Payments step (see vehicle.controller.js's updateUpiId/getUpiId, the only callers).
+  static async getUpiId(userId) {
+    const result = await pool.query(`SELECT upi_id FROM driver_profiles WHERE user_id = $1`, [userId]);
+    return result.rows[0]?.upi_id || null;
+  }
+
+  static async updateUpiId(userId, upiId) {
+    const result = await pool.query(
+      `UPDATE driver_profiles SET upi_id = $1, updated_at = NOW() WHERE user_id = $2 RETURNING upi_id`,
+      [upiId, userId]
+    );
+    return result.rows[0] || null;
+  }
+
   static async incrementTotalTrips(userId) {
     await pool.query(`UPDATE driver_profiles SET total_trips = total_trips + 1, updated_at = NOW() WHERE user_id = $1`, [userId]);
   }

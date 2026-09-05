@@ -4,7 +4,7 @@ const router = express.Router();
 const {
   createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
-  myAssignedTruck, updateDriverLocation,
+  myAssignedTruck, updateDriverLocation, getMyUpiId, updateMyUpiId,
 } = require('../controllers/vehicle.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -521,6 +521,60 @@ router.get('/vehicles/drivers/me/truck', authenticate, authorize('driver'), myAs
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/vehicles/drivers/me/location', authenticate, authorize('driver'), driverLocationRateLimit, updateDriverLocationValidation, validate, updateDriverLocation);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/me/upi-id:
+ *   get:
+ *     tags: [Vehicles]
+ *     summary: Get the authenticated driver's saved UPI ID (driver)
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: UPI ID fetched (null if never saved)
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ */
+router.get('/vehicles/drivers/me/upi-id', authenticate, authorize('driver'), getMyUpiId);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/me/upi-id:
+ *   patch:
+ *     tags: [Vehicles]
+ *     summary: Save/replace the authenticated driver's UPI ID (driver)
+ *     description: Reused on every trip's Payments step to generate a fresh UPI QR with that trip's exact amount — no re-entry needed per trip.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [upi_id]
+ *             properties:
+ *               upi_id: { type: string, example: "yourname@okhdfcbank" }
+ *     responses:
+ *       200:
+ *         description: UPI ID saved
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: Driver profile not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Invalid UPI ID format
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/vehicles/drivers/me/upi-id', authenticate, authorize('driver'), updateMyUpiId);
 
 /**
  * @swagger

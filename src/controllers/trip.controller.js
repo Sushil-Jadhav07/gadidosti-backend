@@ -136,6 +136,11 @@ const projectTrip = async (row, timeline) => {
   amountToCollect: row.booking_amount != null
     ? Number(row.booking_amount) - Number(row.booking_amount_paid || 0)
     : null,
+  // The driver's own saved UPI ID (see vehicle.controller.js's updateMyUpiId) — the Payments
+  // step generates a fresh UPI QR from this + amountToCollect, so it's never stale/wrong the
+  // way a manually-uploaded static QR image (no encoded amount) used to be. Null until the
+  // driver's saved one in their profile.
+  driverUpiId: row.driver_upi_id || null,
   timeline: timeline.map((t) => ({ step: t.step, done: t.done, time: t.occurred_at })),
   createdAt: row.created_at,
   updatedAt: row.updated_at,

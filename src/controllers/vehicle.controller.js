@@ -673,8 +673,49 @@ const updateDriverLocation = async (req, res, next) => {
   }
 };
 
+// A UPI VPA is "<handle>@<bank/psp>" — lenient on purpose (real-world VPAs vary a lot in
+// allowed characters across banks/PSPs), this just catches obviously-malformed input before it
+// ends up baked into a QR code nobody can actually pay.
+const UPI_ID_PATTERN = /^[\w.\-]{2,256}@[a-zA-Z]{2,64}$/;
+
+// GET /api/vehicles/drivers/me/upi-id — lets the Payments-step QR generator (and the driver's
+// own profile page, to prefill the field) know whether one's already saved.
+const getMyUpiId = async (req, res, next) => {
+  try {
+    const upiId = await DriverProfileModel.getUpiId(req.user.id);
+    return successResponse(res, 200, 'UPI ID fetched', { upiId });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// PATCH /api/vehicles/drivers/me/upi-id — saved once, reused on every trip's Payments step to
+// generate a fresh UPI-intent QR with that trip's exact amount baked in (see
+// trip.controller.js's driverUpiId field and gadidosti-broker-driver's PaymentsStep).
+const updateMyUpiId = async (req, res, next) => {
+  try {
+    const upiId = String(req.body.upi_id || '').trim();
+    if (!UPI_ID_PATTERN.test(upiId)) {
+      return errorResponse(res, 422, 'Enter a valid UPI ID, e.g. yourname@okhdfcbank');
+    }
+
+    const updated = await DriverProfileModel.updateUpiId(req.user.id, upiId);
+    if (!updated) return errorResponse(res, 404, 'Driver profile not found');
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'DRIVER_UPI_ID_UPDATED', entity: 'driver_profiles',
+      entityId: req.user.id, ipAddress: req.ip,
+    });
+
+    logger.info(`UPI ID updated for driver ${req.user.id}`);
+    return successResponse(res, 200, 'UPI ID saved', { upiId: updated.upi_id });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
-  myAssignedTruck, updateDriverLocation,
+  myAssignedTruck, updateDriverLocation, getMyUpiId, updateMyUpiId,
 };

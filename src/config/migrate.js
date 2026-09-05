@@ -999,6 +999,13 @@ const runMigrations = async (client) => {
       UPDATE users SET name = 'Gadidosti Assistant' WHERE id = '00000000-0000-0000-0000-000000000001';
     `);
 
+    // ── DRIVER UPI ID (mirrors db/40driver_upi_id.sql) ──
+    // The driver's own UPI VPA, entered once — lets the app generate a fresh amount-included
+    // UPI QR on the Payments step instead of a manually uploaded static QR image.
+    await client.query(`
+      ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS upi_id TEXT;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
