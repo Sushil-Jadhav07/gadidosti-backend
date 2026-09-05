@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, deleteBooking, getClientAnalytics } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics } = require('../controllers/booking.controller');
 const { getBookingOffers } = require('../controllers/job.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -558,6 +558,54 @@ router.post('/bookings/:id/payment/order', authenticate, authorize('client'), cr
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/bookings/:id/payment/verify', authenticate, authorize('client'), verifyBookingPayment);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/rate:
+ *   post:
+ *     tags: [Bookings]
+ *     summary: Rate a delivered booking (client)
+ *     description: Only once, and only once the booking is Delivered/Completed — mirrors the client app's own isRatable gate, enforced here too.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [stars]
+ *             properties:
+ *               stars: { type: integer, minimum: 1, maximum: 5 }
+ *               review: { type: string }
+ *     responses:
+ *       200:
+ *         description: Rating submitted
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Not yet delivered, or already rated
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Invalid stars value
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/bookings/:id/rate', authenticate, authorize('client'), rateBooking);
 
 /**
  * @swagger

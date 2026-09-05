@@ -498,6 +498,59 @@ const verifyBookingPayment = async (req, res, next) => {
   }
 };
 
+// Only after actual delivery, and only once — mirrors gadidosti-client's own
+// isRatable = ["Delivered", "Completed"].includes(booking.status) && !booking.rating gate
+// (BookingDetail.jsx), enforced here too since the client-side check alone can't be trusted.
+const RATABLE_STATUSES = ['delivered', 'completed'];
+
+// ─── POST /api/bookings/:id/rate ────────────────────────────────────────────────
+const rateBooking = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { stars, review } = req.body;
+    const numericStars = Number(stars);
+    if (!Number.isInteger(numericStars) || numericStars < 1 || numericStars > 5) {
+      return errorResponse(res, 422, 'stars must be an integer from 1 to 5');
+    }
+
+    const booking = await BookingModel.findById(id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (!RATABLE_STATUSES.includes(booking.status)) {
+      return errorResponse(res, 409, 'This booking can only be rated once it has been delivered');
+    }
+    if (booking.rating) return errorResponse(res, 409, 'This booking has already been rated');
+
+    const rating = { stars: numericStars, review: review?.trim() || null, ratedAt: new Date().toISOString() };
+    await BookingModel.update(id, { rating: JSON.stringify(rating) });
+
+    // Let whoever delivered it know how they did.
+    const trip = await TripModel.findByBookingId(id);
+    const driverId = trip?.driver_id || booking.driver_id;
+    const brokerId = trip?.broker_id || booking.broker_id;
+    for (const userId of [driverId, brokerId]) {
+      if (!userId) continue;
+      await NotificationModel.create({
+        userId,
+        title: 'New Rating',
+        message: `The client rated booking ${booking.booking_number || id} ${numericStars} star${numericStars === 1 ? '' : 's'}${rating.review ? `: "${rating.review}"` : '.'}`,
+        type: 'general',
+        meta: { booking_id: id, stars: numericStars },
+      });
+    }
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'BOOKING_RATED', entity: 'bookings', entityId: id,
+      meta: { stars: numericStars }, ipAddress: req.ip,
+    });
+
+    logger.info(`Booking ${id} rated ${numericStars} stars by client ${req.user.id}`);
+    return successResponse(res, 200, 'Rating submitted', { rating });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // Only these statuses may be removed from a broker/driver's own list — an in-progress
 // shipment (confirmed/assigned/en_route_pickup/picked_up/in_transit/delivered) can't be
 // hidden this way, so an active or just-finished-but-unsettled trip is never accidentally
@@ -783,4 +836,4 @@ const getClientAnalytics = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, deleteBooking, getClientAnalytics };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics };
