@@ -14,6 +14,34 @@ const NEARBY_SURGE_MULTIPLIER = 1.05;
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
+// Inter-city halting: above a 200km base threshold, a distance-tiered free grace period applies
+// before halting charges kick in (confirmed design — three tiers by distance band). The overage
+// rate reuses each truck category's existing (previously dead) intraCity.<category>.waitingCharge
+// per-hour rate from pricing_config rather than a new field, since inter-city pricing has no
+// per-category breakdown of its own.
+const HALTING_BASE_THRESHOLD_KM = 200;
+const HALTING_TIERS = [
+  { minKm: 200, maxKm: 400, graceHours: 6 },
+  { minKm: 400, maxKm: 600, graceHours: 8 },
+  { minKm: 600, maxKm: Infinity, graceHours: 12 },
+];
+
+// Grace-period info for a given distance — null if the booking is at/under the base threshold
+// (halting charges don't apply at all). Used both for informational display at quote time and
+// as the single source of truth for the actual overage computation at delivery time.
+const getHaltingTier = (distanceKm) => {
+  const dist = Number(distanceKm) || 0;
+  if (dist <= HALTING_BASE_THRESHOLD_KM) return null;
+  return HALTING_TIERS.find((t) => dist > t.minKm && dist <= t.maxKm) || HALTING_TIERS[HALTING_TIERS.length - 1];
+};
+
+// Per-hour overage rate for a truck category — falls back to 'medium' for 'part' or an unknown
+// category, same fallback PricingModel.estimate already uses for intra-city base rates.
+const getHaltingRate = (config, truckCategory) => {
+  const category = ['small', 'medium', 'large'].includes(truckCategory) ? truckCategory : 'medium';
+  return Number(config?.intraCity?.[category]?.waitingCharge || 0);
+};
+
 // Traffic-aware dynamic pricing — a single multiplier layered on top of the existing
 // static pricing_config rates, not stored/configurable there. ratio = how much longer the
 // live-traffic ETA is vs. the traffic-free duration; tiers below cap the surge at 1.5x so a
@@ -119,6 +147,7 @@ class PricingModel {
       const adjustedSubtotal = round2(subtotal + trafficSurcharge + supplySurcharge);
       const platformFee = round2(adjustedSubtotal * (cfg.platformFee || 0));
       const total = round2(adjustedSubtotal + platformFee);
+      const haltingTier = getHaltingTier(dist);
       return {
         baseFare,
         distance: dist,
@@ -133,6 +162,12 @@ class PricingModel {
         supplySurcharge,
         platformFee,
         total,
+        // Informational only — the actual overage charge is computed at delivery time (see
+        // trip.controller.js's applyHaltingCharge), once the real elapsed duration is known.
+        halting: haltingTier ? {
+          graceHours: haltingTier.graceHours,
+          ratePerHour: getHaltingRate(config, truckCategory),
+        } : null,
       };
     }
 
@@ -152,5 +187,9 @@ class PricingModel {
     };
   }
 }
+
+PricingModel.getHaltingTier = getHaltingTier;
+PricingModel.getHaltingRate = getHaltingRate;
+PricingModel.HALTING_BASE_THRESHOLD_KM = HALTING_BASE_THRESHOLD_KM;
 
 module.exports = PricingModel;

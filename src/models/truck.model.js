@@ -190,6 +190,52 @@ class TruckModel {
     };
   }
 
+  // Every available truck (with an available, located, KYC-verified driver) within radiusKm of
+  // a point, returning driver_id/broker_id so each can be fanned out into its own driver_requests
+  // row — unlike findNearby (paginated, no driver/broker id, powers the client's manual pick-one
+  // truck map), this is for the "Find Truck" broadcast mode: every match gets notified at once,
+  // first to accept wins (driver_requests' existing sibling-decline handles the rest). Same
+  // eligibility conditions and haversine formula as findNearby, deliberately kept in sync.
+  static async findNearbyForBroadcast({ lat, lng, radiusKm, category } = {}) {
+    const conditions = [
+      `t.status = 'available'`,
+      `t.driver_id IS NOT NULL`,
+      `t.driver_id = dp.user_id`,
+      `dp.status = 'available'`,
+      `dp.current_lat IS NOT NULL`,
+      `dp.current_lng IS NOT NULL`,
+      `driver.kyc_status = 'verified'`,
+    ];
+    const params = [lat, lng];
+    let idx = 3;
+
+    if (category) {
+      conditions.push(`t.category = $${idx++}`);
+      params.push(category);
+    }
+
+    const distanceExpr = `
+      6371 * acos(LEAST(1, GREATEST(-1,
+        cos(radians($1)) * cos(radians(dp.current_lat)) * cos(radians(dp.current_lng) - radians($2))
+        + sin(radians($1)) * sin(radians(dp.current_lat))
+      )))
+    `;
+
+    conditions.push(`(${distanceExpr}) <= $${idx++}`);
+    params.push(radiusKm);
+
+    const rows = await pool.query(
+      `SELECT t.id AS truck_id, t.driver_id, t.broker_id, (${distanceExpr}) AS distance_km
+       FROM trucks t
+       JOIN driver_profiles dp ON dp.truck_id = t.id
+       JOIN users driver ON driver.id = dp.user_id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY distance_km ASC`,
+      params
+    );
+    return rows.rows;
+  }
+
   // Hard delete — safe only when no booking references this truck (enforced in controller).
   static async remove(id) {
     await pool.query(`DELETE FROM trucks WHERE id = $1`, [id]);

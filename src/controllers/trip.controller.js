@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const TripModel = require('../models/trip.model');
 const BookingModel = require('../models/booking.model');
+const PricingModel = require('../models/pricing.model');
 const DriverProfileModel = require('../models/driverProfile.model');
 const TruckModel = require('../models/truck.model');
 const SettlementModel = require('../models/settlement.model');
@@ -41,6 +42,50 @@ const ACTIVE_TRIP_STATUSES = ['confirmed', 'en_route_pickup', 'picked_up', 'in_t
 
 // Subset of the booking status stepper that applies once a trip exists.
 const TRIP_STEPS = ['confirmed', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
+
+// Called once, the instant a trip transitions into 'delivered' — computes the inter-city
+// halting overage (if any) using the same tier table PricingModel.estimate already surfaces
+// informationally at quote time, and bumps the booking's amount by the overage so every
+// existing amountToCollect/collectPayment/invoice code path picks it up automatically with no
+// further changes. No-ops (silently) for intra-city bookings, short trips, or a missing
+// started_at — none of those should ever produce a charge.
+const applyHaltingCharge = async (trip) => {
+  if (trip.transport_type !== 'inter' || !trip.started_at) return;
+
+  const tier = PricingModel.getHaltingTier(trip.distance);
+  if (!tier) return;
+
+  const elapsedHours = (Date.now() - new Date(trip.started_at).getTime()) / 3600000;
+  const overageHours = Math.round(Math.max(0, elapsedHours - tier.graceHours) * 100) / 100;
+  if (overageHours <= 0) return;
+
+  const configRow = await PricingModel.getConfig();
+  const rate = PricingModel.getHaltingRate(configRow?.config, trip.truck_category);
+  if (rate <= 0) return;
+
+  const haltingCharge = Math.round(overageHours * rate * 100) / 100;
+  await TripModel.setHaltingCharge(trip.id, { hours: overageHours, charge: haltingCharge });
+  // A booking that was already fully paid up front (online, before the trip even started) has
+  // no way to collect this after-the-fact overage — collectPayment only ever activates for
+  // 'pending'/'partial'. Downgrade 'paid' -> 'partial' so the driver's Payments step re-opens
+  // for just the new outstanding balance (the halting charge itself, since the rest was already
+  // paid) instead of the charge silently going uncollected.
+  await BookingModel.update(trip.booking_id, {
+    amount: Number(trip.booking_amount || 0) + haltingCharge,
+    payment_status: trip.booking_payment_status === 'paid' ? 'partial' : undefined,
+  });
+
+  if (trip.client_id) {
+    await NotificationModel.create({
+      userId: trip.client_id,
+      title: 'Halting Charges Applied',
+      message: `Your trip ${trip.booking_number || ''} exceeded the free halting window by ${overageHours.toFixed(1)}h — a halting charge of ₹${haltingCharge} has been added to your bill.`,
+      type: 'payment',
+      meta: { trip_id: trip.id, booking_id: trip.booking_id, halting_hours: overageHours, halting_charge: haltingCharge },
+    });
+  }
+  logger.info(`Halting charge applied: trip ${trip.id} — ${overageHours}h overage x ₹${rate}/h = ₹${haltingCharge}`);
+};
 
 // Straight-line remaining distance/ETA from the truck's last-reported position to wherever
 // it's headed next — the pickup point while still "en_route_pickup", the drop point once
@@ -141,6 +186,12 @@ const projectTrip = async (row, timeline) => {
   // way a manually-uploaded static QR image (no encoded amount) used to be. Null until the
   // driver's saved one in their profile.
   driverUpiId: row.driver_upi_id || null,
+  // Overage past the distance-tiered free halting window, already folded into amountToCollect
+  // above (booking.amount is bumped by this same charge the moment it's computed — see
+  // applyHaltingCharge). Kept here as a breakdown so the driver/client can see it was applied
+  // and why, not just a bigger total.
+  haltingHours: row.halting_hours != null ? Number(row.halting_hours) : 0,
+  haltingCharge: row.halting_charge != null ? Number(row.halting_charge) : 0,
   timeline: timeline.map((t) => ({ step: t.step, done: t.done, time: t.occurred_at })),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -367,6 +418,7 @@ const updateTripStatus = async (req, res, next) => {
       isNewCompletion = true;
     } else {
       await TripModel.updateStatus(id, status);
+      if (status === 'delivered') await applyHaltingCharge(trip);
     }
     const stepIndex = TRIP_STEPS.indexOf(status);
     await TripModel.addTimelineStep(id, { step: status, position: stepIndex >= 0 ? stepIndex : 99 });

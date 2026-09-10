@@ -52,6 +52,26 @@ const createBookingValidation = [
   body('add_unloading_location.*.location').optional({ nullable: true, checkFalsy: true }).trim().isString(),
   body('add_unloading_location.*.lat').optional({ nullable: true, checkFalsy: true }).isFloat({ min: -90, max: 90 }).withMessage('add_unloading_location[].lat must be a valid latitude'),
   body('add_unloading_location.*.lng').optional({ nullable: true, checkFalsy: true }).isFloat({ min: -180, max: 180 }).withMessage('add_unloading_location[].lng must be a valid longitude'),
+
+  // Mutually-exclusive "Find Truck" (broadcast to nearby drivers) vs "Search for Broker"
+  // (pick one broker) — both optional; omitting search_mode entirely keeps the legacy
+  // broadcast-to-all-eligible-brokers behavior (see booking.controller.js's broadcastBooking).
+  body('search_mode').optional({ nullable: true, checkFalsy: true })
+    .isIn(['truck', 'broker']).withMessage('search_mode must be one of: truck, broker'),
+  body('search_radius_km').optional({ nullable: true, checkFalsy: true })
+    .isFloat({ min: 0.5, max: 200 }).withMessage('search_radius_km must be between 0.5 and 200'),
+  body('broker_id').optional({ nullable: true, checkFalsy: true }).isUUID().withMessage('broker_id must be a valid UUID'),
+
+  // Book Later — is_scheduled requires scheduled_date to actually mean something (the deferred
+  // broadcast time is computed from it).
+  body('is_scheduled').optional({ nullable: true }).isBoolean().withMessage('is_scheduled must be a boolean'),
+  body('scheduled_date').optional({ nullable: true, checkFalsy: true }).isISO8601().withMessage('scheduled_date must be a valid date-time'),
+  body('is_scheduled').custom((value, { req }) => {
+    if (!value) return true;
+    if (!req.body.scheduled_date) throw new Error('scheduled_date is required when is_scheduled is true');
+    if (new Date(req.body.scheduled_date).getTime() <= Date.now()) throw new Error('scheduled_date must be in the future when is_scheduled is true');
+    return true;
+  }),
 ];
 
 const quoteBookingValidation = [

@@ -7,7 +7,7 @@ const SELECT_WITH_JOINS = `
          client.id    AS client_id,    client.name  AS client_name, client.phone AS client_phone,
          b.truck_id, b.booking_number, t.registration AS truck_reg,
          b.payment_status AS booking_payment_status, b.amount AS booking_amount,
-         b.amount_paid AS booking_amount_paid,
+         b.amount_paid AS booking_amount_paid, b.transport_type, b.truck_category,
          dp.upi_id AS driver_upi_id
   FROM trips tr
   JOIN bookings b       ON b.id = tr.booking_id
@@ -200,6 +200,17 @@ class TripModel {
               updated_at = NOW()
        WHERE id = $2 RETURNING *`,
       [status, id]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Persists the auto-computed inter-city halting overage (see trip.controller.js's
+  // applyHaltingCharge, called once when a trip transitions into 'delivered'). hours/charge are
+  // the *overage* past the distance-tiered free grace period, not the total halt duration.
+  static async setHaltingCharge(id, { hours, charge }) {
+    const result = await pool.query(
+      `UPDATE trips SET halting_hours = $1, halting_charge = $2, updated_at = NOW() WHERE id = $3 RETURNING *`,
+      [hours, charge, id]
     );
     return result.rows[0] || null;
   }

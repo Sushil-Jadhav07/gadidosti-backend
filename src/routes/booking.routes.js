@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, listBookingDriverRequests } = require('../controllers/booking.controller');
 const { getBookingOffers } = require('../controllers/job.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -146,6 +146,10 @@ router.post('/bookings/quote', authenticate, quoteBookingValidation, validate, q
  *               duration_in_traffic_min: { type: number, nullable: true }
  *               amount: { type: number, description: "Overrides the auto-computed total when provided" }
  *               payment_status: { type: string, enum: [paid, pending], default: pending, description: "'paid' for Pay Now, 'pending' for Pay Later — no real payment gateway is wired up, this just records the client's choice" }
+ *               search_mode: { type: string, enum: [truck, broker], description: "Mutually exclusive. 'truck' = broadcast to every available driver within search_radius_km (first to accept wins). 'broker' = send the request to exactly one broker (broker_id, required in this mode) instead of every eligible broker. Omit entirely to keep the legacy behavior (broadcast to every eligible broker)." }
+ *               search_radius_km: { type: number, description: "Only used when search_mode='truck'. Defaults to 15km if omitted." }
+ *               broker_id: { type: string, format: uuid, description: "Required when search_mode='broker' — pick one from GET /api/bookings/eligible-brokers." }
+ *               is_scheduled: { type: boolean, default: false, description: "Book Later — when true, scheduled_date is required and in the future; the broker/driver broadcast is deferred until shortly before that time instead of firing immediately." }
  *     parameters:
  *       - in: header
  *         name: Idempotency-Key
@@ -165,6 +169,34 @@ router.post('/bookings/quote', authenticate, quoteBookingValidation, validate, q
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/bookings', authenticate, authorize('client'), idempotent('POST /bookings'), createBookingValidation, validate, createBooking);
+
+/**
+ * @swagger
+ * /api/bookings/eligible-brokers:
+ *   get:
+ *     tags: [Bookings]
+ *     summary: List brokers eligible for a "Search for Broker" pick (client)
+ *     description: |
+ *       Not booking-scoped — call this before POST /api/bookings so the client can browse and
+ *       pick exactly one broker (search_mode='broker', broker_id in the create-booking request)
+ *       instead of broadcasting to every eligible broker. Same eligibility rule as the legacy
+ *       broadcast (KYC-verified, active, online, service_city match when city is given), plus
+ *       display fields (name, phone, fleet size) for the picker UI.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: city
+ *         schema: { type: string }
+ *         description: Optional. Matches broker_profiles.service_city; omit to list every eligible broker regardless of zone.
+ *     responses:
+ *       200:
+ *         description: Eligible brokers fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ */
+router.get('/bookings/eligible-brokers', authenticate, authorize('client'), listEligibleBrokers);
 
 /**
  * @swagger
@@ -300,6 +332,45 @@ router.get('/bookings/:id/track', authenticate, trackBooking);
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/bookings/:id/offers', authenticate, authorize('client'), getBookingOffers);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/driver-requests:
+ *   get:
+ *     tags: [Bookings]
+ *     summary: List every driver_requests sibling for one of the client's own bookings
+ *     description: |
+ *       The driver_requests counterpart to GET /api/bookings/{id}/offers. Needed for
+ *       search_mode='truck' ("Find Truck") bookings, which fan out to one driver_requests row
+ *       per available driver within radius — GET /api/driver-requests/booking/{bookingId} predates
+ *       this fan-out and only ever returns the single most-recently-created row, which isn't
+ *       necessarily the one that ends up accepted. Poll this instead while waiting for any driver
+ *       in the broadcast to respond.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Driver requests fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/bookings/:id/driver-requests', authenticate, authorize('client'), listBookingDriverRequests);
 
 /**
  * @swagger

@@ -25,6 +25,17 @@ const { getPaymentProvider } = require('../providers/payment');
 const ADVANCE_PAYMENT_THRESHOLD = 5000;
 const ADVANCE_PAYMENT_PCT = 0.2;
 
+// "Find Truck" mode default radius when the client doesn't send search_radius_km — matches
+// NearbyTrucksMap.jsx's own default search radius (see pricing.model.js's NEARBY_SURGE_RADIUS_KM
+// note for the same convention elsewhere).
+const DEFAULT_BROADCAST_RADIUS_KM = 15;
+
+// Book Later: how far ahead of the client's requested scheduled_date the deferred broadcast
+// actually fires (see scheduledBookingBroadcastSweep.js). Not specified by the feature request —
+// a judgment call to give drivers/brokers a reasonable window to respond before the requested
+// time arrives, flagged here rather than silently assumed.
+const SCHEDULED_BROADCAST_LEAD_HOURS = 2;
+
 const projectBooking = (row, timeline, role) => {
   const base = {
     id: row.id,
@@ -79,6 +90,14 @@ const projectBooking = (row, timeline, role) => {
     timeTakenMinutes: row.trip_started_at && row.trip_delivered_at
       ? Math.round((new Date(row.trip_delivered_at) - new Date(row.trip_started_at)) / 60000)
       : null,
+    haltingHours: row.trip_halting_hours != null ? Number(row.trip_halting_hours) : 0,
+    haltingCharge: row.trip_halting_charge != null ? Number(row.trip_halting_charge) : 0,
+    isScheduled: row.is_scheduled || false,
+    broadcastAt: row.broadcast_at || null,
+    broadcastTriggeredAt: row.broadcast_triggered_at || null,
+    searchMode: row.search_mode || null,
+    searchRadiusKm: row.search_radius_km != null ? Number(row.search_radius_km) : null,
+    selectedBrokerId: row.selected_broker_id || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -424,12 +443,21 @@ const finalizePayment = async ({ id, booking, pay_type, payment_mode, user }) =>
 };
 
 // ─── PATCH /api/bookings/:id/pay ──────────────────────────────────────────────
-// Client marks a booking as paid directly — no gateway round-trip, used by the "Pay Later"
-// fallback and PAYMENT_PROVIDER=fake's simulated checkout (PaymentSheet.jsx completes its fake
-// animation, then calls straight here). Real gateway payments go through
-// createPaymentOrder/verifyBookingPayment below instead.
+// Client marks a booking as paid directly — no gateway round-trip. Used only by
+// PAYMENT_PROVIDER=fake's simulated checkout in the past; nothing in gadidosti-client calls
+// this anymore (it now goes through createPaymentOrder/verifyBookingPayment below, for both the
+// fake and real-gateway cases). Once PAYMENT_PROVIDER=razorpay is active, this endpoint is
+// blocked outright — without that block, it's a free "mark myself as paid" bypass the moment
+// real money is on the line, since nothing here ever asks a gateway whether a payment actually
+// happened. That was harmless while every "payment" was simulated; it stops being harmless the
+// instant a real gateway goes live. (Driver/broker in-person COD collection is a separate
+// endpoint, trip.controller.js's collectPayment, and unaffected by this.)
 const payBooking = async (req, res, next) => {
   try {
+    if (process.env.PAYMENT_PROVIDER === 'razorpay') {
+      return errorResponse(res, 409, 'Online payments must go through the payment gateway — use /payment/order and /payment/verify instead.');
+    }
+
     const { id } = req.params;
     const { payment_mode, pay_type = 'full' } = req.body;
     if (!['full', 'advance'].includes(pay_type)) {
@@ -649,6 +677,144 @@ const quoteBooking = async (req, res, next) => {
   }
 };
 
+// Fans out a just-created (or just-due, for a scheduled booking) booking to the right
+// audience, branching on its search_mode — called once, either synchronously from createBooking
+// (immediate bookings) or from scheduledBookingBroadcastSweep.js (Book Later, once broadcast_at
+// arrives). Takes the full booking row (as returned by BookingModel.create/findById), not the
+// raw request body, so it works identically from either caller.
+const broadcastBooking = async (booking) => {
+  const pickupText = booking.pickup_location || 'an unspecified pickup point';
+  const dropText = booking.drop_location || 'an unspecified drop point';
+
+  // "Find Truck": broadcast the offered amount to every available driver within radius —
+  // first to accept wins. Reuses driver_requests' existing sibling-decline machinery
+  // (DriverRequestModel.declineOthersForBooking is already N-way generic) with zero changes;
+  // only the fan-out at creation time is new.
+  if (booking.search_mode === 'truck') {
+    const candidates = await TruckModel.findNearbyForBroadcast({
+      lat: booking.pickup_lat,
+      lng: booking.pickup_lng,
+      radiusKm: booking.search_radius_km || DEFAULT_BROADCAST_RADIUS_KM,
+      category: booking.truck_category,
+    });
+    await Promise.all(candidates.map(async (c) => {
+      const driverRequest = await DriverRequestModel.create({
+        bookingId: booking.id,
+        truckId: c.truck_id,
+        driverId: c.driver_id,
+        brokerId: c.broker_id,
+        amount: booking.amount,
+      });
+      await NotificationModel.create({
+        userId: c.driver_id,
+        title: 'New Booking Request',
+        message: `A client wants a truck for ${pickupText} -> ${dropText} at ₹${booking.amount ?? 'TBD'}. First to accept gets the job.`,
+        type: 'booking',
+        meta: { booking_id: booking.id, driver_request_id: driverRequest.id },
+      });
+    }));
+    logger.info(`Booking ${booking.id} broadcast to ${candidates.length} nearby drivers (radius ${booking.search_radius_km || DEFAULT_BROADCAST_RADIUS_KM}km)`);
+    return;
+  }
+
+  // "Search for Broker": the client already picked exactly one broker (see
+  // GET /api/bookings/eligible-brokers) — send the request to them alone, not every eligible
+  // broker.
+  if (booking.search_mode === 'broker') {
+    if (!booking.selected_broker_id) {
+      logger.warn(`Booking ${booking.id} has search_mode='broker' but no selected_broker_id — nothing to broadcast`);
+      return;
+    }
+    const jobRequest = await JobRequestModel.create({
+      bookingId: booking.id,
+      brokerId: booking.selected_broker_id,
+      distance: booking.distance,
+      amount: booking.amount,
+    });
+    await NotificationModel.create({
+      userId: booking.selected_broker_id,
+      title: 'New Job Request',
+      message: `A new booking (${pickupText} to ${dropText}) is awaiting your response.`,
+      type: 'booking',
+      meta: { booking_id: booking.id, job_request_id: jobRequest.id },
+    });
+    return;
+  }
+
+  // Legacy fallback — no search_mode sent (pre-existing clients, e.g. the Flutter app until it
+  // adopts this feature): unchanged behavior, broadcast to every eligible broker. Falls back to
+  // every active broker if zero brokers are zoned for this city, so a booking never silently
+  // gets zero offers just because no broker has set up a matching service_city yet.
+  let brokerIds = await BrokerProfileModel.findEligibleBrokers({ city: booking.city || pickupText });
+  if (!brokerIds.length) {
+    brokerIds = await UserModel.findActiveBrokers();
+    logger.warn(`No brokers zoned for pickup city "${booking.city || pickupText}" — falling back to broadcasting to all ${brokerIds.length} active brokers`);
+  }
+  await Promise.all(brokerIds.map(async (brokerId) => {
+    const jobRequest = await JobRequestModel.create({
+      bookingId: booking.id,
+      brokerId,
+      distance: booking.distance,
+      amount: booking.amount,
+    });
+    await NotificationModel.create({
+      userId: brokerId,
+      title: 'New Job Request',
+      message: `A new booking (${pickupText} to ${dropText}) is awaiting your response.`,
+      type: 'booking',
+      meta: { booking_id: booking.id, job_request_id: jobRequest.id },
+    });
+  }));
+};
+
+// ─── GET /api/bookings/{id}/driver-requests ────────────────────────────────────
+// The client's view of every driver_requests sibling for one of their own bookings — needed
+// once "Find Truck" mode can fan a single booking out to many drivers at once (one row per
+// driver within radius). GET /api/driver-requests/booking/:bookingId (getDriverRequestForBooking
+// in driverRequest.controller.js) predates this fan-out and only ever returns requests[0] — the
+// most recently created row, not necessarily the one that ends up accepted — so it can't be used
+// to watch a multi-driver broadcast; this is the list counterpart, mirroring job.controller.js's
+// getBookingOffers for job_requests.
+const listBookingDriverRequests = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const booking = await BookingModel.findById(id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+
+    const rows = await DriverRequestModel.findByBookingId(id);
+    return successResponse(res, 200, 'Driver requests fetched', {
+      requests: rows.map(projectDriverRequest),
+      bookingStatus: booking.status,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/bookings/eligible-brokers ───────────────────────────────────────
+// Not booking-scoped — called before a booking exists, so the client can browse brokers and
+// pick exactly one for search_mode='broker' before/while submitting POST /api/bookings.
+const listEligibleBrokers = async (req, res, next) => {
+  try {
+    const { city } = req.query;
+    const brokers = await BrokerProfileModel.listEligibleForClient({ city: city || undefined });
+    return successResponse(res, 200, 'Eligible brokers fetched', {
+      brokers: brokers.map((b) => ({
+        id: b.id,
+        name: b.name,
+        phone: b.phone,
+        serviceCity: b.service_city,
+        isOnline: b.is_online,
+        truckCount: parseInt(b.truck_count, 10) || 0,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── POST /api/bookings ──────────────────────────────────────────────────────
 const createBooking = async (req, res, next) => {
   try {
@@ -658,6 +824,7 @@ const createBooking = async (req, res, next) => {
       transport_type = 'intra', city, scheduled_date, distance, duration_min, duration_in_traffic_min,
       amount: providedAmount, payment_status, notes,
       add_loading_location, add_unloading_location,
+      search_mode, search_radius_km, broker_id, is_scheduled,
     } = req.body;
 
     // Nothing here is required (see booking.validation.js) — pickup_location/drop_location
@@ -665,6 +832,10 @@ const createBooking = async (req, res, next) => {
     // fallback rather than printing "undefined".
     const pickupText = pickup_location || 'an unspecified pickup point';
     const dropText = drop_location || 'an unspecified drop point';
+
+    if (search_mode === 'broker' && !broker_id) {
+      return errorResponse(res, 422, 'broker_id is required when search_mode is "broker"');
+    }
 
     let amount = providedAmount;
     let pricingBreakdown = null;
@@ -683,6 +854,15 @@ const createBooking = async (req, res, next) => {
       amount = amount != null ? amount : pricingBreakdown.total;
       platformFee = pricingBreakdown.platformFee;
     }
+
+    // Book Later: when the client explicitly schedules for a future date/time, the booking row
+    // is created right away (so it exists to browse/cancel) but the broker/driver broadcast is
+    // deliberately deferred until close to that time (see SCHEDULED_BROADCAST_LEAD_HOURS above
+    // and scheduledBookingBroadcastSweep.js) instead of firing immediately like a normal booking.
+    const isScheduled = !!is_scheduled && !!scheduled_date;
+    const broadcastAt = isScheduled
+      ? new Date(new Date(scheduled_date).getTime() - SCHEDULED_BROADCAST_LEAD_HOURS * 3600 * 1000)
+      : null;
 
     // No broker/truck is assigned at booking time — a broker picks up the request via the job
     // queue and assigns a driver + truck themselves (see POST /api/jobs/{id}/assign-driver).
@@ -713,45 +893,28 @@ const createBooking = async (req, res, next) => {
       notes,
       loadingLocations: add_loading_location,
       unloadingLocations: add_unloading_location,
+      isScheduled,
+      broadcastAt,
+      searchMode: search_mode,
+      searchRadiusKm: search_radius_km,
+      selectedBrokerId: search_mode === 'broker' ? broker_id : null,
     });
 
     await BookingModel.addTimelineStep(booking.id, { step: 'pending', position: 0 });
 
-    // Broadcast to verified, active, online brokers whose service_city matches the pickup
-    // location — each gets their own job_request row and can counter/decline, but only the
-    // client can confirm one via client-accept (which auto-declines the sibling requests).
-    // Falls back to every active broker if zero brokers are zoned for this city, so a booking
-    // never silently gets zero offers just because no broker has set up a matching service_city yet.
-    // Caveat: this is a straightforward string-equality match against pickup_location, which
-    // is freeform text — pairs best with an exact city name. A real geocoding LocationProvider
-    // (src/providers/location) would be a more robust way to derive the city from an address.
-    let brokerIds = await BrokerProfileModel.findEligibleBrokers({ city: city || pickup_location });
-    if (!brokerIds.length) {
-      brokerIds = await UserModel.findActiveBrokers();
-      logger.warn(`No brokers zoned for pickup city "${city || pickupText}" — falling back to broadcasting to all ${brokerIds.length} active brokers`);
+    if (isScheduled) {
+      logger.info(`Booking ${booking.id} scheduled — broadcast deferred to ${broadcastAt.toISOString()}`);
+    } else {
+      await broadcastBooking(booking);
+      await BookingModel.markBroadcastTriggered(booking.id);
     }
-    await Promise.all(brokerIds.map(async (brokerId) => {
-      const jobRequest = await JobRequestModel.create({
-        bookingId: booking.id,
-        brokerId,
-        distance,
-        amount,
-      });
-      await NotificationModel.create({
-        userId: brokerId,
-        title: 'New Job Request',
-        message: `A new booking (${pickupText} to ${dropText}) is awaiting your response.`,
-        type: 'booking',
-        meta: { booking_id: booking.id, job_request_id: jobRequest.id },
-      });
-    }));
 
     await AuditLogModel.log({
       userId: req.user.id,
       action: 'BOOKING_CREATED',
       entity: 'bookings',
       entityId: booking.id,
-      meta: { transport_type, truck_category, city },
+      meta: { transport_type, truck_category, city, search_mode: search_mode || null, is_scheduled: isScheduled },
       ipAddress: req.ip,
     });
 
@@ -836,4 +999,4 @@ const getClientAnalytics = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, listBookingDriverRequests };

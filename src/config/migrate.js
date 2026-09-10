@@ -1006,6 +1006,21 @@ const runMigrations = async (client) => {
       ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS upi_id TEXT;
     `);
 
+    // ── SCHEDULED BOOKING & HALTING CHARGES (mirrors db/41scheduled_booking_and_halting.sql) ──
+    // Book Later (deferred broadcast via scheduledBookingBroadcastSweep.js), the mutually-
+    // exclusive Find Truck (radius broadcast) / Search for Broker (single-pick) search modes,
+    // and automatic inter-city halting charges past a distance-tiered free grace period.
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_scheduled BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS broadcast_at TIMESTAMPTZ;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS broadcast_triggered_at TIMESTAMPTZ;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS search_mode TEXT CHECK (search_mode IN ('broker', 'truck'));
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS search_radius_km NUMERIC(6,2);
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS selected_broker_id UUID REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS halting_hours NUMERIC(6,2) NOT NULL DEFAULT 0;
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS halting_charge NUMERIC(10,2) NOT NULL DEFAULT 0;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

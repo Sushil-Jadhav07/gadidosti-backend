@@ -66,6 +66,34 @@ class BrokerProfileModel {
     );
     return result.rows.map((row) => row.id);
   }
+
+  // Same eligibility as findEligibleBrokers, but with display fields (name/phone/fleet size)
+  // for the client's "Search for Broker" picker — the client browses this list and sends the
+  // request to exactly one broker, instead of broadcasting to all of them.
+  static async listEligibleForClient({ city } = {}) {
+    const conditions = [
+      `u.role = 'broker'`,
+      `u.status = 'active'`,
+      `u.kyc_status = 'verified'`,
+      `COALESCE(bp.is_online, TRUE) = TRUE`,
+    ];
+    const params = [];
+
+    if (city) {
+      conditions.push(`bp.service_city = $1`);
+      params.push(city);
+    }
+
+    const result = await pool.query(
+      `SELECT u.id, u.name, u.phone, bp.service_city, COALESCE(bp.is_online, TRUE) AS is_online,
+              (SELECT COUNT(*) FROM trucks t WHERE t.broker_id = u.id) AS truck_count
+       FROM users u LEFT JOIN broker_profiles bp ON bp.user_id = u.id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY truck_count DESC, u.name ASC`,
+      params
+    );
+    return result.rows;
+  }
 }
 
 module.exports = BrokerProfileModel;
