@@ -9,7 +9,7 @@ class AdminSettingsModel {
     return result.rows[0] || null;
   }
 
-  static async update({ platformName, contactEmail, commissionRate, emailAlerts, smsAlerts, pushNotifications }) {
+  static async update({ platformName, contactEmail, commissionRate, emailAlerts, smsAlerts, pushNotifications, companyUpiId, companyUpiName }) {
     const result = await pool.query(
       `UPDATE admin_settings SET
          platform_name = COALESCE($1, platform_name),
@@ -18,10 +18,12 @@ class AdminSettingsModel {
          email_alerts = COALESCE($4, email_alerts),
          sms_alerts = COALESCE($5, sms_alerts),
          push_notifications = COALESCE($6, push_notifications),
+         company_upi_id = COALESCE($7, company_upi_id),
+         company_upi_name = COALESCE($8, company_upi_name),
          updated_at = NOW()
-       WHERE id = $7
+       WHERE id = $9
        RETURNING *`,
-      [platformName, contactEmail, commissionRate, emailAlerts, smsAlerts, pushNotifications, ADMIN_SETTINGS_ID]
+      [platformName, contactEmail, commissionRate, emailAlerts, smsAlerts, pushNotifications, companyUpiId, companyUpiName, ADMIN_SETTINGS_ID]
     );
     return result.rows[0] || null;
   }

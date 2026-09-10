@@ -8,6 +8,7 @@ const SettlementModel = require('../models/settlement.model');
 const TripIncidentModel = require('../models/tripIncident.model');
 const MechanicRequestModel = require('../models/mechanicRequest.model');
 const TripPodPhotoModel = require('../models/tripPodPhoto.model');
+const AdminSettingsModel = require('../models/adminSettings.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -112,6 +113,9 @@ const computeRemaining = (row) => {
 const projectTrip = async (row, timeline) => {
   const podPhotos = await TripPodPhotoModel.findByTrip(row.id);
   const { distanceRemainingKm, etaMinutes } = computeRemaining(row);
+  // Platform-wide, not booking-specific — same one row every trip reads, so an extra query
+  // here is cheap and keeps this function self-contained (same reasoning as podPhotos above).
+  const settings = await AdminSettingsModel.get();
   return {
   id: row.id,
   bookingId: row.booking_id,
@@ -186,6 +190,12 @@ const projectTrip = async (row, timeline) => {
   // way a manually-uploaded static QR image (no encoded amount) used to be. Null until the
   // driver's saved one in their profile.
   driverUpiId: row.driver_upi_id || null,
+  // The platform-wide Company UPI (admin-set) — an alternative to the driver's own personal
+  // one above. Whether the driver shows this or their personal QR for a given collection is
+  // entirely their own choice on the Payments step (see DeliveryCompletionFlow.jsx); this just
+  // makes the option available when the admin has configured one.
+  companyUpiId: settings?.company_upi_id || null,
+  companyUpiName: settings?.company_upi_name || 'GadiDost Logistics',
   // Overage past the distance-tiered free halting window, already folded into amountToCollect
   // above (booking.amount is bumped by this same charge the moment it's computed — see
   // applyHaltingCharge). Kept here as a breakdown so the driver/client can see it was applied

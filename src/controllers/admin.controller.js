@@ -98,6 +98,12 @@ const getSettings = async (req, res, next) => {
       emailAlerts: settings.email_alerts,
       smsAlerts: settings.sms_alerts,
       pushNotifications: settings.push_notifications,
+      // The platform-wide UPI a driver can show instead of their own personal one at
+      // collection time (their own choice, per collection) — see DeliveryCompletionFlow.jsx's
+      // PaymentsStep in gadidosti-broker-driver, and trip.controller.js's projectTrip, which is
+      // what actually surfaces this to the driver app (this endpoint is admin-only).
+      companyUpiId: settings.company_upi_id,
+      companyUpiName: settings.company_upi_name,
       updatedAt: settings.updated_at,
     });
   } catch (err) {
@@ -108,7 +114,7 @@ const getSettings = async (req, res, next) => {
 // ─── PUT /api/admin/settings ──────────────────────────────────────────────────
 const updateSettings = async (req, res, next) => {
   try {
-    const { platform_name, contact_email, commission_rate, email_alerts, sms_alerts, push_notifications } = req.body;
+    const { platform_name, contact_email, commission_rate, email_alerts, sms_alerts, push_notifications, company_upi_id, company_upi_name } = req.body;
 
     const updated = await AdminSettingsModel.update({
       platformName: platform_name,
@@ -117,6 +123,8 @@ const updateSettings = async (req, res, next) => {
       emailAlerts: email_alerts,
       smsAlerts: sms_alerts,
       pushNotifications: push_notifications,
+      companyUpiId: company_upi_id,
+      companyUpiName: company_upi_name,
     });
     if (!updated) return errorResponse(res, 404, 'Settings not found');
 

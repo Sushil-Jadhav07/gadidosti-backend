@@ -19,12 +19,21 @@ const { emitJobRequestUpdate, emitJobRequestCreated } = require('./job.controlle
 const { getIO } = require('../realtime/socket');
 const { getPaymentProvider } = require('../providers/payment');
 
-// Above this amount, Pay Later is no longer offered — the client must pay at least a 20%
-// advance to confirm the booking (Pay Now for the full amount is still always available too).
-// Mirrored in gadidosti-client's RequestDriver.jsx to decide which buttons to show; kept in
-// sync manually since there's no shared config endpoint for this yet.
-const ADVANCE_PAYMENT_THRESHOLD = 5000;
-const ADVANCE_PAYMENT_PCT = 0.2;
+// Freight-industry payment stages, alongside "Pay Now" (full, immediate, unchanged):
+//   'full'          — Pay Now, full amount, immediately (existing, unchanged mechanism).
+//   'advance'       — pay a partial amount now (tiered by booking amount — see
+//                     PricingModel.computeAdvanceAmount/DEFAULT_ADVANCE_TIERS, admin-configurable
+//                     via pricing_config.advanceRule), rest collected on delivery. Every tier
+//                     now defines *some* advance value, so this is always offered — there is no
+//                     amount below which it's unavailable (unlike the old flat 20%-above-₹5000
+//                     rule this replaces).
+//   'to_pay'        — nothing now, full amount collected on delivery. Same mechanism the old
+//                     "Pay Later" already used (payment_status stays 'pending' until the
+//                     driver's COD collection) — this is a rename for the new terminology, not a
+//                     new code path. See markToBeBilled below for the payment_status this maps
+//                     to (still just 'pending', unchanged).
+//   'to_be_billed'  — nothing now, nothing collected on delivery either. Booking is
+//                     billed/settled out of band later — see markToBeBilled.
 
 // "Find Truck" mode default radius when the client doesn't send search_radius_km — matches
 // NearbyTrucksMap.jsx's own default search radius (see pricing.model.js's NEARBY_SURGE_RADIUS_KM
@@ -194,12 +203,11 @@ const getBooking = async (req, res, next) => {
 
 // ─── GET /api/bookings/:id/track ─────────────────────────────────────────────
 // Polled by the frontend every 5-10s — plain lat/lng snapshot, no WebSocket infra.
-const trackBooking = async (req, res, next) => {
-  try {
-    const booking = await BookingModel.findById(req.params.id);
-    if (!booking) return errorResponse(res, 404, 'Booking not found');
-    if (!assertCanView(booking, req.user)) return errorResponse(res, 403, 'You do not have access to this booking');
-
+// Shared by the authenticated trackBooking below and the public, token-based
+// getPublicTracking (a client-generated share link — see createTrackingShareLink) — same
+// live-location computation either way, just with the client-only pickupOtp field and the
+// incident's free-text notes stripped out for a public/anonymous viewer (includePrivate=false).
+const buildTrackingPayload = async (booking, { includePrivate }) => {
     // Surfaced so the client's tracking screen can show an incident banner without a
     // separate call to GET /api/trips/:id/incidents. Fetched first (not just for the
     // incident) since a delivered/completed booking needs it for the frozen-location branch
@@ -236,8 +244,16 @@ const trackBooking = async (req, res, next) => {
     // meaningful for an already-delivered shipment anyway.
     const hasHeading = !isTerminal && hasLocation && location.current_heading != null;
 
-    return successResponse(res, 200, 'Booking location fetched', {
+    return {
+      // Enough for a public viewer to orient themselves without exposing anything sensitive —
+      // bookingNumber/pickup/drop text only make sense once includePrivate is false, since a
+      // public link recipient never authenticated as this booking's client.
+      bookingNumber: booking.booking_number,
+      pickup: booking.pickup_location,
+      drop: booking.drop_location,
       status: booking.status,
+      driverName: includePrivate ? undefined : (booking.driver_name || null),
+      truckReg: includePrivate ? undefined : (booking.truck_reg || null),
       driverLat: hasLocation ? Number(location.current_lat) : null,
       driverLng: hasLocation ? Number(location.current_lng) : null,
       driverHeading: hasHeading ? Number(location.current_heading) : null,
@@ -247,22 +263,72 @@ const trackBooking = async (req, res, next) => {
       distanceRemainingKm: distanceRemainingKm != null ? Math.round(distanceRemainingKm * 100) / 100 : null,
       etaMinutes,
       // Client-only — never sent to driver/broker/admin (same gating as projectBooking's
-      // pickupOtp). The driver has to ask the client for this out loud, not read it from their
-      // own screen. See trip.controller.js's updateTripStatus for where it's actually checked.
-      ...(req.user.role === 'client' ? {
+      // pickupOtp), and never to a public link recipient either. The driver has to ask the
+      // client for this out loud, not read it from their own screen. See trip.controller.js's
+      // updateTripStatus for where it's actually checked.
+      ...(includePrivate ? {
         pickupOtp: trip?.pickup_otp_code || null,
         pickupOtpVerified: !!trip?.pickup_otp_verified_at,
       } : {}),
       incident: incident ? {
         reason: incident.reason,
-        notes: incident.notes,
+        // Free-text notes are the reporter's own words about what went wrong — not something
+        // to hand to an anonymous link recipient.
+        notes: includePrivate ? incident.notes : undefined,
         status: incident.status,
         reportedAt: incident.reported_at,
         // Only set for reason='breakdown' — lets the client see "mechanic on the way" instead
         // of just a generic "we're on it" message.
         mechanicStatus: incident.mechanic_status || null,
       } : null,
-    });
+    };
+};
+
+const trackBooking = async (req, res, next) => {
+  try {
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (!assertCanView(booking, req.user)) return errorResponse(res, 403, 'You do not have access to this booking');
+
+    const payload = await buildTrackingPayload(booking, { includePrivate: req.user.role === 'client' });
+    return successResponse(res, 200, 'Booking location fetched', payload);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/bookings/:id/track/share-link ──────────────────────────────────
+// Generates (once — idempotent, reuses the existing token if already created) an opaque,
+// unguessable share link for GET /api/track/:token below. Anyone able to already view this
+// booking can create/re-fetch its link, not just the client — a broker/driver forwarding the
+// link to the client's own recipient is a reasonable thing to want to do too.
+const createTrackingShareLink = async (req, res, next) => {
+  try {
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (!assertCanView(booking, req.user)) return errorResponse(res, 403, 'You do not have access to this booking');
+
+    const token = await BookingModel.getOrCreateTrackingShareToken(booking.id);
+    const baseUrl = (process.env.CLIENT_WEB_BASE_URL || 'https://gadidostclient.asynk.in').replace(/\/+$/, '');
+    return successResponse(res, 200, 'Tracking link created', { token, shareUrl: `${baseUrl}/t/${token}` });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/track/:token ─────────────────────────────────────────────────────
+// The public, unauthenticated landing endpoint the share link above actually points at (via
+// gadidosti-client's own /t/:token page, which calls this) — no login, no ownership check,
+// since the whole point is "anyone holding the link can see it," like a delivery-tracking SMS
+// link. Deliberately a narrower payload than trackBooking's (see buildTrackingPayload) — no
+// contact info, no pickup OTP, no incident notes.
+const getPublicTracking = async (req, res, next) => {
+  try {
+    const booking = await BookingModel.findByTrackingShareToken(req.params.token);
+    if (!booking) return errorResponse(res, 404, 'Tracking link not found or expired');
+
+    const payload = await buildTrackingPayload(booking, { includePrivate: false });
+    return successResponse(res, 200, 'Booking location fetched', payload);
   } catch (err) {
     next(err);
   }
@@ -397,28 +463,26 @@ const checkPayable = (booking, userId, pay_type) => {
     return { status: 409, message: 'A payment has already been recorded for this booking' };
   }
   if (booking.status === 'cancelled') return { status: 409, message: 'This booking is cancelled' };
-  // The 20% advance only exists as an alternative to Pay Later above ADVANCE_PAYMENT_THRESHOLD
-  // (see gadidosti-client's RequestDriver.jsx, which is the only caller that ever sends
-  // pay_type: 'advance') — reject it here too rather than trusting the client not to send it
-  // for a cheap booking, since that would let someone underpay a sub-threshold booking.
-  if (pay_type === 'advance' && Number(booking.amount) <= ADVANCE_PAYMENT_THRESHOLD) {
-    return { status: 422, message: `Advance payment only applies to bookings over ₹${ADVANCE_PAYMENT_THRESHOLD}` };
-  }
+  // No amount-based gate on 'advance' anymore — every tier of the new configurable advance
+  // rule defines *some* advance value (see PricingModel.computeAdvanceAmount), so it's always a
+  // valid choice now, unlike the old flat 20%-above-₹5000 rule this replaced.
   return null;
 };
 
-const computeAmountPaid = (booking, pay_type) => (
-  pay_type === 'advance'
-    ? Math.round(Number(booking.amount) * ADVANCE_PAYMENT_PCT * 100) / 100
-    : Number(booking.amount)
-);
+// Async now (reads the admin-configurable advance-rule tiers from pricing_config) — every
+// caller already awaits this or runs inside an async function, see the call sites below.
+const computeAmountPaid = async (booking, pay_type) => {
+  if (pay_type !== 'advance') return Number(booking.amount);
+  const configRow = await PricingModel.getConfig();
+  return PricingModel.computeAdvanceAmount(booking.amount, configRow?.config?.advanceRule);
+};
 
 // Actually records a completed payment — DB update, driver/broker notification + live push,
 // audit log, and the re-projected booking to hand back. Used by both the direct /pay endpoint
 // (fake/manual "mark paid") and /payment/verify (real gateway, only reached after the
 // signature checks out) so the two can never diverge in what "paid" actually does.
 const finalizePayment = async ({ id, booking, pay_type, payment_mode, user }) => {
-  const amountPaid = computeAmountPaid(booking, pay_type);
+  const amountPaid = await computeAmountPaid(booking, pay_type);
   const paymentStatus = pay_type === 'advance' ? 'partial' : 'paid';
 
   await BookingModel.update(id, {
@@ -438,7 +502,7 @@ const finalizePayment = async ({ id, booking, pay_type, payment_mode, user }) =>
   const modeLabel = payment_mode ? payment_mode.toUpperCase() : 'the app';
   const remaining = Math.round((Number(booking.amount) - amountPaid) * 100) / 100;
   const notificationMessage = pay_type === 'advance'
-    ? `The client paid a 20% advance (₹${amountPaid}) for booking ${booking.booking_number} via ${modeLabel} — ₹${remaining} remains to collect on delivery.`
+    ? `The client paid an advance (₹${amountPaid}) for booking ${booking.booking_number} via ${modeLabel} — ₹${remaining} remains to collect on delivery.`
     : `The client paid for booking ${booking.booking_number} via ${modeLabel} — no COD collection needed.`;
   for (const [userId, title] of [[driverId, 'Payment Received'], [brokerId, 'Payment Received']]) {
     if (!userId) continue;
@@ -523,7 +587,7 @@ const createPaymentOrder = async (req, res, next) => {
     const ineligible = checkPayable(booking, req.user.id, pay_type);
     if (ineligible) return errorResponse(res, ineligible.status, ineligible.message);
 
-    const amount = computeAmountPaid(booking, pay_type);
+    const amount = await computeAmountPaid(booking, pay_type);
     const order = await getPaymentProvider().createOrder({ bookingId: id, amount });
     return successResponse(res, 200, 'Order created', { order, pay_type });
   } catch (err) {
@@ -552,6 +616,79 @@ const verifyBookingPayment = async (req, res, next) => {
 
     const result = await finalizePayment({ id, booking, pay_type, payment_mode, user: { ...req.user, ip: req.ip } });
     return successResponse(res, 200, 'Payment verified', result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/bookings/:id/advance-amount ──────────────────────────────────────
+// Lets the client see what the "Advance" stage would actually charge before opening a real
+// payment order for it — the tiers are admin-configurable, so the frontend can't just compute
+// this itself (see PricingModel.computeAdvanceAmount).
+const getAdvanceAmount = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const booking = await BookingModel.findById(id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+
+    const configRow = await PricingModel.getConfig();
+    const advanceAmount = PricingModel.computeAdvanceAmount(booking.amount, configRow?.config?.advanceRule);
+    return successResponse(res, 200, 'Advance amount calculated', { advanceAmount });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/bookings/:id/mark-to-be-billed ─────────────────────────────────
+// The third payment stage — nothing collected now, and nothing collected at delivery either
+// (unlike 'to_pay', the existing "Pay Later"/COD path, unchanged and still just payment_status
+// 'pending'). The booking is settled out of band later; this only records the client's choice.
+// No gateway involved — there's no payment happening here to verify.
+const markToBeBilled = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const booking = await BookingModel.findById(id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (['paid', 'partial', 'to_be_billed'].includes(booking.payment_status)) {
+      return errorResponse(res, 409, 'A payment choice has already been recorded for this booking');
+    }
+    if (booking.status === 'cancelled') return errorResponse(res, 409, 'This booking is cancelled');
+
+    await BookingModel.update(id, { payment_status: 'to_be_billed' });
+
+    const trip = await TripModel.findByBookingId(id);
+    const driverId = trip?.driver_id || booking.driver_id;
+    const brokerId = trip?.broker_id || booking.broker_id;
+    for (const userId of [driverId, brokerId]) {
+      if (!userId) continue;
+      await NotificationModel.create({
+        userId,
+        title: 'Booking To Be Billed',
+        message: `Booking ${booking.booking_number} will be billed later — no payment needs to be collected on delivery.`,
+        type: 'payment',
+        meta: { booking_id: id },
+      });
+      getIO()?.to(`user:${userId}`).emit('booking-payment-updated', {
+        bookingId: id,
+        bookingNumber: booking.booking_number,
+        paymentStatus: 'to_be_billed',
+      });
+    }
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'BOOKING_MARKED_TO_BE_BILLED',
+      entity: 'bookings',
+      entityId: id,
+      meta: {},
+      ipAddress: req.ip,
+    });
+
+    const full = await BookingModel.findById(id);
+    const timeline = await BookingModel.getTimeline(id);
+    return successResponse(res, 200, 'Booking marked to be billed', { booking: projectBooking(full, timeline, req.user.role) });
   } catch (err) {
     next(err);
   }
@@ -1038,4 +1175,4 @@ const getClientAnalytics = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, listBookingDriverRequests };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking };

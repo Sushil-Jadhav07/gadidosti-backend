@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const pool = require('../config/db');
 
 // Shared join so every read gets the denormalized display fields the UI needs
@@ -95,6 +96,26 @@ class BookingModel {
 
   static async markBroadcastTriggered(id) {
     await pool.query(`UPDATE bookings SET broadcast_triggered_at = NOW() WHERE id = $1`, [id]);
+  }
+
+  // Idempotent — a booking gets exactly one share token for its whole lifetime, generated the
+  // first time anyone asks (see createTrackingShareLink), reused on every later call rather than
+  // minting a new one (and orphaning the old link) every time someone re-shares it.
+  static async getOrCreateTrackingShareToken(id) {
+    const existing = await pool.query(`SELECT tracking_share_token FROM bookings WHERE id = $1`, [id]);
+    if (existing.rows[0]?.tracking_share_token) return existing.rows[0].tracking_share_token;
+
+    const token = crypto.randomBytes(24).toString('hex');
+    await pool.query(`UPDATE bookings SET tracking_share_token = $1 WHERE id = $2`, [token, id]);
+    return token;
+  }
+
+  // Public lookup for GET /api/track/:token — deliberately the plain SELECT_WITH_JOINS shape
+  // (same as findById), not a trimmed-down query, since buildTrackingPayload (the caller) is
+  // itself responsible for deciding what a public viewer may see.
+  static async findByTrackingShareToken(token) {
+    const result = await pool.query(`${SELECT_WITH_JOINS} WHERE b.tracking_share_token = $1`, [token]);
+    return result.rows[0] || null;
   }
 
   static async addTimelineStep(bookingId, { step, done = true, occurredAt, position }) {

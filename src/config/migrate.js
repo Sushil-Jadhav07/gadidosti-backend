@@ -1021,6 +1021,23 @@ const runMigrations = async (client) => {
       ALTER TABLE trips ADD COLUMN IF NOT EXISTS halting_charge NUMERIC(10,2) NOT NULL DEFAULT 0;
     `);
 
+    // ── TRACKING SHARE / TO-BE-BILLED / COMPANY UPI (mirrors db/42tracking_billing_companyupi.sql) ──
+    // Public shareable tracking links, a new "To Be Billed" payment stage, and a platform-wide
+    // Company UPI ID a driver can show instead of their own at collection time.
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS tracking_share_token TEXT;
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_bookings_tracking_share_token ON bookings(tracking_share_token) WHERE tracking_share_token IS NOT NULL;
+    `);
+    await client.query(`
+      ALTER TYPE payment_status ADD VALUE IF NOT EXISTS 'to_be_billed';
+    `);
+    await client.query(`
+      ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS company_upi_id TEXT;
+      ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS company_upi_name TEXT;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

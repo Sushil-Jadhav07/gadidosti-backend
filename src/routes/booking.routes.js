@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, listBookingDriverRequests } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking } = require('../controllers/booking.controller');
 const { getBookingOffers } = require('../controllers/job.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -294,6 +294,39 @@ router.get('/bookings/:id', authenticate, getBooking);
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/bookings/:id/track', authenticate, trackBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/track/share-link:
+ *   post:
+ *     tags: [Bookings]
+ *     summary: Generate (or re-fetch) a public tracking share link
+ *     description: Idempotent — a booking has exactly one share token for its whole lifetime, minted the first time this is called and reused after. Anyone who can already view the booking (client/broker/driver/admin) may create/re-fetch its link. The returned shareUrl points at a public, unauthenticated page — see GET /api/track/{token}.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Tracking link created
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: You do not have access to this booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/bookings/:id/track/share-link', authenticate, createTrackingShareLink);
 
 /**
  * @swagger
@@ -632,6 +665,81 @@ router.post('/bookings/:id/payment/verify', authenticate, authorize('client'), v
 
 /**
  * @swagger
+ * /api/bookings/{id}/advance-amount:
+ *   get:
+ *     tags: [Bookings]
+ *     summary: Preview the "Advance" stage's amount before opening a real payment order (client)
+ *     description: The advance-payment tiers are admin-configurable (pricing_config.advanceRule) — this lets the client see the number before committing to it.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Advance amount calculated
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/bookings/:id/advance-amount', authenticate, authorize('client'), getAdvanceAmount);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/mark-to-be-billed:
+ *   patch:
+ *     tags: [Bookings]
+ *     summary: Choose the "To Be Billed" payment stage (client) — nothing collected now or on delivery
+ *     description: |
+ *       The third freight payment stage, alongside "Advance" and "To Pay" (the existing Pay
+ *       Later/COD path). No gateway involved — this only records the client's choice; the
+ *       booking is settled out of band later. Once set, the driver's delivery-completion
+ *       Payments step won't ask for any collection on this booking.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Booking marked to be billed
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: A payment choice was already recorded, or the booking is cancelled
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/bookings/:id/mark-to-be-billed', authenticate, authorize('client'), markToBeBilled);
+
+/**
+ * @swagger
  * /api/bookings/{id}/rate:
  *   post:
  *     tags: [Bookings]
@@ -736,5 +844,36 @@ router.delete('/bookings/:id', authenticate, authorize('admin', 'broker', 'drive
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.get('/analytics/client', authenticate, authorize('client'), getClientAnalytics);
+
+/**
+ * @swagger
+ * /api/track/{token}:
+ *   get:
+ *     tags: [Bookings]
+ *     summary: Public, unauthenticated tracking view (no login required)
+ *     description: |
+ *       The public counterpart to GET /api/bookings/{id}/track — reachable via a share link
+ *       generated by POST /api/bookings/{id}/track/share-link. No login, no ownership check;
+ *       anyone holding the link can view it, same as a delivery-tracking SMS link. A narrower
+ *       payload than the authenticated version — no contact info, no pickup OTP, no incident
+ *       free-text notes.
+ *     parameters:
+ *       - in: path
+ *         name: token
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Booking location fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: Tracking link not found or expired
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/track/:token', getPublicTracking);
 
 module.exports = router;

@@ -42,6 +42,27 @@ const getHaltingRate = (config, truckCategory) => {
   return Number(config?.intraCity?.[category]?.waitingCharge || 0);
 };
 
+// Advance-payment rule — configurable via pricing_config.advanceRule.tiers (admin dashboard),
+// falling back to these defaults until an admin has ever saved that section. Confirmed design:
+// three tiers by booking amount, first two flat, the top one a percentage. Ordered ascending by
+// maxAmount; the last tier's maxAmount is null (open-ended — "above ₹10,000").
+const DEFAULT_ADVANCE_TIERS = [
+  { maxAmount: 5000, type: 'flat', value: 1000 },
+  { maxAmount: 10000, type: 'flat', value: 2000 },
+  { maxAmount: null, type: 'percent', value: 0.8 },
+];
+
+// The advance amount for a given booking amount — never more than the amount itself (a tiny
+// booking under a tier's flat value shouldn't ever require "more than 100% up front"). Used both
+// at payment time (booking.controller.js) and for display before that (GET .../advance-amount).
+const computeAdvanceAmount = (amount, advanceRuleConfig) => {
+  const amt = Number(amount) || 0;
+  const tiers = advanceRuleConfig?.tiers?.length ? advanceRuleConfig.tiers : DEFAULT_ADVANCE_TIERS;
+  const tier = tiers.find((t) => t.maxAmount == null || amt <= Number(t.maxAmount)) || tiers[tiers.length - 1];
+  const raw = tier.type === 'percent' ? amt * Number(tier.value) : Number(tier.value);
+  return Math.min(round2(raw), amt);
+};
+
 // Traffic-aware dynamic pricing — a single multiplier layered on top of the existing
 // static pricing_config rates, not stored/configurable there. ratio = how much longer the
 // live-traffic ETA is vs. the traffic-free duration; tiers below cap the surge at 1.5x so a
@@ -190,6 +211,8 @@ class PricingModel {
 
 PricingModel.getHaltingTier = getHaltingTier;
 PricingModel.getHaltingRate = getHaltingRate;
+PricingModel.computeAdvanceAmount = computeAdvanceAmount;
+PricingModel.DEFAULT_ADVANCE_TIERS = DEFAULT_ADVANCE_TIERS;
 PricingModel.HALTING_BASE_THRESHOLD_KM = HALTING_BASE_THRESHOLD_KM;
 
 module.exports = PricingModel;
