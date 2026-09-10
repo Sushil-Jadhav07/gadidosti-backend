@@ -14,8 +14,8 @@ const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 const { haversineKm, AVERAGE_SPEED_KMPH } = require('../utils/geo');
-const { projectDriverRequest, emitDriverRequestUpdate } = require('./driverRequest.controller');
-const { emitJobRequestUpdate } = require('./job.controller');
+const { projectDriverRequest, emitDriverRequestUpdate, emitDriverRequestCreated } = require('./driverRequest.controller');
+const { emitJobRequestUpdate, emitJobRequestCreated } = require('./job.controller');
 const { getIO } = require('../realtime/socket');
 const { getPaymentProvider } = require('../providers/payment');
 
@@ -743,6 +743,11 @@ const broadcastBooking = async (booking) => {
         type: 'booking',
         meta: { booking_id: booking.id, driver_request_id: driverRequest.id },
       });
+      // Socket push (not just the push-notification above, which depends on the driver having
+      // granted notification permission) — see FcmBridge.jsx's popup, which listens for this
+      // exact event instead of relying solely on a foreground push.
+      const fresh = await DriverRequestModel.findById(driverRequest.id);
+      emitDriverRequestCreated(c.driver_id, fresh);
     }));
     logger.info(`Booking ${booking.id} broadcast to ${candidates.length} nearby drivers (radius ${booking.search_radius_km || DEFAULT_BROADCAST_RADIUS_KM}km)`);
     return;
@@ -769,6 +774,7 @@ const broadcastBooking = async (booking) => {
       type: 'booking',
       meta: { booking_id: booking.id, job_request_id: jobRequest.id },
     });
+    emitJobRequestCreated(booking.selected_broker_id, await JobRequestModel.findById(jobRequest.id));
     return;
   }
 
@@ -795,6 +801,7 @@ const broadcastBooking = async (booking) => {
       type: 'booking',
       meta: { booking_id: booking.id, job_request_id: jobRequest.id },
     });
+    emitJobRequestCreated(brokerId, await JobRequestModel.findById(jobRequest.id));
   }));
 };
 
@@ -1006,6 +1013,7 @@ const requestTruckForBooking = async (req, res, next) => {
 
     logger.info(`Driver request created: booking ${booking.id} -> truck ${truck.id} (driver ${truck.driver_id})`);
     const full = await DriverRequestModel.findById(driverRequest.id);
+    emitDriverRequestCreated(truck.driver_id, full);
     return successResponse(res, 201, 'Request sent to driver', { request: projectDriverRequest(full) });
   } catch (err) {
     next(err);

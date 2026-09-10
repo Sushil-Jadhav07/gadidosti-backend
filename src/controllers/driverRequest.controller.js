@@ -70,6 +70,18 @@ const emitDriverRequestUpdate = (userId, driverRequest) => {
   getIO()?.to(`user:${userId}`).emit('driver-request-updated', projectDriverRequest(driverRequest));
 };
 
+// A distinct event from the update above, fired exactly once — the instant a brand-new
+// driver_requests row is created (single direct-pick, or one row of a "Find Truck" radius
+// broadcast) — so a listener can tell "this needs your attention right now" apart from any
+// other change to a request it already knows about (accept/counter/decline/timeout, which all
+// go through emitDriverRequestUpdate instead). This is a socket push, not a push notification —
+// it doesn't depend on the driver having granted notification permission, unlike the
+// NotificationModel.create call that sits next to every call site of this function.
+const emitDriverRequestCreated = (userId, driverRequest) => {
+  if (!userId || !driverRequest) return;
+  getIO()?.to(`user:${userId}`).emit('driver-request-created', projectDriverRequest(driverRequest));
+};
+
 // Only the driver may act while their window is open; only the broker may act once the
 // timeout sweep has flagged it (driver_timeout_at set) — never both, never neither.
 const assertCanRespond = (driverRequest, user) => {
@@ -567,6 +579,6 @@ module.exports = {
   acceptDriverRequest, declineDriverRequest, counterDriverRequest,
   clientAcceptDriverRequest, clientRejectDriverRequest, clientCounterDriverRequest,
   listDriverRequests, getDriverRequest, getDriverRequestForBooking,
-  projectDriverRequest, emitDriverRequestUpdate,
+  projectDriverRequest, emitDriverRequestUpdate, emitDriverRequestCreated,
   MAX_COUNTERS_PER_SIDE, countClientCounters, countRespondentCounters,
 };

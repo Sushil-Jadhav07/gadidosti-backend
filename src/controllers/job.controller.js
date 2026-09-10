@@ -63,6 +63,15 @@ const emitJobRequestUpdate = (userId, jobRequest) => {
   getIO()?.to(`user:${userId}`).emit('job-request-updated', projectJobRequest(jobRequest));
 };
 
+// Distinct, fired exactly once at creation — same reasoning as driverRequest.controller.js's
+// emitDriverRequestCreated: lets a listener (FcmBridge.jsx's broker popup) tell "this needs
+// your attention right now" apart from any other change to a request it already knows about,
+// and doesn't depend on notification permission the way the push above does.
+const emitJobRequestCreated = (userId, jobRequest) => {
+  if (!userId || !jobRequest) return;
+  getIO()?.to(`user:${userId}`).emit('job-request-created', projectJobRequest(jobRequest));
+};
+
 // ─── GET /api/jobs/requests ───────────────────────────────────────────────────
 const listJobRequests = async (req, res, next) => {
   try {
@@ -584,5 +593,5 @@ const clientCounterOffer = async (req, res, next) => {
 module.exports = {
   listJobRequests, getBookingOffers, assignDriver, declineJobRequest, acceptJobRequest,
   counterJobRequest, clientAcceptOffer, clientRejectOffer, clientCounterOffer,
-  emitJobRequestUpdate, projectJobRequest,
+  emitJobRequestUpdate, emitJobRequestCreated, projectJobRequest,
 };
