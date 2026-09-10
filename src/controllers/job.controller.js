@@ -405,7 +405,23 @@ const finalizeJobRequest = async (acceptedJobRequest, originalJobRequest) => {
   }
 
   await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
-  await JobRequestModel.declineOthersForBooking(booking.id, acceptedJobRequest.id);
+  const declinedSiblings = await JobRequestModel.declineOthersForBooking(booking.id, acceptedJobRequest.id);
+  // Without this, a broker who loses out to a different broker's accepted offer never learns
+  // their own offer just died — their inbox card sits stale (still 'pending'/'countered') until
+  // they happen to reload.
+  await Promise.all(declinedSiblings.map(async (row) => {
+    if (row.broker_id) {
+      await NotificationModel.create({
+        userId: row.broker_id,
+        title: 'Booking No Longer Available',
+        message: `Booking ${booking.booking_number} was taken by another broker.`,
+        type: 'booking',
+        meta: { booking_id: booking.id, job_request_id: row.id },
+      });
+    }
+    const fresh = await JobRequestModel.findById(row.id);
+    emitJobRequestUpdate(row.broker_id, fresh);
+  }));
 
   return { booking };
 };
@@ -568,4 +584,5 @@ const clientCounterOffer = async (req, res, next) => {
 module.exports = {
   listJobRequests, getBookingOffers, assignDriver, declineJobRequest, acceptJobRequest,
   counterJobRequest, clientAcceptOffer, clientRejectOffer, clientCounterOffer,
+  emitJobRequestUpdate, projectJobRequest,
 };

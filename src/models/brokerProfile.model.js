@@ -70,29 +70,40 @@ class BrokerProfileModel {
   // Same eligibility as findEligibleBrokers, but with display fields (name/phone/fleet size)
   // for the client's "Search for Broker" picker — the client browses this list and sends the
   // request to exactly one broker, instead of broadcasting to all of them.
+  //
+  // Falls back to every eligible broker (dropping the city filter) if the city-scoped query
+  // comes back empty — same convention findEligibleBrokers already applies for the legacy
+  // broadcast path, and just as necessary here: there's currently no UI anywhere for a broker
+  // to actually set service_city (PATCH /api/broker/service-city exists but nothing calls it
+  // yet), so a city-scoped query would otherwise return zero brokers for every intra-city
+  // booking, no matter how many real brokers exist.
   static async listEligibleForClient({ city } = {}) {
-    const conditions = [
-      `u.role = 'broker'`,
-      `u.status = 'active'`,
-      `u.kyc_status = 'verified'`,
-      `COALESCE(bp.is_online, TRUE) = TRUE`,
-    ];
-    const params = [];
+    const runQuery = async (withCity) => {
+      const conditions = [
+        `u.role = 'broker'`,
+        `u.status = 'active'`,
+        `u.kyc_status = 'verified'`,
+        `COALESCE(bp.is_online, TRUE) = TRUE`,
+      ];
+      const params = [];
+      if (withCity && city) {
+        conditions.push(`bp.service_city = $1`);
+        params.push(city);
+      }
+      const result = await pool.query(
+        `SELECT u.id, u.name, u.phone, bp.service_city, COALESCE(bp.is_online, TRUE) AS is_online,
+                (SELECT COUNT(*) FROM trucks t WHERE t.broker_id = u.id) AS truck_count
+         FROM users u LEFT JOIN broker_profiles bp ON bp.user_id = u.id
+         WHERE ${conditions.join(' AND ')}
+         ORDER BY truck_count DESC, u.name ASC`,
+        params
+      );
+      return result.rows;
+    };
 
-    if (city) {
-      conditions.push(`bp.service_city = $1`);
-      params.push(city);
-    }
-
-    const result = await pool.query(
-      `SELECT u.id, u.name, u.phone, bp.service_city, COALESCE(bp.is_online, TRUE) AS is_online,
-              (SELECT COUNT(*) FROM trucks t WHERE t.broker_id = u.id) AS truck_count
-       FROM users u LEFT JOIN broker_profiles bp ON bp.user_id = u.id
-       WHERE ${conditions.join(' AND ')}
-       ORDER BY truck_count DESC, u.name ASC`,
-      params
-    );
-    return result.rows;
+    if (!city) return runQuery(false);
+    const scoped = await runQuery(true);
+    return scoped.length ? scoped : runQuery(false);
   }
 }
 

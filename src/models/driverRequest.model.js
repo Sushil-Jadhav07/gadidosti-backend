@@ -70,24 +70,31 @@ class DriverRequestModel {
   }
 
   // Declines every other still-open request for the same booking once one is accepted —
-  // e.g. the client had requested two trucks in parallel. Includes 'awaiting_confirmation' —
-  // a sibling parked mid-handshake on a booking that's just been won elsewhere must die too,
-  // otherwise it could still complete its own second-confirm CAS after the fact (zombie state).
+  // e.g. the client had requested two trucks in parallel, or (since the "Find Truck" radius
+  // broadcast) many drivers at once. Includes 'awaiting_confirmation' — a sibling parked
+  // mid-handshake on a booking that's just been won elsewhere must die too, otherwise it could
+  // still complete its own second-confirm CAS after the fact (zombie state).
+  // Returns the rows this actually declined (RETURNING *, raw driver_requests columns only, no
+  // joins) so the caller can notify/push-update each affected driver/broker — without this,
+  // a driver who loses the race against a sibling in the same radius broadcast never learns
+  // their request died; their card just sits stale until they happen to reload.
   static async declineOthersForBooking(bookingId, exceptRequestId) {
-    await pool.query(
-      `UPDATE driver_requests SET status = 'declined' WHERE booking_id = $1 AND id != $2 AND status IN ('pending', 'countered', 'awaiting_confirmation')`,
+    const result = await pool.query(
+      `UPDATE driver_requests SET status = 'declined' WHERE booking_id = $1 AND id != $2 AND status IN ('pending', 'countered', 'awaiting_confirmation') RETURNING *`,
       [bookingId, exceptRequestId]
     );
+    return result.rows;
   }
 
   // Used when the client cancels a booking outright — there's no "winning" request to
   // except, every still-open request for it is now moot (mirrors JobRequestModel's
-  // declineAllForBooking).
+  // declineAllForBooking). Also returns the declined rows, same reason as above.
   static async declineAllForBooking(bookingId) {
-    await pool.query(
-      `UPDATE driver_requests SET status = 'declined' WHERE booking_id = $1 AND status IN ('pending', 'countered', 'awaiting_confirmation')`,
+    const result = await pool.query(
+      `UPDATE driver_requests SET status = 'declined' WHERE booking_id = $1 AND status IN ('pending', 'countered', 'awaiting_confirmation') RETURNING *`,
       [bookingId]
     );
+    return result.rows;
   }
 
   // Driver (or broker, once driver_timeout_at is set) counters — only while 'pending'

@@ -14,7 +14,8 @@ const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 const { haversineKm, AVERAGE_SPEED_KMPH } = require('../utils/geo');
-const { projectDriverRequest } = require('./driverRequest.controller');
+const { projectDriverRequest, emitDriverRequestUpdate } = require('./driverRequest.controller');
+const { emitJobRequestUpdate } = require('./job.controller');
 const { getIO } = require('../realtime/socket');
 const { getPaymentProvider } = require('../providers/payment');
 
@@ -298,9 +299,39 @@ const cancelBooking = async (req, res, next) => {
     await BookingModel.addTimelineStep(id, { step: 'cancelled', position: 99 });
 
     // Clear out any still-open negotiation offers so nobody can accept a booking that's just
-    // been cancelled out from under them.
-    await JobRequestModel.declineAllForBooking(id);
-    await DriverRequestModel.declineAllForBooking(id);
+    // been cancelled out from under them — and notify each one, since a silent bulk-decline
+    // with no push/notification would otherwise leave that driver/broker's card sitting stale
+    // (still 'pending'/'countered') until they happen to reload the page.
+    const declinedJobRequests = await JobRequestModel.declineAllForBooking(id);
+    await Promise.all(declinedJobRequests.map(async (row) => {
+      if (row.broker_id) {
+        await NotificationModel.create({
+          userId: row.broker_id,
+          title: 'Booking Cancelled',
+          message: `The client cancelled booking ${booking.booking_number} before it was confirmed.`,
+          type: 'booking',
+          meta: { booking_id: id, job_request_id: row.id },
+        });
+      }
+      const fresh = await JobRequestModel.findById(row.id);
+      emitJobRequestUpdate(row.broker_id, fresh);
+    }));
+
+    const declinedDriverRequests = await DriverRequestModel.declineAllForBooking(id);
+    await Promise.all(declinedDriverRequests.map(async (row) => {
+      const notifyUserId = row.driver_timeout_at ? row.broker_id : row.driver_id;
+      if (notifyUserId) {
+        await NotificationModel.create({
+          userId: notifyUserId,
+          title: 'Booking Cancelled',
+          message: `The client cancelled booking ${booking.booking_number} before it was confirmed.`,
+          type: 'booking',
+          meta: { booking_id: id, driver_request_id: row.id },
+        });
+      }
+      const fresh = await DriverRequestModel.findById(row.id);
+      emitDriverRequestUpdate(notifyUserId, fresh);
+    }));
 
     // A driver/truck may already be assigned (confirmed/assigned/en_route_pickup) — free them
     // up and cancel the linked trip too, same release-on-cancel logic trip.controller.js's

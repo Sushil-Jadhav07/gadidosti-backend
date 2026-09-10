@@ -6,6 +6,20 @@ const projectBrokerProfile = (row) => ({
   isOnline: row?.is_online ?? true,
 });
 
+// ─── GET /api/broker/profile ─────────────────────────────────────────────────
+// Lets the broker's own Profile page load service_city/is_online to show/edit — nothing
+// previously exposed these for reading (GET /api/users/profile doesn't join broker_profiles),
+// which is part of why the frontend's "Address" section never actually persisted a city:
+// there was no save endpoint wired up AND no way to load the saved value back in either.
+const getBrokerProfile = async (req, res, next) => {
+  try {
+    const profile = await BrokerProfileModel.ensure(req.user.id);
+    return successResponse(res, 200, 'Broker profile fetched', { profile: projectBrokerProfile(profile) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── PATCH /api/broker/service-city ──────────────────────────────────────────
 const updateServiceCity = async (req, res, next) => {
   try {
@@ -28,4 +42,4 @@ const updateAvailability = async (req, res, next) => {
   }
 };
 
-module.exports = { updateServiceCity, updateAvailability };
+module.exports = { getBrokerProfile, updateServiceCity, updateAvailability };

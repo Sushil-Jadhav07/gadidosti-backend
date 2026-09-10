@@ -74,22 +74,27 @@ class JobRequestModel {
   // the same booking once one broker has won it. Includes 'awaiting_confirmation' — a sibling
   // parked mid-handshake must die too, otherwise it could still complete its own
   // second-confirm CAS after the fact (zombie state).
+  // Returns the declined rows (RETURNING *) so the caller can notify/push-update every broker
+  // whose offer just died — without this, a broker who loses out to another broker's accepted
+  // offer never learns their offer was declined; their inbox just shows it stale until reload.
   static async declineOthersForBooking(bookingId, exceptJobRequestId) {
-    await pool.query(
-      `UPDATE job_requests SET status = 'declined' WHERE booking_id = $1 AND id != $2 AND status IN ('pending', 'countered', 'awaiting_confirmation')`,
+    const result = await pool.query(
+      `UPDATE job_requests SET status = 'declined' WHERE booking_id = $1 AND id != $2 AND status IN ('pending', 'countered', 'awaiting_confirmation') RETURNING *`,
       [bookingId, exceptJobRequestId]
     );
+    return result.rows;
   }
 
   // Used when a booking is won through a different flow entirely (direct client-pick driver
   // negotiation, see driverRequest.controller.js's finalizeDriverRequest) — every job_requests
   // row ever broadcast for it, across every broker, is now moot. Unlike declineOthersForBooking,
-  // there's no "winning" row on this table to except.
+  // there's no "winning" row on this table to except. Also returns the declined rows.
   static async declineAllForBooking(bookingId) {
-    await pool.query(
-      `UPDATE job_requests SET status = 'declined' WHERE booking_id = $1 AND status IN ('pending', 'countered', 'awaiting_confirmation')`,
+    const result = await pool.query(
+      `UPDATE job_requests SET status = 'declined' WHERE booking_id = $1 AND status IN ('pending', 'countered', 'awaiting_confirmation') RETURNING *`,
       [bookingId]
     );
+    return result.rows;
   }
 
   // Broker submits a counter-offer — only while the request is awaiting the broker's response

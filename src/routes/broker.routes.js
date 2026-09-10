@@ -1,10 +1,28 @@
 const express = require('express');
 const router = express.Router();
 
-const { updateServiceCity, updateAvailability } = require('../controllers/broker.controller');
+const { getBrokerProfile, updateServiceCity, updateAvailability } = require('../controllers/broker.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { updateServiceCityValidation, updateAvailabilityValidation } = require('../validations/broker.validation');
+
+/**
+ * @swagger
+ * /api/broker/profile:
+ *   get:
+ *     tags: [Broker]
+ *     summary: Get the broker's own service_city/is_online (broker only)
+ *     description: The read counterpart to PATCH /api/broker/service-city and PATCH /api/broker/availability — lets the Profile page load the currently-saved values back in.
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Broker profile fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ */
+router.get('/broker/profile', authenticate, authorize('broker'), getBrokerProfile);
 
 /**
  * @swagger

@@ -77,6 +77,54 @@ const assertCanRespond = (driverRequest, user) => {
   return user.role === 'driver' && driverRequest.driver_id === user.id;
 };
 
+// Notifies + live-pushes every driver_requests row that just got silently bulk-declined
+// (declineOthersForBooking/declineAllForBooking) — without this, a driver who loses the race
+// against a sibling in the same "Find Truck" radius broadcast (or whose request is moot because
+// the booking was won via job_requests instead) never learns their request died; their card
+// just sits stale showing the old status until they happen to reload the page.
+const notifyDeclinedDriverRequests = async (declinedRows, bookingNumber) => {
+  await Promise.all((declinedRows || []).map(async (row) => {
+    // Whichever side's turn it was gets notified — the driver, unless they'd already timed out
+    // and their broker had taken over responding on their behalf.
+    const notifyUserId = row.driver_timeout_at ? row.broker_id : row.driver_id;
+    if (notifyUserId) {
+      await NotificationModel.create({
+        userId: notifyUserId,
+        title: 'Booking No Longer Available',
+        message: `Booking ${bookingNumber} was taken by another driver.`,
+        type: 'booking',
+        meta: { booking_id: row.booking_id, driver_request_id: row.id },
+      });
+    }
+    const fresh = await DriverRequestModel.findById(row.id);
+    emitDriverRequestUpdate(notifyUserId, fresh);
+  }));
+};
+
+// Same as notifyDeclinedDriverRequests, but for job_requests siblings that die when a booking
+// is won through the direct driver-pick flow instead. Requires job.controller.js lazily (not a
+// top-level require) — that file already requires this one at its own top, so a top-level
+// require here would create a circular import and get back an incomplete, not-yet-populated
+// module.exports; requiring inside the function instead defers it until well after both
+// modules have finished loading.
+const notifyDeclinedJobRequests = async (declinedRows, bookingNumber) => {
+  if (!declinedRows?.length) return;
+  const { emitJobRequestUpdate } = require('./job.controller');
+  await Promise.all(declinedRows.map(async (row) => {
+    if (row.broker_id) {
+      await NotificationModel.create({
+        userId: row.broker_id,
+        title: 'Booking No Longer Available',
+        message: `Booking ${bookingNumber} was taken through a different flow.`,
+        type: 'booking',
+        meta: { booking_id: row.booking_id, job_request_id: row.id },
+      });
+    }
+    const fresh = await JobRequestModel.findById(row.id);
+    emitJobRequestUpdate(row.broker_id, fresh);
+  }));
+};
+
 // Locks the truck/driver, creates the trip, and mirrors the status onto the parent booking —
 // shared between acceptDriverRequest (driver/broker agrees to the client's current asking
 // price) and clientAcceptDriverRequest (client agrees to the driver/broker's counter-offer).
@@ -101,12 +149,14 @@ const finalizeDriverRequest = async (driverRequest, amount) => {
 
   await BookingModel.addTimelineStep(booking.id, { step: 'confirmed', position: 1 });
   await BookingModel.addTimelineStep(booking.id, { step: 'assigned', position: 2 });
-  await DriverRequestModel.declineOthersForBooking(booking.id, driverRequest.id);
+  const declinedSiblings = await DriverRequestModel.declineOthersForBooking(booking.id, driverRequest.id);
+  await notifyDeclinedDriverRequests(declinedSiblings, booking.booking_number);
   // This booking was won through the direct client-pick flow, not the broker-broadcast one —
   // every job_requests row ever fanned out to brokers for it (potentially many, since every
   // eligible broker gets one on booking creation) is now stale and would otherwise sit
   // 'pending' forever in each of those brokers' inboxes.
-  await JobRequestModel.declineAllForBooking(booking.id);
+  const declinedJobRequests = await JobRequestModel.declineAllForBooking(booking.id);
+  await notifyDeclinedJobRequests(declinedJobRequests, booking.booking_number);
 
   await TruckModel.update(driverRequest.truck_id, { status: 'on_trip' });
   await DriverProfileModel.update(driverRequest.driver_id, { status: 'on_trip', truckId: driverRequest.truck_id });
