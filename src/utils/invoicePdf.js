@@ -120,11 +120,15 @@ const buildInvoicePdfBuffer = (booking) => new Promise((resolve, reject) => {
 
   doc.rect(tableX, y, tableW, rowH).stroke('#E5E7EB');
   const haltingCharge = Number(booking.trip_halting_charge || 0);
+  const slaOverageCharge = Number(booking.trip_sla_overage_charge || 0);
 
   drawRow('Amount', money(amount));
   drawRow('Platform Fee', money(platformFee));
   if (haltingCharge > 0) {
     drawRow(`Halting Charge (${Number(booking.trip_halting_hours || 0)}h overage, included above)`, money(haltingCharge));
+  }
+  if (slaOverageCharge > 0) {
+    drawRow(`Delivery Delay Charge (${Number(booking.trip_sla_overage_hours || 0)}h overage, included above)`, money(slaOverageCharge));
   }
   drawRow('Total', money(amount), { highlight: true });
   y += 14;

@@ -102,6 +102,12 @@ const projectBooking = (row, timeline, role) => {
       : null,
     haltingHours: row.trip_halting_hours != null ? Number(row.trip_halting_hours) : 0,
     haltingCharge: row.trip_halting_charge != null ? Number(row.trip_halting_charge) : 0,
+    // Distinct from halting above — this is the whole door-to-door SLA (see
+    // PricingModel.getExpectedDeliveryHours), not time spent stopped mid-trip.
+    expectedDeliveryHours: row.trip_expected_delivery_hours != null ? Number(row.trip_expected_delivery_hours) : null,
+    slaOverageHours: row.trip_sla_overage_hours != null ? Number(row.trip_sla_overage_hours) : 0,
+    slaOverageCharge: row.trip_sla_overage_charge != null ? Number(row.trip_sla_overage_charge) : 0,
+    isExpress: row.is_express || false,
     isScheduled: row.is_scheduled || false,
     broadcastAt: row.broadcast_at || null,
     broadcastTriggeredAt: row.broadcast_triggered_at || null,
@@ -824,8 +830,12 @@ const quoteBooking = async (req, res, next) => {
     const {
       truck_category, transport_type = 'intra', distance,
       capacity_used_pct, duration_min, duration_in_traffic_min,
-      pickup_lat, pickup_lng,
+      pickup_lat, pickup_lng, is_express,
     } = req.body;
+
+    if (is_express && transport_type !== 'intra') {
+      return errorResponse(res, 422, 'Express Delivery is only available for intra-city bookings');
+    }
 
     const breakdown = await PricingModel.estimate({
       truckCategory: truck_category,
@@ -836,6 +846,7 @@ const quoteBooking = async (req, res, next) => {
       durationInTrafficMin: duration_in_traffic_min,
       pickupLat: pickup_lat,
       pickupLng: pickup_lng,
+      isExpress: is_express,
     });
 
     return successResponse(res, 200, 'Pricing estimate calculated', breakdown);
@@ -999,7 +1010,7 @@ const createBooking = async (req, res, next) => {
       transport_type = 'intra', city, scheduled_date, distance, duration_min, duration_in_traffic_min,
       amount: providedAmount, payment_status, notes,
       add_loading_location, add_unloading_location,
-      search_mode, search_radius_km, broker_id, is_scheduled,
+      search_mode, search_radius_km, broker_id, is_scheduled, is_express,
     } = req.body;
 
     // Nothing here is required (see booking.validation.js) — pickup_location/drop_location
@@ -1010,6 +1021,9 @@ const createBooking = async (req, res, next) => {
 
     if (search_mode === 'broker' && !broker_id) {
       return errorResponse(res, 422, 'broker_id is required when search_mode is "broker"');
+    }
+    if (is_express && transport_type !== 'intra') {
+      return errorResponse(res, 422, 'Express Delivery is only available for intra-city bookings');
     }
 
     let amount = providedAmount;
@@ -1025,6 +1039,7 @@ const createBooking = async (req, res, next) => {
         durationInTrafficMin: duration_in_traffic_min,
         pickupLat: pickup_lat,
         pickupLng: pickup_lng,
+        isExpress: is_express,
       });
       amount = amount != null ? amount : pricingBreakdown.total;
       platformFee = pricingBreakdown.platformFee;
@@ -1073,6 +1088,7 @@ const createBooking = async (req, res, next) => {
       searchMode: search_mode,
       searchRadiusKm: search_radius_km,
       selectedBrokerId: search_mode === 'broker' ? broker_id : null,
+      isExpress: transport_type === 'intra' ? !!is_express : false,
     });
 
     await BookingModel.addTimelineStep(booking.id, { step: 'pending', position: 0 });

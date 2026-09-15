@@ -1038,6 +1038,19 @@ const runMigrations = async (client) => {
       ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS company_upi_name TEXT;
     `);
 
+    // ── EXPRESS DELIVERY & DELIVERY SLA (mirrors db/43express_delivery_sla.sql) ──
+    // Distance-tiered expected-delivery-time tracking (distinct from the existing inter-city
+    // halting grace period) with an overage charge, plus an intra-city-only Express service
+    // tier (+20% surcharge, tighter deadline, optional insurance — all admin-configurable).
+    await client.query(`
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS expected_delivery_hours NUMERIC(6,2);
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS sla_overage_hours NUMERIC(6,2) NOT NULL DEFAULT 0;
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS sla_overage_charge NUMERIC(10,2) NOT NULL DEFAULT 0;
+    `);
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_express BOOLEAN NOT NULL DEFAULT FALSE;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

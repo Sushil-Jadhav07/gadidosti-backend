@@ -63,6 +63,38 @@ const computeAdvanceAmount = (amount, advanceRuleConfig) => {
   return Math.min(round2(raw), amt);
 };
 
+// Delivery SLA — distance-tiered "expected total delivery time" (door-to-door, not just time
+// spent halted — see HALTING_TIERS above for that separate, smaller-scale concept). Confirmed
+// design: three tiers by distance. Admin-configurable via pricing_config.deliverySla.tiers,
+// falling back to these defaults until an admin has ever saved that section.
+const DEFAULT_SLA_TIERS = [
+  { maxKm: 300, hours: 36 },
+  { maxKm: 1000, hours: 48 },
+  { maxKm: null, hours: 120 },
+];
+
+// Express Delivery — intra-city-only (confirmed scope), a faster/costlier service tier: the
+// normal freight amount plus a surcharge, and the normal SLA hours multiplied down (a smaller
+// factor = a tighter deadline). Admin-configurable via pricing_config.expressService, falling
+// back to these defaults (20% surcharge, 40% faster i.e. 0.6x the normal hours) until saved.
+const DEFAULT_EXPRESS_SERVICE = {
+  surchargePct: 0.2,
+  slaFactor: 0.6,
+  includesInsurance: true,
+};
+
+// The expected total delivery time (hours) for a given distance — the single source of truth
+// for both informational display at quote time and the actual overage computation at delivery
+// time (see trip.controller.js's applyHaltingCharge, which now also calls this).
+const getExpectedDeliveryHours = (distanceKm, deliverySlaConfig) => {
+  const dist = Number(distanceKm) || 0;
+  const tiers = deliverySlaConfig?.tiers?.length ? deliverySlaConfig.tiers : DEFAULT_SLA_TIERS;
+  const tier = tiers.find((t) => t.maxKm == null || dist <= Number(t.maxKm)) || tiers[tiers.length - 1];
+  return Number(tier.hours) || 0;
+};
+
+const getExpressService = (config) => ({ ...DEFAULT_EXPRESS_SERVICE, ...(config?.expressService || {}) });
+
 // Traffic-aware dynamic pricing — a single multiplier layered on top of the existing
 // static pricing_config rates, not stored/configurable there. ratio = how much longer the
 // live-traffic ETA is vs. the traffic-free duration; tiers below cap the surge at 1.5x so a
@@ -111,13 +143,19 @@ class PricingModel {
   // behavior change from before this multiplier existed).
   static async estimate({
     truckCategory, transportType, distance, capacityUsedPct, durationMin, durationInTrafficMin,
-    pickupLat, pickupLng,
+    pickupLat, pickupLng, isExpress,
   }) {
     const configRow = await this.getConfig();
     if (!configRow) throw new Error('Pricing configuration not found');
     const config = configRow.config;
     const dist = Number(distance) || 0;
     const trafficMultiplier = getTrafficMultiplier(durationMin, durationInTrafficMin);
+    // Express Delivery is intra-city-only (confirmed scope) — silently ignored for inter-city/
+    // part-load rather than erroring, since the caller may not know that rule; the controller
+    // also guards this at the validation layer so a client can't be quietly charged for
+    // something they didn't actually get.
+    const expressActive = !!isExpress && transportType !== 'inter' && truckCategory !== 'part';
+    const expressCfg = getExpressService(config);
 
     // Only computed when the caller actually has a pickup point (quoteBooking/createBooking
     // both do; anything calling estimate() without coordinates just gets no surge, same as
@@ -189,6 +227,10 @@ class PricingModel {
           graceHours: haltingTier.graceHours,
           ratePerHour: getHaltingRate(config, truckCategory),
         } : null,
+        // Total door-to-door SLA (distinct from the halting grace period above) — Express
+        // doesn't apply to inter-city bookings (confirmed scope), so this is always the normal,
+        // un-tightened figure here.
+        expectedDeliveryHours: getExpectedDeliveryHours(dist, config.deliverySla),
       };
     }
 
@@ -201,10 +243,24 @@ class PricingModel {
     const supplySurcharge = round2(subtotal * (supplyMultiplier - 1));
     const adjustedSubtotal = round2(subtotal + trafficSurcharge + supplySurcharge);
     const platformFee = round2(adjustedSubtotal * (cfg.platformFee || 0));
-    const total = round2(adjustedSubtotal + platformFee);
+    const normalTotal = round2(adjustedSubtotal + platformFee);
+    // Applied on top of the fully-computed normal total (matches the confirmed example: a
+    // ₹20,000 normal freight becomes ₹24,000 Express at the default 20%) — not folded into
+    // platformFee, so the breakdown can show it as its own clearly-labeled line item.
+    const expressSurcharge = expressActive ? round2(normalTotal * expressCfg.surchargePct) : 0;
+    const total = round2(normalTotal + expressSurcharge);
+    // Informational at quote time; the actual overage charge (if any) is computed once the real
+    // elapsed delivery duration is known — see trip.controller.js's applyHaltingCharge.
+    const expectedDeliveryHours = expressActive
+      ? round2(getExpectedDeliveryHours(dist, config.deliverySla) * expressCfg.slaFactor)
+      : getExpectedDeliveryHours(dist, config.deliverySla);
     return {
       baseFare, distance: dist, distanceFare, subtotal, trafficMultiplier, trafficSurcharge,
       nearbyTruckCount, supplyMultiplier, supplySurcharge, platformFee, total,
+      isExpress: expressActive,
+      expressSurcharge,
+      expectedDeliveryHours,
+      expressInsuranceIncluded: expressActive && !!expressCfg.includesInsurance,
     };
   }
 }
@@ -214,5 +270,9 @@ PricingModel.getHaltingRate = getHaltingRate;
 PricingModel.computeAdvanceAmount = computeAdvanceAmount;
 PricingModel.DEFAULT_ADVANCE_TIERS = DEFAULT_ADVANCE_TIERS;
 PricingModel.HALTING_BASE_THRESHOLD_KM = HALTING_BASE_THRESHOLD_KM;
+PricingModel.getExpectedDeliveryHours = getExpectedDeliveryHours;
+PricingModel.getExpressService = getExpressService;
+PricingModel.DEFAULT_SLA_TIERS = DEFAULT_SLA_TIERS;
+PricingModel.DEFAULT_EXPRESS_SERVICE = DEFAULT_EXPRESS_SERVICE;
 
 module.exports = PricingModel;

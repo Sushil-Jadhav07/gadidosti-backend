@@ -7,7 +7,7 @@ const SELECT_WITH_JOINS = `
          client.id    AS client_id,    client.name  AS client_name, client.phone AS client_phone,
          b.truck_id, b.booking_number, t.registration AS truck_reg,
          b.payment_status AS booking_payment_status, b.amount AS booking_amount,
-         b.amount_paid AS booking_amount_paid, b.transport_type, b.truck_category,
+         b.amount_paid AS booking_amount_paid, b.transport_type, b.truck_category, b.is_express AS booking_is_express,
          dp.upi_id AS driver_upi_id
   FROM trips tr
   JOIN bookings b       ON b.id = tr.booking_id
@@ -23,7 +23,7 @@ class TripModel {
     bookingId, driverId, brokerId, pickupContactPerson, pickupContactPhone, pickupAddress,
     pickupTime, pickupLat, pickupLng, dropContactPerson, dropContactPhone, dropAddress,
     dropTime, dropLat, dropLng, distance, estimatedTime, cargoMaterial, cargoWeight,
-    cargoQuantity, cargoSpecialInstructions, cargoValue, earnings, stops,
+    cargoQuantity, cargoSpecialInstructions, cargoValue, earnings, stops, expectedDeliveryHours,
   }) {
     // 4-digit pickup verification code — generated once here (the single place every trip gets
     // created, direct client-pick or broker-assign) rather than per-caller, so there's exactly
@@ -36,14 +36,16 @@ class TripModel {
          booking_id, driver_id, broker_id, pickup_contact_person, pickup_contact_phone, pickup_address,
          pickup_time, pickup_lat, pickup_lng, drop_contact_person, drop_contact_phone, drop_address,
          drop_time, drop_lat, drop_lng, distance, estimated_time, cargo_material, cargo_weight,
-         cargo_quantity, cargo_special_instructions, cargo_value, earnings, stops, pickup_otp_code
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+         cargo_quantity, cargo_special_instructions, cargo_value, earnings, stops, pickup_otp_code,
+         expected_delivery_hours
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
        RETURNING *`,
       [
         bookingId, driverId || null, brokerId || null, pickupContactPerson || null, pickupContactPhone || null, pickupAddress || null,
         pickupTime || null, pickupLat || null, pickupLng || null, dropContactPerson || null, dropContactPhone || null, dropAddress || null,
         dropTime || null, dropLat || null, dropLng || null, distance || null, estimatedTime || null, cargoMaterial || null, cargoWeight || null,
         cargoQuantity || null, cargoSpecialInstructions || null, cargoValue || null, earnings || null, JSON.stringify(stops || []), pickupOtpCode,
+        expectedDeliveryHours != null ? expectedDeliveryHours : null,
       ]
     );
     return result.rows[0];
@@ -210,6 +212,16 @@ class TripModel {
   static async setHaltingCharge(id, { hours, charge }) {
     const result = await pool.query(
       `UPDATE trips SET halting_hours = $1, halting_charge = $2, updated_at = NOW() WHERE id = $3 RETURNING *`,
+      [hours, charge, id]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Distinct from halting above — the overage past the trip's whole-journey delivery SLA (see
+  // trip.controller.js's applySlaOverageCharge), not time spent stopped mid-trip.
+  static async setSlaOverageCharge(id, { hours, charge }) {
+    const result = await pool.query(
+      `UPDATE trips SET sla_overage_hours = $1, sla_overage_charge = $2, updated_at = NOW() WHERE id = $3 RETURNING *`,
       [hours, charge, id]
     );
     return result.rows[0] || null;

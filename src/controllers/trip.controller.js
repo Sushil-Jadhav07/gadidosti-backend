@@ -88,6 +88,47 @@ const applyHaltingCharge = async (trip) => {
   logger.info(`Halting charge applied: trip ${trip.id} — ${overageHours}h overage x ₹${rate}/h = ₹${haltingCharge}`);
 };
 
+// Also called once, the instant a trip transitions into 'delivered' — a distinct charge from
+// the halting one above: this measures the WHOLE door-to-door journey against its distance-
+// tiered expected delivery time (trip.expected_delivery_hours, fixed at trip creation — see
+// driverRequest.controller.js's finalizeDriverRequest — so it stays stable even if the admin
+// later retunes the SLA tiers), not time spent stopped mid-trip. Applies to every transport
+// type/distance (unlike halting, which only applies inter-city above 200km) — confirmed design
+// reuses the same per-truck-category waitingCharge rate for the overage amount.
+const applySlaOverageCharge = async (trip) => {
+  if (!trip.started_at || trip.expected_delivery_hours == null) return;
+
+  const elapsedHours = (Date.now() - new Date(trip.started_at).getTime()) / 3600000;
+  const overageHours = Math.round(Math.max(0, elapsedHours - Number(trip.expected_delivery_hours)) * 100) / 100;
+  if (overageHours <= 0) return;
+
+  const configRow = await PricingModel.getConfig();
+  const rate = PricingModel.getHaltingRate(configRow?.config, trip.truck_category);
+  if (rate <= 0) return;
+
+  const slaCharge = Math.round(overageHours * rate * 100) / 100;
+  await TripModel.setSlaOverageCharge(trip.id, { hours: overageHours, charge: slaCharge });
+  // Same reasoning as applyHaltingCharge's own downgrade — refetch trip.booking_amount fresh
+  // via the caller's re-fetch below rather than trusting a value that may already reflect a
+  // halting charge just applied moments earlier in the same request.
+  const booking = await BookingModel.findById(trip.booking_id);
+  await BookingModel.update(trip.booking_id, {
+    amount: Number(booking.amount || 0) + slaCharge,
+    payment_status: booking.payment_status === 'paid' ? 'partial' : undefined,
+  });
+
+  if (trip.client_id) {
+    await NotificationModel.create({
+      userId: trip.client_id,
+      title: 'Delivery Delay Charge Applied',
+      message: `Your trip ${trip.booking_number || ''} exceeded its expected delivery time by ${overageHours.toFixed(1)}h — a delay charge of ₹${slaCharge} has been added to your bill.`,
+      type: 'payment',
+      meta: { trip_id: trip.id, booking_id: trip.booking_id, sla_overage_hours: overageHours, sla_overage_charge: slaCharge },
+    });
+  }
+  logger.info(`SLA overage charge applied: trip ${trip.id} — ${overageHours}h overage x ₹${rate}/h = ₹${slaCharge}`);
+};
+
 // Straight-line remaining distance/ETA from the truck's last-reported position to wherever
 // it's headed next — the pickup point while still "en_route_pickup", the drop point once
 // "picked_up"/"in_transit". Same haversineKm + AVERAGE_SPEED_KMPH approach already used by
@@ -202,6 +243,13 @@ const projectTrip = async (row, timeline) => {
   // and why, not just a bigger total.
   haltingHours: row.halting_hours != null ? Number(row.halting_hours) : 0,
   haltingCharge: row.halting_charge != null ? Number(row.halting_charge) : 0,
+  // The whole-journey delivery SLA — distinct from halting above (time spent stopped
+  // mid-trip). Fixed at trip creation time (see finalizeDriverRequest), so it stays stable even
+  // if the admin later retunes the tiers.
+  expectedDeliveryHours: row.expected_delivery_hours != null ? Number(row.expected_delivery_hours) : null,
+  slaOverageHours: row.sla_overage_hours != null ? Number(row.sla_overage_hours) : 0,
+  slaOverageCharge: row.sla_overage_charge != null ? Number(row.sla_overage_charge) : 0,
+  isExpress: row.booking_is_express || false,
   timeline: timeline.map((t) => ({ step: t.step, done: t.done, time: t.occurred_at })),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -428,7 +476,10 @@ const updateTripStatus = async (req, res, next) => {
       isNewCompletion = true;
     } else {
       await TripModel.updateStatus(id, status);
-      if (status === 'delivered') await applyHaltingCharge(trip);
+      if (status === 'delivered') {
+        await applyHaltingCharge(trip);
+        await applySlaOverageCharge(trip);
+      }
     }
     const stepIndex = TRIP_STEPS.indexOf(status);
     await TripModel.addTimelineStep(id, { step: status, position: stepIndex >= 0 ? stepIndex : 99 });

@@ -25,7 +25,10 @@ const SELECT_WITH_JOINS = `
          trip.pickup_otp_code AS trip_pickup_otp_code,
          trip.pickup_otp_verified_at AS trip_pickup_otp_verified_at,
          trip.halting_hours AS trip_halting_hours,
-         trip.halting_charge AS trip_halting_charge
+         trip.halting_charge AS trip_halting_charge,
+         trip.expected_delivery_hours AS trip_expected_delivery_hours,
+         trip.sla_overage_hours AS trip_sla_overage_hours,
+         trip.sla_overage_charge AS trip_sla_overage_charge
   FROM bookings b
   LEFT JOIN users broker ON broker.id = b.broker_id
   LEFT JOIN users client ON client.id = b.client_id
@@ -56,7 +59,7 @@ class BookingModel {
     quantity, material, transportType, scheduledDate, amount, currentStep,
     pricingBreakdown, distance, platformFee, paymentStatus, notes, city,
     loadingLocations, unloadingLocations,
-    isScheduled, broadcastAt, searchMode, searchRadiusKm, selectedBrokerId,
+    isScheduled, broadcastAt, searchMode, searchRadiusKm, selectedBrokerId, isExpress,
   }) {
     const bookingNumber = await this.generateBookingNumber();
     const result = await pool.query(
@@ -66,8 +69,8 @@ class BookingModel {
          quantity, material, transport_type, scheduled_date, amount, current_step,
          pricing_breakdown, distance, platform_fee, payment_status, notes, city,
          loading_locations, unloading_locations,
-         is_scheduled, broadcast_at, search_mode, search_radius_km, selected_broker_id
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34)
+         is_scheduled, broadcast_at, search_mode, search_radius_km, selected_broker_id, is_express
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)
        RETURNING *`,
       [
         bookingNumber, clientId, brokerId || null, driverId || null, truckId || null, pickupLocation || null, pickupLat || null, pickupLng || null,
@@ -76,7 +79,7 @@ class BookingModel {
         pricingBreakdown ? JSON.stringify(pricingBreakdown) : null, distance != null ? distance : null, platformFee != null ? platformFee : null,
         paymentStatus || 'pending', notes || null, city || null,
         JSON.stringify(loadingLocations || []), JSON.stringify(unloadingLocations || []),
-        !!isScheduled, broadcastAt || null, searchMode || null, searchRadiusKm != null ? searchRadiusKm : null, selectedBrokerId || null,
+        !!isScheduled, broadcastAt || null, searchMode || null, searchRadiusKm != null ? searchRadiusKm : null, selectedBrokerId || null, !!isExpress,
       ]
     );
     return result.rows[0];

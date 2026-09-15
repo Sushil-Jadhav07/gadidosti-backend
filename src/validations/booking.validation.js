@@ -72,6 +72,18 @@ const createBookingValidation = [
     if (new Date(req.body.scheduled_date).getTime() <= Date.now()) throw new Error('scheduled_date must be in the future when is_scheduled is true');
     return true;
   }),
+
+  // Express Delivery — intra-city only (confirmed scope); the controller re-checks this too
+  // (validation alone can't see is_express against a transport_type that's still defaulting to
+  // 'intra' when omitted, so both layers matter here).
+  body('is_express').optional({ nullable: true }).isBoolean().withMessage('is_express must be a boolean'),
+  body('is_express').custom((value, { req }) => {
+    if (!value) return true;
+    if ((req.body.transport_type || 'intra') !== 'intra') {
+      throw new Error('Express Delivery is only available for intra-city bookings');
+    }
+    return true;
+  }),
 ];
 
 const quoteBookingValidation = [
@@ -85,6 +97,7 @@ const quoteBookingValidation = [
     .isFloat({ min: 0, max: 100 }).withMessage('capacity_used_pct must be between 0 and 100'),
   body('duration_min').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }),
   body('duration_in_traffic_min').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }),
+  body('is_express').optional({ nullable: true }).isBoolean().withMessage('is_express must be a boolean'),
 ];
 
 module.exports = { createBookingValidation, quoteBookingValidation };

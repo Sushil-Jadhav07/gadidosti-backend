@@ -2,6 +2,7 @@ const DriverRequestModel = require('../models/driverRequest.model');
 const JobRequestModel = require('../models/jobRequest.model');
 const BookingModel = require('../models/booking.model');
 const TripModel = require('../models/trip.model');
+const PricingModel = require('../models/pricing.model');
 const TruckModel = require('../models/truck.model');
 const DriverProfileModel = require('../models/driverProfile.model');
 const AuditLogModel = require('../models/auditLog.model');
@@ -185,6 +186,15 @@ const finalizeDriverRequest = async (driverRequest, amount) => {
     { type: 'drop', location: booking.drop_location, lat: booking.drop_lat, lng: booking.drop_lng, status: 'pending', completedAt: null },
   ];
 
+  // Total door-to-door SLA for this trip — distinct from the halting grace period, and fixed at
+  // creation time (not recomputed live) so it stays stable/auditable even if the admin later
+  // retunes the tiers. Express (intra-city only) tightens it by expressService.slaFactor.
+  const configRow = await PricingModel.getConfig();
+  const baseSlaHours = PricingModel.getExpectedDeliveryHours(booking.distance, configRow?.config?.deliverySla);
+  const expectedDeliveryHours = booking.is_express
+    ? Math.round(baseSlaHours * PricingModel.getExpressService(configRow?.config).slaFactor * 100) / 100
+    : baseSlaHours;
+
   const trip = await TripModel.create({
     bookingId: booking.id,
     driverId: driverRequest.driver_id,
@@ -202,6 +212,7 @@ const finalizeDriverRequest = async (driverRequest, amount) => {
     cargoValue: booking.amount,
     earnings: booking.amount && booking.platform_fee ? booking.amount - booking.platform_fee : booking.amount,
     stops,
+    expectedDeliveryHours,
   });
   await TripModel.addTimelineStep(trip.id, { step: 'Pickup', done: false, position: 0, occurredAt: null });
   await TripModel.addTimelineStep(trip.id, { step: 'In Transit', done: false, position: 1, occurredAt: null });
