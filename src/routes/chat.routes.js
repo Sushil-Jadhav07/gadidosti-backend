@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
 
-const { getThreadForBooking, listThreads, listMessages, sendMessage, sendBotAction, markThreadRead, getUnreadCount } = require('../controllers/chat.controller');
-const { authenticate } = require('../middleware/auth.middleware');
+const { getThreadForBooking, getThreadForDriver, getThreadWithMyBroker, listThreads, listMessages, sendMessage, sendBotAction, markThreadRead, getUnreadCount } = require('../controllers/chat.controller');
+const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { sendMessageValidation } = require('../validations/chat.validation');
 
@@ -47,6 +47,57 @@ const { sendMessageValidation } = require('../validations/chat.validation');
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/chat/bookings/:bookingId/thread', authenticate, getThreadForBooking);
+
+/**
+ * @swagger
+ * /api/chat/drivers/{driverId}/thread:
+ *   get:
+ *     tags: [Chat]
+ *     summary: Get (or lazily create) a broker's direct chat thread with one of their own drivers (broker only)
+ *     description: No booking involved at all — a standing channel for the broker's own fleet, alongside the already-existing fleet-location view. 404 if driverId doesn't belong to this broker.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: driverId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Thread fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: Driver not found for this broker
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/chat/drivers/:driverId/thread', authenticate, authorize('broker'), getThreadForDriver);
+
+/**
+ * @swagger
+ * /api/chat/broker/thread:
+ *   get:
+ *     tags: [Chat]
+ *     summary: Get (or lazily create) a driver's direct chat thread with their own broker (driver only)
+ *     description: The driver-side mirror of GET /api/chat/drivers/{driverId}/thread — no id to pass, resolved from the driver's own driver_profiles.broker_id. 404 if the driver has no linked broker (self-registered drivers have none).
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Thread fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: You are not linked to a broker
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/chat/broker/thread', authenticate, authorize('driver'), getThreadWithMyBroker);
 
 /**
  * @swagger

@@ -1051,6 +1051,53 @@ const runMigrations = async (client) => {
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_express BOOLEAN NOT NULL DEFAULT FALSE;
     `);
 
+    // ── POD VIDEO / DRIVER REASSIGNMENT HISTORY / BROKER-DRIVER DIRECT CHAT (mirrors db/44pod_video_reassignment_chat.sql) ──
+    await client.query(`
+      ALTER TABLE trip_pod_photos ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'image';
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS driver_reassignments (
+          id              UUID            PRIMARY KEY DEFAULT uuid_generate_v4(),
+          booking_id      UUID            NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+          trip_id         UUID            REFERENCES trips(id) ON DELETE SET NULL,
+          from_driver_id  UUID            REFERENCES users(id) ON DELETE SET NULL,
+          to_driver_id    UUID            NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          from_truck_id   UUID            REFERENCES trucks(id) ON DELETE SET NULL,
+          to_truck_id     UUID            REFERENCES trucks(id) ON DELETE SET NULL,
+          reason          TEXT,
+          reassigned_by   UUID            NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+          created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_driver_reassignments_booking ON driver_reassignments(booking_id);
+    `);
+    await client.query(`
+      ALTER TABLE chat_threads ALTER COLUMN booking_id DROP NOT NULL;
+    `);
+    await client.query(`
+      ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS broker_id UUID REFERENCES users(id) ON DELETE CASCADE;
+      ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS driver_id UUID REFERENCES users(id) ON DELETE CASCADE;
+    `);
+    await client.query(`
+      ALTER TABLE chat_threads DROP CONSTRAINT IF EXISTS chat_threads_booking_id_key;
+    `);
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_threads_booking_unique ON chat_threads(booking_id) WHERE booking_id IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_threads_direct_unique ON chat_threads(broker_id, driver_id) WHERE booking_id IS NULL;
+    `);
+    await client.query(`
+      DO $$ BEGIN
+          ALTER TABLE chat_threads ADD CONSTRAINT chat_threads_booking_or_direct_chk
+            CHECK (
+              (booking_id IS NOT NULL AND broker_id IS NULL AND driver_id IS NULL)
+              OR (booking_id IS NULL AND broker_id IS NOT NULL AND driver_id IS NOT NULL)
+            );
+      EXCEPTION
+          WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

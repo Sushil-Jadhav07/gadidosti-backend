@@ -9,6 +9,7 @@ const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
 const upload = require('../middleware/upload.middleware');
+const { podUpload } = require('../middleware/upload.middleware');
 const {
   updateTripStatusValidation, updateTripLocationValidation, reportIssueValidation, resolveIncidentValidation,
   updateMechanicRequestValidation, collectPaymentValidation,
@@ -527,7 +528,7 @@ router.patch('/trips/:id/incidents/:incidentId/mechanic', authenticate, authoriz
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/trips/:id/pod', authenticate, authorize('driver', 'broker'), upload.array('files', TripPodPhotoModel.MAX_PHOTOS_PER_TRIP), uploadPod);
+router.post('/trips/:id/pod', authenticate, authorize('driver', 'broker'), podUpload.array('files', TripPodPhotoModel.MAX_PHOTOS_PER_TRIP), uploadPod);
 
 /**
  * @swagger

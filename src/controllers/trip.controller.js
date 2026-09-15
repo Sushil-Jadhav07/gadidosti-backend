@@ -217,6 +217,8 @@ const projectTrip = async (row, timeline) => {
   etaMinutes,
   podUrl: row.pod_url,
   podPhotos: podPhotos.map((p) => p.url),
+  podMedia: podPhotos.map((p) => ({ url: p.url, type: p.media_type })),
+  podMinRequired: TripPodPhotoModel.MIN_UPLOADS_PER_TRIP,
   // Drives the driver app's delivery-completion flow: whether the Payments step is needed
   // at all (paymentStatus — now 'pending' OR 'partial', not just 'pending', since a >5k
   // booking may have had only a 20% advance paid upfront), and what to show on it
@@ -466,6 +468,17 @@ const updateTripStatus = async (req, res, next) => {
     // duplicate/retried PATCH calls can't both win and double up the settlement.
     let isNewCompletion = false;
     if (status === 'completed') {
+      // Confirmed requirement — at least MIN_UPLOADS_PER_TRIP proof-of-delivery items (photo
+      // or video, mixed freely) before the trip can be marked done. Checked here rather than
+      // at upload time, since the driver may upload them one at a time across separate calls —
+      // this is the actual gate, same pattern as the loading/unloading stops check above.
+      const podCount = await TripPodPhotoModel.countByTrip(id);
+      if (podCount < TripPodPhotoModel.MIN_UPLOADS_PER_TRIP) {
+        return errorResponse(
+          res, 409,
+          `At least ${TripPodPhotoModel.MIN_UPLOADS_PER_TRIP} proof-of-delivery photos/videos are required before completing this trip (${podCount} uploaded so far).`
+        );
+      }
       const completed = await TripModel.completeIfNotAlready(id);
       if (!completed) {
         // Already completed — idempotent no-op, don't re-run timeline/booking sync or settlement.
@@ -923,7 +936,8 @@ const uploadPod = async (req, res, next) => {
         resourceId: id,
       });
       const absoluteUrl = toAbsoluteUrl(req, url);
-      await TripPodPhotoModel.create(id, absoluteUrl);
+      const mediaType = file.mimetype.startsWith('video/') ? 'video' : 'image';
+      await TripPodPhotoModel.create(id, absoluteUrl, mediaType);
       uploadedUrls.push(absoluteUrl);
     }
 
@@ -940,9 +954,16 @@ const uploadPod = async (req, res, next) => {
       ipAddress: req.ip,
     });
 
-    logger.info(`${uploadedUrls.length} POD photo(s) uploaded for trip ${id} by ${req.user.role} ${req.user.id}`);
+    logger.info(`${uploadedUrls.length} POD file(s) uploaded for trip ${id} by ${req.user.role} ${req.user.id}`);
     const allPhotos = await TripPodPhotoModel.findByTrip(id);
-    return successResponse(res, 200, 'Proof of delivery uploaded', { podPhotos: allPhotos.map((p) => p.url) });
+    return successResponse(res, 200, 'Proof of delivery uploaded', {
+      // podPhotos kept as bare URLs for any old caller still reading that shape; podMedia is the
+      // new, richer shape ({url, type}) so the frontend can tell photo apart from video without
+      // guessing from the URL.
+      podPhotos: allPhotos.map((p) => p.url),
+      podMedia: allPhotos.map((p) => ({ url: p.url, type: p.media_type })),
+      minRequired: TripPodPhotoModel.MIN_UPLOADS_PER_TRIP,
+    });
   } catch (err) {
     next(err);
   }

@@ -1,5 +1,6 @@
 const ChatMessageModel = require('../models/chatMessage.model');
 const ChatThreadModel = require('../models/chatThread.model');
+const DriverProfileModel = require('../models/driverProfile.model');
 const chatService = require('../realtime/chatService');
 const { broadcastMessage, broadcastEscalation } = require('../realtime/chatBroadcast');
 const { getIO } = require('../realtime/socket');
@@ -25,6 +26,47 @@ const getThreadForBooking = async (req, res, next) => {
         isLocked: chatService.isLocked(booking),
       },
       canSend: chatService.canSend(booking, req.user),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/chat/drivers/:driverId/thread ───────────────────────────────────
+// A broker opening a direct, no-booking-involved chat with one of their own drivers
+// (confirmed feature — "chat with the driver" alongside the already-existing fleet-location
+// view). The driver must actually belong to this broker's fleet.
+const getThreadForDriver = async (req, res, next) => {
+  try {
+    const { driverId } = req.params;
+    const driverProfile = await DriverProfileModel.findById(driverId);
+    if (!driverProfile || driverProfile.broker_id !== req.user.id) {
+      return errorResponse(res, 404, 'Driver not found for this broker');
+    }
+
+    const { thread } = await chatService.getThreadForDirect({ brokerId: req.user.id, driverId });
+    return successResponse(res, 200, 'Thread fetched', {
+      thread: { id: thread.id, brokerId: req.user.id, driverId, isDirect: true },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/chat/broker/thread ──────────────────────────────────────────────
+// The driver-side mirror — no driverId to specify, since a driver only ever has the one
+// broker they're currently linked to (driver_profiles.broker_id). A self-registered driver
+// (their own broker_id) has no separate broker to chat with — 404 in that case.
+const getThreadWithMyBroker = async (req, res, next) => {
+  try {
+    const driverProfile = await DriverProfileModel.findById(req.user.id);
+    if (!driverProfile?.broker_id || driverProfile.broker_id === req.user.id) {
+      return errorResponse(res, 404, 'You are not linked to a broker');
+    }
+
+    const { thread } = await chatService.getThreadForDirect({ brokerId: driverProfile.broker_id, driverId: req.user.id });
+    return successResponse(res, 200, 'Thread fetched', {
+      thread: { id: thread.id, brokerId: driverProfile.broker_id, driverId: req.user.id, isDirect: true },
     });
   } catch (err) {
     next(err);
@@ -154,4 +196,4 @@ const getUnreadCount = async (req, res, next) => {
   }
 };
 
-module.exports = { getThreadForBooking, listThreads, listMessages, sendMessage, sendBotAction, markThreadRead, getUnreadCount };
+module.exports = { getThreadForBooking, getThreadForDriver, getThreadWithMyBroker, listThreads, listMessages, sendMessage, sendBotAction, markThreadRead, getUnreadCount };

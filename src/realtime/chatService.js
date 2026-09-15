@@ -55,12 +55,15 @@ const projectMessage = (row) => ({
 // Shapes one row of ChatThreadModel.listForUser into what every dashboard's chat-list screen
 // renders — same fields regardless of caller's role; the frontend picks which of
 // client/broker/driver is "the other party" based on its own role (admin sees all three).
+// isDirect marks the standing broker<->driver channels (no booking at all) mixed into the same
+// list — those never lock (there's no delivery/completion status to lock against).
 const projectThreadListItem = (row) => ({
   threadId: row.thread_id,
   bookingId: row.booking_id,
   bookingNumber: row.booking_number,
   bookingStatus: row.booking_status,
-  isLocked: LOCKED_BOOKING_STATUSES.includes(row.booking_status),
+  isLocked: !row.is_direct && LOCKED_BOOKING_STATUSES.includes(row.booking_status),
+  isDirect: !!row.is_direct,
   stage: row.stage,
   pickup: row.pickup_location,
   drop: row.drop_location,
@@ -98,14 +101,40 @@ const getThreadForBooking = async (bookingId, user) => {
   return { thread, booking };
 };
 
-// Loads a thread + its booking from just a threadId — used by every call that only has the
-// thread id in hand (message list/send/read REST routes, every socket event).
+// A "booking-shaped" stand-in for a direct broker<->driver thread (no booking involved at all —
+// confirmed feature) — every function above (isParticipant/isLocked/canView/canSend/
+// recipientIds) reads only client_id/broker_id/driver_id/status/id/booking_number off whatever
+// it's given, so feeding this synthetic object through them unchanged is enough to make the
+// entire rest of the chat system (REST + sockets) work for direct threads with no further
+// special-casing. status is deliberately outside LOCKED_BOOKING_STATUSES — a standing channel
+// never locks, there's no delivery/completion to lock it against.
+const directThreadContext = (thread) => ({
+  id: null,
+  booking_number: null,
+  client_id: null,
+  broker_id: thread.broker_id,
+  driver_id: thread.driver_id,
+  status: 'active',
+});
+
+// Loads a thread + its booking (or direct-thread stand-in) from just a threadId — used by
+// every call that only has the thread id in hand (message list/send/read REST routes, every
+// socket event). threads with no booking_id at all are the direct broker<->driver ones.
 const getThreadWithBooking = async (threadId) => {
   const thread = await ChatThreadModel.findById(threadId);
   if (!thread) return { error: 'not_found' };
+  if (!thread.booking_id) return { thread, booking: directThreadContext(thread) };
   const booking = await BookingModel.findById(thread.booking_id);
   if (!booking) return { error: 'not_found' };
   return { thread, booking };
+};
+
+// Resolves (and lazily creates) the standing thread for one broker<->driver pair — the direct-
+// thread counterpart to getThreadForBooking above. No bot greeting is seeded here: the scripted
+// assistant is a client-facing booking feature, not relevant to this channel.
+const getThreadForDirect = async ({ brokerId, driverId }) => {
+  const { thread } = await ChatThreadModel.findOrCreateDirect(brokerId, driverId);
+  return { thread, booking: directThreadContext(thread) };
 };
 
 // Writes one message. Notifications only fire once the thread's escalated to 'human' — during
@@ -196,6 +225,6 @@ const handleBotAction = async ({ thread, booking, sender, actionId }) => {
 
 module.exports = {
   canView, canSend, isParticipant, isLocked, recipientIds,
-  getThreadForBooking, getThreadWithBooking, postMessage, postBotMessage, handleBotAction,
+  getThreadForBooking, getThreadForDirect, getThreadWithBooking, postMessage, postBotMessage, handleBotAction,
   maybeAutoEscalate, projectMessage, projectThreadListItem,
 };

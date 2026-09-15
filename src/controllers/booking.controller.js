@@ -3,6 +3,7 @@ const AnalyticsModel = require('../models/analytics.model');
 const PricingModel = require('../models/pricing.model');
 const JobRequestModel = require('../models/jobRequest.model');
 const DriverRequestModel = require('../models/driverRequest.model');
+const DriverReassignmentModel = require('../models/driverReassignment.model');
 const TruckModel = require('../models/truck.model');
 const TripModel = require('../models/trip.model');
 const DriverProfileModel = require('../models/driverProfile.model');
@@ -108,6 +109,20 @@ const projectBooking = (row, timeline, role) => {
     slaOverageHours: row.trip_sla_overage_hours != null ? Number(row.trip_sla_overage_hours) : 0,
     slaOverageCharge: row.trip_sla_overage_charge != null ? Number(row.trip_sla_overage_charge) : 0,
     isExpress: row.is_express || false,
+    // Estimated delivery DATE — purely informational, distinct from expectedDeliveryHours/
+    // slaOverage* above (the hour-precision SLA used for delay-charge billing). Sourced from
+    // the pricing_breakdown JSONB snapshot taken at booking creation (see createBooking), so it
+    // stays fixed even if the admin later retunes the tiers — same reasoning as
+    // expectedDeliveryHours being frozen on the trip row, just without needing a dedicated
+    // column here since the breakdown snapshot already exists. Counted from the scheduled
+    // pickup date for a Book Later booking, otherwise from whenever it was created.
+    estimatedDeliveryDays: row.pricing_breakdown?.estimatedDeliveryDays ?? null,
+    estimatedDeliveryDate: row.pricing_breakdown?.estimatedDeliveryDays != null
+      ? new Date(
+          new Date(row.is_scheduled && row.scheduled_date ? row.scheduled_date : row.created_at).getTime()
+          + row.pricing_breakdown.estimatedDeliveryDays * 24 * 3600 * 1000
+        ).toISOString()
+      : null,
     isScheduled: row.is_scheduled || false,
     broadcastAt: row.broadcast_at || null,
     broadcastTriggeredAt: row.broadcast_triggered_at || null,
@@ -848,6 +863,10 @@ const quoteBooking = async (req, res, next) => {
       pickupLng: pickup_lng,
       isExpress: is_express,
     });
+    // Estimated delivery DATE (not just days-from-now) — computed here since quoteBooking has
+    // no scheduled_date/is_scheduled context of its own; always relative to "now", since a
+    // Book Later booking's actual pickup date isn't known yet at plain quote time.
+    breakdown.estimatedDeliveryDate = new Date(Date.now() + breakdown.estimatedDeliveryDays * 24 * 3600 * 1000).toISOString();
 
     return successResponse(res, 200, 'Pricing estimate calculated', breakdown);
   } catch (err) {
@@ -973,6 +992,36 @@ const listBookingDriverRequests = async (req, res, next) => {
     return successResponse(res, 200, 'Driver requests fetched', {
       requests: rows.map(projectDriverRequest),
       bookingStatus: booking.status,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/bookings/:id/reassignment-history ────────────────────────────────
+// The "who/when/why" audit trail for every time a broker has swapped this booking's driver
+// mid-trip (see job.controller.js's assignDriver, reassignment branch) — same view-access rule
+// as trackBooking (client/broker/driver/admin who can already see this booking at all), since a
+// client reasonably wants to know their shipment changed hands, not just the broker.
+const getReassignmentHistory = async (req, res, next) => {
+  try {
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (!assertCanView(booking, req.user)) return errorResponse(res, 403, 'You do not have access to this booking');
+
+    const rows = await DriverReassignmentModel.findByBooking(booking.id);
+    return successResponse(res, 200, 'Reassignment history fetched', {
+      history: rows.map((row) => ({
+        id: row.id,
+        tripId: row.trip_id,
+        fromDriverId: row.from_driver_id,
+        fromDriverName: row.from_driver_name || null,
+        toDriverId: row.to_driver_id,
+        toDriverName: row.to_driver_name,
+        reason: row.reason || null,
+        reassignedByName: row.reassigned_by_name,
+        createdAt: row.created_at,
+      })),
     });
   } catch (err) {
     next(err);
@@ -1191,4 +1240,4 @@ const getClientAnalytics = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory };

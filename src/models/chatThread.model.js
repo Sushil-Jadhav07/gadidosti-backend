@@ -26,6 +26,30 @@ class ChatThreadModel {
     return result.rows[0] || null;
   }
 
+  // Same get-or-create-atomically shape as findOrCreateByBooking above, for a standing
+  // broker<->driver channel with no booking involved at all (confirmed feature — a broker
+  // should be able to message one of their own drivers directly). Keyed on the (broker, driver)
+  // pair instead of a booking id — see db/44pod_video_reassignment_chat.sql for the partial
+  // unique index this relies on (booking_id IS NULL rows are keyed by broker_id+driver_id
+  // instead).
+  static async findOrCreateDirect(brokerId, driverId) {
+    const existing = await pool.query(
+      `SELECT * FROM chat_threads WHERE broker_id = $1 AND driver_id = $2 AND booking_id IS NULL`,
+      [brokerId, driverId]
+    );
+    if (existing.rows[0]) return { thread: existing.rows[0], created: false };
+
+    const result = await pool.query(
+      `INSERT INTO chat_threads (broker_id, driver_id) VALUES ($1, $2)
+       ON CONFLICT (broker_id, driver_id) WHERE booking_id IS NULL
+       DO UPDATE SET broker_id = EXCLUDED.broker_id
+       RETURNING *, (xmax = 0) AS created`,
+      [brokerId, driverId]
+    );
+    const { created, ...thread } = result.rows[0];
+    return { thread, created };
+  }
+
   // 'bot' -> 'human' on escalation, never reverts. Guarded on the current value so a
   // double-fired escalation (race, double-tap) only triggers its caller's side effects
   // (notifying the driver/broker) once — returns null on a no-op.
@@ -51,7 +75,8 @@ class ChatThreadModel {
          cu.name AS client_name, bu.name AS broker_name, du.name AS driver_name,
          lm.message AS last_message, lm.created_at AS last_message_at,
          lm.sender_id AS last_sender_id, lm.sender_role AS last_sender_role,
-         COALESCE(uc.unread_count, 0)::int AS unread_count
+         COALESCE(uc.unread_count, 0)::int AS unread_count,
+         FALSE AS is_direct
        FROM chat_threads ct
        JOIN bookings b ON b.id = ct.booking_id
        LEFT JOIN users cu ON cu.id = b.client_id
@@ -71,7 +96,41 @@ class ChatThreadModel {
          WHERE cm2.thread_id = ct.id AND cm2.read_at IS NULL AND cm2.sender_id != $1
        ) uc ON true
        WHERE $2 = 'admin' OR $1 IN (b.client_id, b.broker_id, b.driver_id)
-       ORDER BY COALESCE(lm.created_at, ct.created_at) DESC
+
+       UNION ALL
+
+       -- Standing broker<->driver channels, no booking involved — same shape, booking-only
+       -- columns simply come back NULL. Kept in the same unified list/query (rather than a
+       -- separate endpoint) so every dashboard's existing chat-list screen picks these up for
+       -- free, sorted alongside booking threads by recency.
+       SELECT
+         ct.id AS thread_id, ct.booking_id, ct.stage, ct.created_at AS thread_created_at,
+         NULL AS booking_number, NULL AS booking_status, NULL AS pickup_location, NULL AS drop_location,
+         NULL::uuid AS client_id, ct.broker_id, ct.driver_id,
+         NULL AS client_name, bu.name AS broker_name, du.name AS driver_name,
+         lm.message AS last_message, lm.created_at AS last_message_at,
+         lm.sender_id AS last_sender_id, lm.sender_role AS last_sender_role,
+         COALESCE(uc.unread_count, 0)::int AS unread_count,
+         TRUE AS is_direct
+       FROM chat_threads ct
+       LEFT JOIN users bu ON bu.id = ct.broker_id
+       LEFT JOIN users du ON du.id = ct.driver_id
+       LEFT JOIN LATERAL (
+         SELECT cm.message, cm.created_at, cm.sender_id, su.role AS sender_role
+         FROM chat_messages cm
+         JOIN users su ON su.id = cm.sender_id
+         WHERE cm.thread_id = ct.id
+         ORDER BY cm.created_at DESC
+         LIMIT 1
+       ) lm ON true
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*) AS unread_count
+         FROM chat_messages cm2
+         WHERE cm2.thread_id = ct.id AND cm2.read_at IS NULL AND cm2.sender_id != $1
+       ) uc ON true
+       WHERE ct.booking_id IS NULL AND ($2 = 'admin' OR $1 IN (ct.broker_id, ct.driver_id))
+
+       ORDER BY COALESCE(last_message_at, thread_created_at) DESC
        LIMIT 100`,
       [user.id, user.role]
     );

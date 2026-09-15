@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory } = require('../controllers/booking.controller');
 const { getBookingOffers } = require('../controllers/job.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -404,6 +404,39 @@ router.get('/bookings/:id/offers', authenticate, authorize('client'), getBooking
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/bookings/:id/driver-requests', authenticate, authorize('client'), listBookingDriverRequests);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/reassignment-history:
+ *   get:
+ *     tags: [Bookings]
+ *     summary: Driver reassignment history for a booking (who, when, why)
+ *     description: Every time a broker has swapped this booking's driver mid-trip (see POST /api/jobs/{id}/assign-driver's reassignment branch). Same view-access rule as GET /api/bookings/{id}/track — client/broker/driver/admin who can already view this booking.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Reassignment history fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: You do not have access to this booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/bookings/:id/reassignment-history', authenticate, getReassignmentHistory);
 
 /**
  * @swagger

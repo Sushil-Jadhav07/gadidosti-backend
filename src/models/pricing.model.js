@@ -95,6 +95,30 @@ const getExpectedDeliveryHours = (distanceKm, deliverySlaConfig) => {
 
 const getExpressService = (config) => ({ ...DEFAULT_EXPRESS_SERVICE, ...(config?.expressService || {}) });
 
+// Estimated delivery date — a coarse, day-granularity figure shown to the client before booking
+// confirmation, distinct from getExpectedDeliveryHours above (that's the hour-precision SLA
+// used for delay-charge billing; this is purely informational). The confirmed anchors were
+// given as an irregular set of overlapping-if-taken-literally points ("300-500km -> ~2 days",
+// "500+km -> T+3", "~1000km -> T+4", "~2000km -> T+5") — resolved here into clean, non-
+// overlapping bands per the explicit "avoid overlapping ranges" instruction: 500+ describes the
+// tier that starts at 500, and 1000/2000 are the next two tiers' own anchors. The sub-300km
+// floor (T+1) wasn't specified at all — a judgment call for anything shorter than the shortest
+// given anchor, not derived from any given number.
+const DEFAULT_DELIVERY_DATE_TIERS = [
+  { maxKm: 300, days: 1 },
+  { maxKm: 500, days: 2 },
+  { maxKm: 1000, days: 3 },
+  { maxKm: 2000, days: 4 },
+  { maxKm: null, days: 5 },
+];
+
+const getEstimatedDeliveryDays = (distanceKm, deliveryDateConfig) => {
+  const dist = Number(distanceKm) || 0;
+  const tiers = deliveryDateConfig?.tiers?.length ? deliveryDateConfig.tiers : DEFAULT_DELIVERY_DATE_TIERS;
+  const tier = tiers.find((t) => t.maxKm == null || dist <= Number(t.maxKm)) || tiers[tiers.length - 1];
+  return Number(tier.days) || 0;
+};
+
 // Traffic-aware dynamic pricing — a single multiplier layered on top of the existing
 // static pricing_config rates, not stored/configurable there. ratio = how much longer the
 // live-traffic ETA is vs. the traffic-free duration; tiers below cap the surge at 1.5x so a
@@ -231,6 +255,7 @@ class PricingModel {
         // doesn't apply to inter-city bookings (confirmed scope), so this is always the normal,
         // un-tightened figure here.
         expectedDeliveryHours: getExpectedDeliveryHours(dist, config.deliverySla),
+        estimatedDeliveryDays: getEstimatedDeliveryDays(dist, config.deliveryDateEstimate),
       };
     }
 
@@ -261,6 +286,7 @@ class PricingModel {
       expressSurcharge,
       expectedDeliveryHours,
       expressInsuranceIncluded: expressActive && !!expressCfg.includesInsurance,
+      estimatedDeliveryDays: getEstimatedDeliveryDays(dist, config.deliveryDateEstimate),
     };
   }
 }
@@ -271,6 +297,8 @@ PricingModel.computeAdvanceAmount = computeAdvanceAmount;
 PricingModel.DEFAULT_ADVANCE_TIERS = DEFAULT_ADVANCE_TIERS;
 PricingModel.HALTING_BASE_THRESHOLD_KM = HALTING_BASE_THRESHOLD_KM;
 PricingModel.getExpectedDeliveryHours = getExpectedDeliveryHours;
+PricingModel.getEstimatedDeliveryDays = getEstimatedDeliveryDays;
+PricingModel.DEFAULT_DELIVERY_DATE_TIERS = DEFAULT_DELIVERY_DATE_TIERS;
 PricingModel.getExpressService = getExpressService;
 PricingModel.DEFAULT_SLA_TIERS = DEFAULT_SLA_TIERS;
 PricingModel.DEFAULT_EXPRESS_SERVICE = DEFAULT_EXPRESS_SERVICE;

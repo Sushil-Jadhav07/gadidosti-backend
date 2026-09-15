@@ -4,6 +4,7 @@ const TripModel = require('../models/trip.model');
 const TruckModel = require('../models/truck.model');
 const DriverProfileModel = require('../models/driverProfile.model');
 const DriverRequestModel = require('../models/driverRequest.model');
+const DriverReassignmentModel = require('../models/driverReassignment.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const {
@@ -110,10 +111,15 @@ const getBookingOffers = async (req, res, next) => {
   }
 };
 
+// A trip that's already wrapped up one way or another can't sensibly gain a new driver —
+// "reassign mid-trip, where permitted" (confirmed scope) means permitted while the shipment is
+// still actually moving, not after it's done or called off.
+const REASSIGNABLE_TRIP_STATUSES = ['confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit'];
+
 const assignDriver = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { driverId, truckId } = req.body;
+    const { driverId, truckId, reason } = req.body;
 
     const jobRequest = await JobRequestModel.findById(id);
     if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
@@ -142,6 +148,10 @@ const assignDriver = async (req, res, next) => {
     // the existing trip's driver instead of trying to insert a second one.
     const existingTrip = await TripModel.findByBookingId(booking.id);
     const isReassignment = !!existingTrip;
+
+    if (isReassignment && !REASSIGNABLE_TRIP_STATUSES.includes(existingTrip.status)) {
+      return errorResponse(res, 409, `This trip can no longer be reassigned (status: ${existingTrip.status})`);
+    }
 
     if (!isReassignment) {
       // First-time assignment: don't lock the driver/truck in immediately — give the driver
@@ -194,11 +204,13 @@ const assignDriver = async (req, res, next) => {
     // Reassignment — stays instant, unlike the first-time path above: this is an urgent
     // operational fix (e.g. after an incident on an already-active trip), not a fresh
     // negotiation, so the driver doesn't get a window here.
-    if (booking.driver_id && booking.driver_id !== driverId) {
-      await DriverProfileModel.update(booking.driver_id, { status: 'available' });
+    const previousDriverId = booking.driver_id;
+    const previousTruckId = booking.truck_id;
+    if (previousDriverId && previousDriverId !== driverId) {
+      await DriverProfileModel.update(previousDriverId, { status: 'available' });
     }
-    if (booking.truck_id && booking.truck_id !== truckId) {
-      await TruckModel.update(booking.truck_id, { status: 'available' });
+    if (previousTruckId && previousTruckId !== truckId) {
+      await TruckModel.update(previousTruckId, { status: 'available' });
     }
 
     await BookingModel.advanceStatus(booking.id, {
@@ -217,6 +229,20 @@ const assignDriver = async (req, res, next) => {
 
     const trip = await TripModel.reassignDriver(existingTrip.id, driverId);
 
+    // The dedicated "who/when/why" history row — the assign-driver mechanism above already
+    // did the actual swap; this is purely the audit trail (previously there was only a generic
+    // audit_logs entry with no captured reason at all).
+    await DriverReassignmentModel.create({
+      bookingId: booking.id,
+      tripId: trip.id,
+      fromDriverId: previousDriverId,
+      toDriverId: driverId,
+      fromTruckId: previousTruckId,
+      toTruckId: truckId,
+      reason,
+      reassignedBy: req.user.id,
+    });
+
     await NotificationModel.create({
       userId: driverId,
       title: 'Trip Reassigned to You',
@@ -224,13 +250,24 @@ const assignDriver = async (req, res, next) => {
       type: 'booking',
       meta: { booking_id: booking.id, trip_id: trip.id },
     });
+    // The outgoing driver previously got no notification at all that they'd been pulled off a
+    // trip they were actively on — a real gap, worth fixing while already touching this path.
+    if (previousDriverId && previousDriverId !== driverId) {
+      await NotificationModel.create({
+        userId: previousDriverId,
+        title: 'Reassigned Off This Trip',
+        message: `Your broker reassigned booking ${booking.booking_number} to another driver.${reason ? ` Reason: ${reason}` : ''}`,
+        type: 'booking',
+        meta: { booking_id: booking.id, trip_id: trip.id },
+      });
+    }
 
     await AuditLogModel.log({
       userId: req.user.id,
       action: 'JOB_DRIVER_REASSIGNED',
       entity: 'job_requests',
       entityId: id,
-      meta: { booking_id: booking.id, trip_id: trip.id, driver_id: driverId, truck_id: truckId },
+      meta: { booking_id: booking.id, trip_id: trip.id, driver_id: driverId, truck_id: truckId, reason: reason || null },
       ipAddress: req.ip,
     });
 
