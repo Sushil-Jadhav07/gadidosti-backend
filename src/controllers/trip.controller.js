@@ -157,6 +157,16 @@ const projectTrip = async (row, timeline) => {
   // Platform-wide, not booking-specific — same one row every trip reads, so an extra query
   // here is cheap and keeps this function self-contained (same reasoning as podPhotos above).
   const settings = await AdminSettingsModel.get();
+  // The free-halting-window info a live timer needs (see the driver/client "halting timer" UI)
+  // — null when this trip isn't halting-eligible at all (intra-city, or inter-city at/under the
+  // 200km base threshold). Purely a function of distance/truck category, both fixed on the
+  // trip already, so this is computed fresh on every read rather than frozen at creation —
+  // safe either way since neither ever changes after the trip exists. The ACTUAL overage/charge
+  // (haltingHours/haltingCharge below) only gets computed once, at delivery — this is the
+  // "how much of the free window is left / already used" figure a live countdown needs *before*
+  // that happens.
+  const haltingConfigRow = row.transport_type === 'inter' ? await PricingModel.getConfig() : null;
+  const haltingTier = haltingConfigRow ? PricingModel.getHaltingTier(row.distance) : null;
   return {
   id: row.id,
   bookingId: row.booking_id,
@@ -245,6 +255,14 @@ const projectTrip = async (row, timeline) => {
   // and why, not just a bigger total.
   haltingHours: row.halting_hours != null ? Number(row.halting_hours) : 0,
   haltingCharge: row.halting_charge != null ? Number(row.halting_charge) : 0,
+  // Free-halting-window info for a live timer, BEFORE delivery — see the comment above
+  // haltingConfigRow/haltingTier. null when this trip was never halting-eligible at all. Pair
+  // this with startedAt below: deadline = startedAt + haltingGraceHours. Once genuinely past
+  // that deadline while still in progress, the client/driver apps can show a live-accruing
+  // "already over by Xh, ~₹Y and counting" using haltingRatePerHour — the real, final
+  // haltingHours/haltingCharge above only get written once, at actual delivery.
+  haltingGraceHours: haltingTier ? haltingTier.graceHours : null,
+  haltingRatePerHour: haltingTier ? PricingModel.getHaltingRate(haltingConfigRow?.config, row.truck_category) : null,
   // The whole-journey delivery SLA — distinct from halting above (time spent stopped
   // mid-trip). Fixed at trip creation time (see finalizeDriverRequest), so it stays stable even
   // if the admin later retunes the tiers.

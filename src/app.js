@@ -56,13 +56,14 @@ app.use(cors({
 // page load, which blows through any sane limit in minutes during local testing.
 if (process.env.NODE_ENV === 'production') {
   app.use(rateLimit({
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
-    // Raised from 100, then again from 300 — every screen in every app now polls something
-    // (negotiation fallback polling, live tracking, trip-active refresh, admin device polls,
-    // ...), and once keying was fixed to be per-user (see keyGenerator below) there's no more
-    // reason to keep this artificially low just to protect against a shared-IP pileup.
-    // Override via RATE_LIMIT_MAX if this still isn't enough.
-    max: parseInt(process.env.RATE_LIMIT_MAX) || 600,
+    // Short window (was 15min) + a max scaled down to match, rather than a low max on a long
+    // window — a burst that trips this now clears in seconds instead of leaving a user stuck
+    // for up to 15 minutes, while the effective sustained rate stays comparable. max=20 is
+    // comfortably above the "7+ GETs on one page load" case (see the dev-mode skip above) with
+    // room for normal polling; raise both together (not just max) if this still isn't enough —
+    // a low max on a long window just means a long wait once you do trip it.
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 5 * 1000,
+    max: parseInt(process.env.RATE_LIMIT_MAX) || 20,
     standardHeaders: true,
     legacyHeaders: false,
     // Keyed by the authenticated user's id (decoded from the bearer token right here — not a

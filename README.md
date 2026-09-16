@@ -382,7 +382,7 @@ See `.env.example` for the full, commented list — highlights:
 | `OTP_EXPIRY_MINUTES` | OTP validity window | 10 |
 | `GOOGLE_CLIENT_ID` | Google OAuth 2.0 Client ID | — |
 | `ALLOWED_ORIGINS` | Comma-separated CORS allow-list | `*` |
-| `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX` | Global rate limit | 900000 / 100 |
+| `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX` | Global rate limit (production only) | 5000 / 20 |
 | `PAYMENT_PROVIDER` / `SMS_PROVIDER` / `STORAGE_PROVIDER` / `LOCATION_PROVIDER` | Provider selection — each defaults to `fake` (a working local implementation, no external credentials needed) | fake |
 
 ---

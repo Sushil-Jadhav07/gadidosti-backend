@@ -101,8 +101,20 @@ const projectBooking = (row, timeline, role) => {
     timeTakenMinutes: row.trip_started_at && row.trip_delivered_at
       ? Math.round((new Date(row.trip_delivered_at) - new Date(row.trip_started_at)) / 60000)
       : null,
+    // Wasn't exposed on its own before — only ever used internally for timeTakenMinutes above,
+    // which stays null until delivery. A live halting/SLA timer needs the raw start time itself
+    // (to count up/down from) well before delivery, not just the eventual duration.
+    tripStartedAt: row.trip_started_at || null,
     haltingHours: row.trip_halting_hours != null ? Number(row.trip_halting_hours) : 0,
     haltingCharge: row.trip_halting_charge != null ? Number(row.trip_halting_charge) : 0,
+    // The free-halting-window a live timer needs, BEFORE delivery (pair with
+    // trip_started_at/timeTakenMinutes above: deadline = trip_started_at + haltingGraceHours) —
+    // null when this booking was never halting-eligible (intra-city, or inter-city at/under the
+    // 200km base threshold). Sync/cheap (pure function of distance) unlike trip.controller.js's
+    // own haltingRatePerHour, which needs an async pricing_config read this function can't do
+    // (projectBooking is deliberately synchronous) — the live ₹/hr rate is only available via
+    // the trip endpoint, which only broker/driver/admin can call directly.
+    haltingGraceHours: row.transport_type === 'inter' ? PricingModel.getHaltingTier(row.distance)?.graceHours ?? null : null,
     // Distinct from halting above — this is the whole door-to-door SLA (see
     // PricingModel.getExpectedDeliveryHours), not time spent stopped mid-trip.
     expectedDeliveryHours: row.trip_expected_delivery_hours != null ? Number(row.trip_expected_delivery_hours) : null,
