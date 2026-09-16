@@ -223,21 +223,27 @@ const finalizeDriverRequest = async (driverRequest, amount) => {
 
 // ─── PATCH /api/driver-requests/:id/accept ────────────────────────────────────
 // Driver (or broker, once the driver's timed out) agreeing to the client's current asking
-// price. Mutual-confirmation: this is a dual-purpose CAS (DriverRequestModel.respondentAccept)
-// — if the client hasn't already committed, this call only commits the respondent's own side
-// (status -> 'awaiting_confirmation') and the booking is NOT finalized yet; the client must
-// separately confirm via client-accept. If the client had already committed first, this call
-// IS that second, finalizing confirmation, and the trip is created immediately.
+// price. Two different behaviors depending on origin:
+//   - Direct client-pick (job_request_id is null): mutual-confirmation, dual-purpose CAS
+//     (DriverRequestModel.respondentAccept) — if the client hasn't already committed, this call
+//     only commits the respondent's own side (status -> 'awaiting_confirmation') and the
+//     booking is NOT finalized yet; the client must separately confirm via client-accept.
+//   - Broker-assign origin (job_request_id set — confirmed design): no negotiation at all. The
+//     client already agreed a price with the BROKER via job_requests; this driver is just being
+//     asked "will you do it" — a single-sided accept (respondentAcceptDirect) that finalizes the
+//     trip immediately, no client confirmation step.
 const acceptDriverRequest = async (req, res, next) => {
   try {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (!assertCanRespond(driverRequest, req.user)) return errorResponse(res, 403, 'Not yours to respond to');
     const canActNow = driverRequest.status === 'pending'
-      || (driverRequest.status === 'awaiting_confirmation' && driverRequest.pending_confirmation_by === 'client');
+      || (!driverRequest.job_request_id && driverRequest.status === 'awaiting_confirmation' && driverRequest.pending_confirmation_by === 'client');
     if (!canActNow) return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
 
-    const updated = await DriverRequestModel.respondentAccept(driverRequest.id);
+    const updated = driverRequest.job_request_id
+      ? await DriverRequestModel.respondentAcceptDirect(driverRequest.id)
+      : await DriverRequestModel.respondentAccept(driverRequest.id);
     if (!updated) return errorResponse(res, 400, 'Request is already actioned');
 
     if (updated.status === 'awaiting_confirmation') {
@@ -357,6 +363,11 @@ const counterDriverRequest = async (req, res, next) => {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (!assertCanRespond(driverRequest, req.user)) return errorResponse(res, 403, 'Not yours to respond to');
+    // Broker-assign origin (confirmed design) — the price was already agreed with the broker
+    // via job_requests; this is a plain accept/decline, no counter-offers.
+    if (driverRequest.job_request_id) {
+      return errorResponse(res, 409, 'This job was already agreed with the broker — accept or decline, no counter-offers.');
+    }
     if (driverRequest.status !== 'pending') return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
     if (countRespondentCounters(driverRequest.offer_history) >= MAX_COUNTERS_PER_SIDE) {
       return errorResponse(res, 400, `You've reached the limit of ${MAX_COUNTERS_PER_SIDE} counter-offers — please accept or decline instead`);
@@ -395,6 +406,12 @@ const clientAcceptDriverRequest = async (req, res, next) => {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (driverRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    // Broker-assign origin (confirmed design) — the client already agreed a price with the
+    // broker; this driver's own accept (see acceptDriverRequest's respondentAcceptDirect)
+    // finalizes the trip on its own, no client action needed or possible here.
+    if (driverRequest.job_request_id) {
+      return errorResponse(res, 409, 'This request is being handled directly with the driver — no action needed from you.');
+    }
     const canActNow = ['pending', 'countered'].includes(driverRequest.status)
       || (driverRequest.status === 'awaiting_confirmation' && driverRequest.pending_confirmation_by === 'respondent');
     if (!canActNow) return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
@@ -471,6 +488,9 @@ const clientRejectDriverRequest = async (req, res, next) => {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (driverRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (driverRequest.job_request_id) {
+      return errorResponse(res, 409, 'This request is being handled directly with the driver — no action needed from you.');
+    }
 
     const updated = await DriverRequestModel.clientRejectIfCountered(driverRequest.id);
     if (!updated) return errorResponse(res, 400, 'Request is not awaiting your response');
@@ -500,6 +520,9 @@ const clientCounterDriverRequest = async (req, res, next) => {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (driverRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (driverRequest.job_request_id) {
+      return errorResponse(res, 409, 'This request is being handled directly with the driver — no action needed from you.');
+    }
     if (!['pending', 'countered'].includes(driverRequest.status)) return errorResponse(res, 400, `Request is not open for negotiation (${driverRequest.status})`);
     if (countClientCounters(driverRequest.offer_history) >= MAX_COUNTERS_PER_SIDE) {
       return errorResponse(res, 400, `You've reached the limit of ${MAX_COUNTERS_PER_SIDE} counter-offers — please accept or find another driver instead`);

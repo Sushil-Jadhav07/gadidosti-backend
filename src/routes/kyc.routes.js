@@ -13,6 +13,10 @@ const {
   getAllKyc,
   verifyKyc,
   rejectKyc,
+  getDriverKycForBroker,
+  listDriverKycDocumentsForBroker,
+  brokerVerifyKyc,
+  brokerRejectKyc,
 } = require('../controllers/kyc.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -549,5 +553,136 @@ router.patch('/admin/kyc/:userId/verify', authenticate, authorize('admin'), veri
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.patch('/admin/kyc/:userId/reject', authenticate, authorize('admin'), rejectKycValidation, validate, rejectKyc);
+
+// ─── Broker — KYC review for own fleet ──────────────────────────────────────────
+// Same shape as the admin endpoints above, but scoped to drivers whose driver_profiles.broker_id
+// is the calling broker (i.e. assigned to or created by them) — enforced in the controller via
+// assertBrokerReviewable, not just by this route's authorize() check.
+
+/**
+ * @swagger
+ * /api/broker/kyc/{driverId}:
+ *   get:
+ *     tags: [KYC]
+ *     summary: Get a fleet driver's KYC submission (broker only, own fleet)
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: driverId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: KYC submission fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: Driver not found in your fleet
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/broker/kyc/:driverId', authenticate, authorize('broker'), getDriverKycForBroker);
+
+/**
+ * @swagger
+ * /api/broker/kyc/{driverId}/documents:
+ *   get:
+ *     tags: [KYC]
+ *     summary: List a fleet driver's uploaded KYC documents (broker only, own fleet)
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: driverId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Documents fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: Driver not found in your fleet
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/broker/kyc/:driverId/documents', authenticate, authorize('broker'), listDriverKycDocumentsForBroker);
+
+/**
+ * @swagger
+ * /api/broker/kyc/{driverId}/verify:
+ *   patch:
+ *     tags: [KYC]
+ *     summary: Verify a fleet driver's KYC (broker only, own fleet)
+ *     description: |
+ *       Same effect as the admin verify endpoint — sets kyc_status to 'verified' and notifies the
+ *       driver — but only for a driver assigned to or created by the calling broker. Admin's KYC
+ *       queue distinguishes this from an admin verification by the reviewer's role.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: driverId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: KYC verified
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       400:
+ *         description: Not currently submitted, or already verified
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Driver not found in your fleet
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/broker/kyc/:driverId/verify', authenticate, authorize('broker'), brokerVerifyKyc);
+
+/**
+ * @swagger
+ * /api/broker/kyc/{driverId}/reject:
+ *   patch:
+ *     tags: [KYC]
+ *     summary: Reject a fleet driver's KYC (broker only, own fleet)
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: driverId
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reason]
+ *             properties:
+ *               reason: { type: string, example: "Aadhaar number does not match uploaded name" }
+ *     responses:
+ *       200:
+ *         description: KYC rejected
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: Driver not found in your fleet
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/broker/kyc/:driverId/reject', authenticate, authorize('broker'), rejectKycValidation, validate, brokerRejectKyc);
 
 module.exports = router;

@@ -33,11 +33,16 @@ class KycModel {
     }
   }
 
-  // Fetch a single user's own submission
+  // Fetch a single user's own submission. reviewer_name/reviewer_role come from joining
+  // reviewed_by back to users — reviewer_role is how a "Broker Verified" flag is told apart
+  // from an admin verification, without needing a separate column on kyc_submissions.
   static async findByUserId(userId) {
     const result = await pool.query(
-      `SELECT id, user_id, documents, rejection_reason, reviewed_at, submitted_at, updated_at
-       FROM kyc_submissions WHERE user_id = $1`,
+      `SELECT k.id, k.user_id, k.documents, k.rejection_reason, k.reviewed_at, k.submitted_at, k.updated_at,
+              k.reviewed_by, r.name AS reviewer_name, r.role AS reviewer_role
+       FROM kyc_submissions k
+       LEFT JOIN users r ON r.id = k.reviewed_by
+       WHERE k.user_id = $1`,
       [userId]
     );
     return result.rows[0] || null;
@@ -81,9 +86,11 @@ class KycModel {
 
     const rows = await pool.query(
       `SELECT u.id AS user_id, u.name, u.email, u.phone, u.role, u.kyc_status, u.created_at AS registered_at,
-              k.documents, k.rejection_reason, k.reviewed_at, k.submitted_at
+              k.documents, k.rejection_reason, k.reviewed_at, k.submitted_at,
+              k.reviewed_by, r.name AS reviewer_name, r.role AS reviewer_role
        FROM users u
        LEFT JOIN kyc_submissions k ON k.user_id = u.id
+       LEFT JOIN users r ON r.id = k.reviewed_by
        ${where}
        ORDER BY
          CASE u.kyc_status WHEN 'submitted' THEN 0 WHEN 'pending' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END,

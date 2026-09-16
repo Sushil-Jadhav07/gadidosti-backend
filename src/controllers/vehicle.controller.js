@@ -27,6 +27,12 @@ const projectTruck = (row) => ({
   insuranceExpiry: row.insurance_expiry,
   status: row.status,
   lastTrip: row.last_trip || null,
+  // The assigned driver's own live position (a truck has no GPS of its own) — powers the
+  // broker's Trucks page fleet map. Null whenever there's no driver linked, or that driver has
+  // never reported a location yet.
+  currentLat: row.driver_current_lat != null ? Number(row.driver_current_lat) : null,
+  currentLng: row.driver_current_lng != null ? Number(row.driver_current_lng) : null,
+  lastLocationAt: row.driver_last_location_at || null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });

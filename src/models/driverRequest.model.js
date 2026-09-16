@@ -147,6 +147,20 @@ class DriverRequestModel {
     return result.rows[0] || null;
   }
 
+  // Single-sided accept, straight 'pending' -> 'accepted' — no mutual-confirmation step at all.
+  // Only ever used for the broker-assign origin (job_request_id set — see
+  // driverRequest.controller.js's acceptDriverRequest): the client already agreed a price with
+  // the BROKER via job_requests, so the driver being offered this job is a plain operational
+  // "will you do it" — there's nothing left to re-negotiate or for the client to re-confirm.
+  // Confirmed design: the driver's own accept finalizes the trip immediately.
+  static async respondentAcceptDirect(id) {
+    const result = await pool.query(
+      `UPDATE driver_requests SET status = 'accepted' WHERE id = $1 AND status = 'pending' RETURNING *`,
+      [id]
+    );
+    return result.rows[0] || null;
+  }
+
   // Fixes a real bug: when finalizeDriverRequest() fails after this row was already flipped to
   // 'accepted' by the CAS above (the booking was won by the other negotiation path in the
   // meantime), the caller must roll this row back to 'declined' — but it must CAS from the

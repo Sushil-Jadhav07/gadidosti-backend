@@ -1,6 +1,7 @@
 const pool = require('../config/db');
 const KycModel = require('../models/kyc.model');
 const UserModel = require('../models/user.model');
+const DriverProfileModel = require('../models/driverProfile.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -155,7 +156,14 @@ const getKycFile = async (req, res, next) => {
     if (!file) return errorResponse(res, 404, 'File not found');
 
     if (req.user.role !== 'admin' && req.user.id !== file.user_id) {
-      return errorResponse(res, 403, 'Not your document');
+      // A broker may fetch documents for a driver in their own fleet (broker_id match) —
+      // same ownership rule as brokerVerifyKyc/brokerRejectKyc below.
+      let allowed = false;
+      if (req.user.role === 'broker') {
+        const profile = await DriverProfileModel.findById(file.user_id);
+        allowed = !!profile && profile.broker_id === req.user.id;
+      }
+      if (!allowed) return errorResponse(res, 403, 'Not your document');
     }
 
     res.set('Content-Type', file.mime_type);
@@ -246,6 +254,26 @@ const assertReviewable = async (userId) => {
   return { targetUser };
 };
 
+// Same eligibility rule as assertReviewable, scoped to a broker's own fleet: brokers may only
+// review a driver (never another broker) whose driver_profiles.broker_id is them — i.e. a driver
+// they assigned to themselves or created, matching how ownership is checked everywhere else in
+// the broker app (e.g. assignDriver).
+const assertBrokerReviewable = async (driverId, brokerId) => {
+  const targetUser = await UserModel.findById(driverId);
+  if (!targetUser) return { error: [404, 'User not found'] };
+  if (targetUser.role !== 'driver') {
+    return { error: [400, 'Brokers may only review driver KYC'] };
+  }
+  const profile = await DriverProfileModel.findById(driverId);
+  if (!profile || profile.broker_id !== brokerId) {
+    return { error: [404, 'Driver not found in your fleet'] };
+  }
+  if (targetUser.kyc_status === 'verified') {
+    return { error: [400, 'KYC is already verified'] };
+  }
+  return { targetUser };
+};
+
 // ─── PATCH /api/admin/kyc/:userId/verify ────────────────────────────────────────
 const verifyKyc = async (req, res, next) => {
   try {
@@ -314,6 +342,123 @@ const rejectKyc = async (req, res, next) => {
   }
 };
 
+// ─── GET /api/broker/kyc/:driverId ──────────────────────────────────────────────
+// Broker's own-fleet counterpart to GET /api/admin/kyc/:userId.
+const getDriverKycForBroker = async (req, res, next) => {
+  try {
+    const { driverId } = req.params;
+
+    const profile = await DriverProfileModel.findById(driverId);
+    if (!profile || profile.broker_id !== req.user.id) {
+      return errorResponse(res, 404, 'Driver not found in your fleet');
+    }
+
+    const targetUser = await UserModel.findById(driverId);
+    const submission = await KycModel.findByUserId(driverId);
+    return successResponse(res, 200, 'KYC submission fetched', {
+      kyc_status: targetUser.kyc_status,
+      submission,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/broker/kyc/:driverId/documents ─────────────────────────────────────
+const listDriverKycDocumentsForBroker = async (req, res, next) => {
+  try {
+    const { driverId } = req.params;
+
+    const profile = await DriverProfileModel.findById(driverId);
+    if (!profile || profile.broker_id !== req.user.id) {
+      return errorResponse(res, 404, 'Driver not found in your fleet');
+    }
+
+    const files = await KycModel.listFiles(driverId);
+    const documents = files.map((f) => ({
+      id: f.id,
+      document_type: f.document_type,
+      path: `kyc/${f.user_id}/${f.document_type}/${f.filename}`,
+      filename: f.filename,
+      mime_type: f.mime_type,
+      size_bytes: Number(f.size_bytes),
+      uploaded_at: f.created_at,
+      url: getFileUrl(req, f.id),
+    }));
+    return successResponse(res, 200, 'KYC documents fetched', { documents });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/broker/kyc/:driverId/verify ──────────────────────────────────────
+const brokerVerifyKyc = async (req, res, next) => {
+  try {
+    const { driverId } = req.params;
+
+    const { error } = await assertBrokerReviewable(driverId, req.user.id);
+    if (error) return errorResponse(res, ...error);
+
+    const submission = await KycModel.review(driverId, { status: 'verified', reviewerId: req.user.id });
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'KYC_VERIFIED_BY_BROKER',
+      entity: 'kyc_submissions',
+      entityId: submission?.id,
+      meta: { target_user_id: driverId },
+      ipAddress: req.ip,
+    });
+
+    await NotificationModel.create({
+      userId: driverId,
+      title: 'KYC Verified',
+      message: 'Your KYC documents have been verified by your broker. You now have full access to the platform.',
+      type: 'kyc',
+    });
+
+    logger.info(`KYC verified for driver ${driverId} by broker ${req.user.id}`);
+    return successResponse(res, 200, 'KYC verified', { submission, kyc_status: 'verified' });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/broker/kyc/:driverId/reject ──────────────────────────────────────
+const brokerRejectKyc = async (req, res, next) => {
+  try {
+    const { driverId } = req.params;
+    const { reason } = req.body;
+
+    const { error } = await assertBrokerReviewable(driverId, req.user.id);
+    if (error) return errorResponse(res, ...error);
+
+    const submission = await KycModel.review(driverId, { status: 'rejected', reviewerId: req.user.id, reason });
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'KYC_REJECTED_BY_BROKER',
+      entity: 'kyc_submissions',
+      entityId: submission?.id,
+      meta: { target_user_id: driverId, reason },
+      ipAddress: req.ip,
+    });
+
+    await NotificationModel.create({
+      userId: driverId,
+      title: 'KYC Rejected',
+      message: `Your KYC submission was rejected by your broker: ${reason}. Please review and resubmit your documents.`,
+      type: 'kyc',
+      meta: { reason },
+    });
+
+    logger.info(`KYC rejected for driver ${driverId} by broker ${req.user.id}`);
+    return successResponse(res, 200, 'KYC rejected', { submission, kyc_status: 'rejected' });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   submitKyc,
   uploadKycDocument,
@@ -326,4 +471,8 @@ module.exports = {
   getAllKyc,
   verifyKyc,
   rejectKyc,
+  getDriverKycForBroker,
+  listDriverKycDocumentsForBroker,
+  brokerVerifyKyc,
+  brokerRejectKyc,
 };

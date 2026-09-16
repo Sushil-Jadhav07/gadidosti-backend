@@ -2,14 +2,24 @@ const pool = require('../config/db');
 
 // lastTrip is denormalized here (not stored) — it's the route of the truck's
 // most recent booking, purely for the fleet list view.
+// current_lat/current_lng/last_location_at: a truck has no GPS of its own — this is really the
+// assigned driver's own live position (driver_profiles), surfaced here so the broker's fleet
+// map (Trucks.jsx) can plot each truck without a second round-trip. Joined on t.driver_id, not
+// dp.truck_id, so it degrades to null (not another driver's stale position) the moment a truck
+// has no driver linked, or a driver has never reported a location — matching the same "only a
+// live join, never a wrong one" reasoning findNearby already uses.
 const SELECT_WITH_JOINS = `
   SELECT t.*,
          driver.name AS driver_name,
+         dp.current_lat AS driver_current_lat,
+         dp.current_lng AS driver_current_lng,
+         dp.last_location_at AS driver_last_location_at,
          (SELECT b.pickup_location || ' -> ' || b.drop_location
             FROM bookings b WHERE b.truck_id = t.id
             ORDER BY b.created_at DESC LIMIT 1) AS last_trip
   FROM trucks t
   LEFT JOIN users driver ON driver.id = t.driver_id
+  LEFT JOIN driver_profiles dp ON dp.user_id = t.driver_id
 `;
 
 class TruckModel {
