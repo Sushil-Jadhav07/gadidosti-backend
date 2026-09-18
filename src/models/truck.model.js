@@ -13,6 +13,7 @@ const SELECT_WITH_JOINS = `
          driver.name AS driver_name,
          dp.current_lat AS driver_current_lat,
          dp.current_lng AS driver_current_lng,
+         dp.current_heading AS driver_heading,
          dp.last_location_at AS driver_last_location_at,
          (SELECT b.pickup_location || ' -> ' || b.drop_location
             FROM bookings b WHERE b.truck_id = t.id
@@ -181,7 +182,7 @@ class TruckModel {
 
     const rows = await pool.query(
       `SELECT t.id, t.registration, t.type, t.category, t.capacity, t.make, t.year, t.status,
-              dp.current_lat, dp.current_lng, dp.last_location_at,
+              dp.current_lat, dp.current_lng, dp.current_heading, dp.last_location_at,
               (${distanceExpr}) AS distance_km
        FROM trucks t
        ${joins}

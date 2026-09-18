@@ -32,6 +32,10 @@ const projectTruck = (row) => ({
   // never reported a location yet.
   currentLat: row.driver_current_lat != null ? Number(row.driver_current_lat) : null,
   currentLng: row.driver_current_lng != null ? Number(row.driver_current_lng) : null,
+  // Which way the driver's device was last pointed — feeds the truck marker's rotation
+  // (buildTruckIcon) so it visibly faces the direction of travel, same as the driver's own
+  // route map. Null whenever the device never reported one (e.g. stationary).
+  heading: row.driver_heading != null ? Number(row.driver_heading) : null,
   lastLocationAt: row.driver_last_location_at || null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -156,6 +160,7 @@ const projectNearbyTruck = (row) => ({
   distanceKm: row.distance_km != null ? Number(row.distance_km) : null,
   currentLat: row.current_lat != null ? Number(row.current_lat) : null,
   currentLng: row.current_lng != null ? Number(row.current_lng) : null,
+  heading: row.current_heading != null ? Number(row.current_heading) : null,
   lastLocationAt: row.last_location_at || null,
 });
 

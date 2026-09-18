@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, listBookingDriverRequests, rebroadcastBooking, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory } = require('../controllers/booking.controller');
 const { getBookingOffers } = require('../controllers/job.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -404,6 +404,50 @@ router.get('/bookings/:id/offers', authenticate, authorize('client'), getBooking
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/bookings/:id/driver-requests', authenticate, authorize('client'), listBookingDriverRequests);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/rebroadcast:
+ *   patch:
+ *     tags: [Bookings]
+ *     summary: Re-notify nearby drivers for a "Find Truck" booking (client only)
+ *     description: |
+ *       "Search Again" on the Find Truck waiting screen — re-runs the nearby-driver fan-out.
+ *       A driver who declined the first round is a legitimate candidate again (eligibility is
+ *       their current status/location, not driver_requests history) — this is deliberately how
+ *       a declined driver gets another chance. Only a driver still mid-negotiation on an earlier
+ *       round (any non-'declined' row) is skipped, to avoid a redundant second live request.
+ *       Only valid while `search_mode` is `'truck'` and the booking is still `'pending'`.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Nearby drivers notified again
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your booking
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Booking not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Not a Find Truck booking, or no longer pending
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/bookings/:id/rebroadcast', authenticate, authorize('client'), rebroadcastBooking);
 
 /**
  * @swagger

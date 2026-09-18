@@ -984,6 +984,73 @@ const broadcastBooking = async (booking) => {
   }));
 };
 
+// Re-runs the "Find Truck" fan-out for a booking that's already been broadcast once — the
+// client's "Search Again" action (PATCH /api/bookings/:id/rebroadcast below). A driver who
+// declined the first round is a completely legitimate candidate again here: eligibility is
+// based on their CURRENT truck/driver status (available, in range), not on driver_requests
+// history, and nothing else ever gives a declined driver another chance at this booking — this
+// is deliberately how they get one. Only excludes drivers who already have a still-live
+// (non-declined) row, so someone mid-negotiation on the first round doesn't get a second,
+// redundant one racing it.
+const rebroadcastFindTruck = async (booking) => {
+  const pickupText = booking.pickup_location || 'an unspecified pickup point';
+  const dropText = booking.drop_location || 'an unspecified drop point';
+
+  const liveDriverIds = new Set(await DriverRequestModel.findLiveDriverIdsForBooking(booking.id));
+  const candidates = (await TruckModel.findNearbyForBroadcast({
+    lat: booking.pickup_lat,
+    lng: booking.pickup_lng,
+    radiusKm: booking.search_radius_km || DEFAULT_BROADCAST_RADIUS_KM,
+    category: booking.truck_category,
+  })).filter((c) => !liveDriverIds.has(c.driver_id));
+
+  await Promise.all(candidates.map(async (c) => {
+    const driverRequest = await DriverRequestModel.create({
+      bookingId: booking.id,
+      truckId: c.truck_id,
+      driverId: c.driver_id,
+      brokerId: c.broker_id,
+      amount: booking.amount,
+    });
+    await NotificationModel.create({
+      userId: c.driver_id,
+      title: 'New Booking Request',
+      message: `A client wants a truck for ${pickupText} -> ${dropText} at ₹${booking.amount ?? 'TBD'}. First to accept gets the job.`,
+      type: 'booking',
+      meta: { booking_id: booking.id, driver_request_id: driverRequest.id },
+    });
+    const fresh = await DriverRequestModel.findById(driverRequest.id);
+    emitDriverRequestCreated(c.driver_id, fresh);
+  }));
+
+  logger.info(`Booking ${booking.id} re-broadcast to ${candidates.length} nearby drivers (search again)`);
+  return candidates.length;
+};
+
+// ─── PATCH /api/bookings/{id}/rebroadcast ──────────────────────────────────────
+// Client's "Search Again" action on the Find Truck waiting screen — only valid while the
+// booking is still `search_mode: 'truck'` and still 'pending' (no driver has accepted yet;
+// once one has, the booking moves on and there's nothing left to search for).
+const rebroadcastBooking = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const booking = await BookingModel.findById(id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (booking.search_mode !== 'truck') {
+      return errorResponse(res, 409, 'This booking was not searching for a truck');
+    }
+    if (booking.status !== 'pending') {
+      return errorResponse(res, 409, `This booking can no longer search for a truck (status: ${booking.status})`);
+    }
+
+    const notifiedCount = await rebroadcastFindTruck(booking);
+    return successResponse(res, 200, 'Nearby drivers notified again', { notifiedCount });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── GET /api/bookings/{id}/driver-requests ────────────────────────────────────
 // The client's view of every driver_requests sibling for one of their own bookings — needed
 // once "Find Truck" mode can fan a single booking out to many drivers at once (one row per
@@ -1252,4 +1319,4 @@ const getClientAnalytics = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, rebroadcastBooking, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory };

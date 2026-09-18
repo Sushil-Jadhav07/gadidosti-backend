@@ -30,6 +30,12 @@ const projectDriverRequest = (row) => ({
   driverId: row.driver_id,
   driverName: row.driver_name,
   driverPhone: row.driver_phone,
+  // Driver's last-reported GPS (driver_profiles, not this row) — lets the client's "Finding you
+  // a nearby truck" screen plot each responding driver on a map instead of just a text list.
+  // Null until the driver's app has ever reported a location.
+  driverLat: row.driver_current_lat != null ? Number(row.driver_current_lat) : null,
+  driverLng: row.driver_current_lng != null ? Number(row.driver_current_lng) : null,
+  driverHeading: row.driver_heading != null ? Number(row.driver_heading) : null,
   brokerId: row.broker_id,
   brokerName: row.broker_name,
   brokerPhone: row.broker_phone,

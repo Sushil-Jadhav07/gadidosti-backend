@@ -7,13 +7,16 @@ const SELECT_WITH_JOINS = `
          t.registration AS truck_reg, t.type AS truck_type, t.category AS truck_category,
          client.name AS client_name, client.phone AS client_phone,
          driver.name AS driver_name, driver.phone AS driver_phone,
-         broker.name AS broker_name, broker.phone AS broker_phone
+         broker.name AS broker_name, broker.phone AS broker_phone,
+         dp.current_lat AS driver_current_lat, dp.current_lng AS driver_current_lng,
+         dp.current_heading AS driver_heading
   FROM driver_requests dr
   JOIN bookings b     ON b.id = dr.booking_id
   JOIN trucks t       ON t.id = dr.truck_id
   JOIN users client   ON client.id = b.client_id
   JOIN users driver   ON driver.id = dr.driver_id
   JOIN users broker   ON broker.id = dr.broker_id
+  LEFT JOIN driver_profiles dp ON dp.user_id = dr.driver_id
 `;
 
 class DriverRequestModel {
@@ -40,6 +43,19 @@ class DriverRequestModel {
   static async findByBookingId(bookingId) {
     const result = await pool.query(`${SELECT_WITH_JOINS} WHERE dr.booking_id = $1 ORDER BY dr.created_at DESC`, [bookingId]);
     return result.rows;
+  }
+
+  // Every driver who already has a still-live (not 'declined') row for this booking — used by
+  // the "Search Again" re-broadcast (booking.controller.js's rebroadcastFindTruck) to avoid
+  // creating a second active row for a driver who's still mid-negotiation on the first one.
+  // Declined drivers are deliberately NOT in this set — re-broadcasting is exactly how they get
+  // a fresh chance, since nothing else ever gives them one.
+  static async findLiveDriverIdsForBooking(bookingId) {
+    const result = await pool.query(
+      `SELECT DISTINCT driver_id FROM driver_requests WHERE booking_id = $1 AND status != 'declined'`,
+      [bookingId]
+    );
+    return result.rows.map((r) => r.driver_id);
   }
 
   static async findByDriver(driverId, { page = 1, limit = 10 } = {}) {
