@@ -490,12 +490,19 @@ const updateTripStatus = async (req, res, next) => {
       // or video, mixed freely) before the trip can be marked done. Checked here rather than
       // at upload time, since the driver may upload them one at a time across separate calls —
       // this is the actual gate, same pattern as the loading/unloading stops check above.
-      const podCount = await TripPodPhotoModel.countByTrip(id);
-      if (podCount < TripPodPhotoModel.MIN_UPLOADS_PER_TRIP) {
-        return errorResponse(
-          res, 409,
-          `At least ${TripPodPhotoModel.MIN_UPLOADS_PER_TRIP} proof-of-delivery photos/videos are required before completing this trip (${podCount} uploaded so far).`
-        );
+      //
+      // Skipped for the trip's own broker or an admin — same manual-override reasoning as the
+      // GPS/OTP bypass above and completeTripStop's isOverride: if the driver is stuck/
+      // unreachable and never got to upload proof of delivery at all, requiring it here would
+      // make the trip impossible for anyone to ever close out.
+      if (req.user.role === 'driver') {
+        const podCount = await TripPodPhotoModel.countByTrip(id);
+        if (podCount < TripPodPhotoModel.MIN_UPLOADS_PER_TRIP) {
+          return errorResponse(
+            res, 409,
+            `At least ${TripPodPhotoModel.MIN_UPLOADS_PER_TRIP} proof-of-delivery photos/videos are required before completing this trip (${podCount} uploaded so far).`
+          );
+        }
       }
       const completed = await TripModel.completeIfNotAlready(id);
       if (!completed) {
@@ -605,7 +612,14 @@ const completeTripStop = async (req, res, next) => {
     const trip = await TripModel.findById(id);
     if (!trip) return errorResponse(res, 404, 'Trip not found');
     if (!assertCanView(trip, req.user)) return errorResponse(res, 403, 'You do not have access to this trip');
-    if (req.user.role !== 'driver') return errorResponse(res, 403, 'Only the driver on this trip can complete a stop');
+    // Normally the driver themselves; also allowed for the trip's own broker and any admin, so
+    // they can finish the stop checklist on the driver's behalf if the driver is stuck/
+    // unreachable (phone dead, app crashed, etc.) — same override reasoning as uploadPod and
+    // the GPS/OTP bypass in updateTripStatus below.
+    const isOverride = req.user.role === 'broker' || req.user.role === 'admin';
+    if (req.user.role !== 'driver' && !isOverride) {
+      return errorResponse(res, 403, 'Only the driver on this trip (or their broker/admin) can complete a stop');
+    }
 
     const stops = Array.isArray(trip.stops) ? trip.stops : [];
     const stop = stops[stopIndex];
@@ -620,17 +634,29 @@ const completeTripStop = async (req, res, next) => {
       return errorResponse(res, 409, `Complete the earlier ${stop.type} stops first`);
     }
 
-    const hasTruckLocation = trip.current_lat != null && trip.current_lng != null;
-    const hasTargetLocation = stop.lat != null && stop.lng != null;
-    if (!hasTruckLocation || !hasTargetLocation) {
-      return errorResponse(res, 409, 'Your current location is not available yet — enable location sharing and try again.');
-    }
-    const distanceKm = haversineKm(Number(trip.current_lat), Number(trip.current_lng), Number(stop.lat), Number(stop.lng));
-    if (distanceKm > PICKUP_PROXIMITY_KM) {
-      return errorResponse(
-        res, 409,
-        `You're ${distanceKm.toFixed(1)}km from ${stop.location || 'this stop'} — move within ${PICKUP_PROXIMITY_KM * 1000}m to mark it complete.`
-      );
+    // Proximity is only meaningful (and only enforced) for the driver's own live GPS — a broker/
+    // admin completing this on the driver's behalf has no "current location" of their own to
+    // check, and is trusted to only do this when the driver genuinely can't act themselves.
+    if (!isOverride) {
+      const hasTruckLocation = trip.current_lat != null && trip.current_lng != null;
+      if (!hasTruckLocation) {
+        return errorResponse(res, 409, 'Your current location is not available yet — enable location sharing and try again.');
+      }
+      // add_loading_location/add_unloading_location's lat/lng are optional at booking time (a
+      // client can type an address without picking a map suggestion) — unlike pickup/drop, which
+      // are effectively always geocoded before submit. A stop with no target coordinates has
+      // nothing to verify proximity against; blocking on that would strand the trip permanently
+      // (this endpoint is the only way to check it off, and nothing else can ever populate
+      // stop.lat/lng after the fact), so skip the distance check rather than refuse forever.
+      if (stop.lat != null && stop.lng != null) {
+        const distanceKm = haversineKm(Number(trip.current_lat), Number(trip.current_lng), Number(stop.lat), Number(stop.lng));
+        if (distanceKm > PICKUP_PROXIMITY_KM) {
+          return errorResponse(
+            res, 409,
+            `You're ${distanceKm.toFixed(1)}km from ${stop.location || 'this stop'} — move within ${PICKUP_PROXIMITY_KM * 1000}m to mark it complete.`
+          );
+        }
+      }
     }
 
     const updated = await TripModel.completeStop(id, stopIndex);
@@ -923,10 +949,10 @@ const uploadPod = async (req, res, next) => {
 
     const trip = await TripModel.findById(id);
     if (!trip) return errorResponse(res, 404, 'Trip not found');
-    // Normally the driver themselves; also allowed for the trip's own broker, so they can
-    // finish uploading proof of delivery on a driver's behalf if the driver's logged out/
-    // unreachable — same reasoning as collectPayment below.
-    if (trip.driver_id !== req.user.id && trip.broker_id !== req.user.id) {
+    // Normally the driver themselves; also allowed for the trip's own broker or any admin, so
+    // they can finish uploading proof of delivery on a driver's behalf if the driver's logged
+    // out/unreachable — same reasoning as collectPayment below.
+    if (trip.driver_id !== req.user.id && trip.broker_id !== req.user.id && req.user.role !== 'admin') {
       return errorResponse(res, 403, 'Not your trip');
     }
     if (!['in_transit', 'delivered'].includes(trip.status)) {

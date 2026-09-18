@@ -211,7 +211,7 @@ router.patch('/trips/:id/status', authenticate, authorize('broker', 'driver', 'a
  *       409:
  *         description: Too far from the stop, an earlier stop of the same type is still pending, or it's already done
  */
-router.patch('/trips/:id/stops/:index/complete', authenticate, authorize('driver'), completeTripStop);
+router.patch('/trips/:id/stops/:index/complete', authenticate, authorize('driver', 'broker', 'admin'), completeTripStop);
 
 /**
  * @swagger
@@ -528,7 +528,7 @@ router.patch('/trips/:id/incidents/:incidentId/mechanic', authenticate, authoriz
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/trips/:id/pod', authenticate, authorize('driver', 'broker'), podUpload.array('files', TripPodPhotoModel.MAX_PHOTOS_PER_TRIP), uploadPod);
+router.post('/trips/:id/pod', authenticate, authorize('driver', 'broker', 'admin'), podUpload.array('files', TripPodPhotoModel.MAX_PHOTOS_PER_TRIP), uploadPod);
 
 /**
  * @swagger

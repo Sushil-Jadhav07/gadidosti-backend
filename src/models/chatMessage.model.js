@@ -50,17 +50,27 @@ class ChatMessageModel {
     return result.rows.length;
   }
 
-  // Total unread count across every thread this user participates in (client/broker/driver
-  // on the underlying booking) — powers the header chat badge, same idea as
+  // Total unread count across every thread this user participates in — booking threads
+  // (client/broker/driver on the underlying booking) AND standing broker<->driver direct
+  // threads (booking_id IS NULL, keyed on chat_threads.broker_id/driver_id instead — see
+  // ChatThreadModel.findOrCreateDirect). Powers the header chat badge, same idea as
   // notifications.unread_count.
+  //
+  // The booking join here MUST be a LEFT JOIN, not an inner one: a direct thread has no
+  // bookings row at all (ct.booking_id is NULL), so an inner join silently drops every direct
+  // thread's messages from this count — the thread's own unread_count in ChatThreadModel.
+  // listForUser still shows correctly in the chat list, just never surfaces in this badge.
   static async countUnreadForUser(userId) {
     const result = await pool.query(
       `SELECT COUNT(*) FROM chat_messages cm
        JOIN chat_threads ct ON ct.id = cm.thread_id
-       JOIN bookings b ON b.id = ct.booking_id
+       LEFT JOIN bookings b ON b.id = ct.booking_id
        WHERE cm.read_at IS NULL
          AND cm.sender_id != $1
-         AND ($1 = b.client_id OR $1 = b.broker_id OR $1 = b.driver_id)`,
+         AND (
+           $1 IN (b.client_id, b.broker_id, b.driver_id)
+           OR (ct.booking_id IS NULL AND $1 IN (ct.broker_id, ct.driver_id))
+         )`,
       [userId]
     );
     return parseInt(result.rows[0].count, 10);
