@@ -398,6 +398,35 @@ const getUpcomingTrip = async (req, res, next) => {
   }
 };
 
+// ─── GET /api/trips/dashboard-summary ──────────────────────────────────────────
+// Backs the driver dashboard's stat cards (Home.jsx). Used to be computed client-side from
+// GET /api/analytics/broker's tripHistory — but that endpoint returns settlement rows
+// (SettlementModel), which have no distance field and only a payout amount/net, not a trip's
+// earnings, so "Total Distance"/"Total Earnings" always rendered as 0/Rs 0. This aggregates
+// the real trips table instead, same fix TripHistory.jsx already applied for its own list.
+const getDriverDashboardSummary = async (req, res, next) => {
+  try {
+    const row = await TripModel.dashboardSummaryByDriver(req.user.id);
+
+    const pctChange = (curr, prev) => (prev > 0 ? Math.round(((curr - prev) / prev) * 100) : null);
+    const current = { trips: Number(row.current_trips), distance: Number(row.current_distance), earnings: Number(row.current_earnings) };
+    const previous = { trips: Number(row.previous_trips), distance: Number(row.previous_distance), earnings: Number(row.previous_earnings) };
+
+    return successResponse(res, 200, 'Dashboard summary fetched', {
+      trips: Number(row.total_trips),
+      distance: Number(row.total_distance),
+      earnings: Number(row.total_earnings),
+      trend: {
+        trips: pctChange(current.trips, previous.trips),
+        distance: pctChange(current.distance, previous.distance),
+        earnings: pctChange(current.earnings, previous.earnings),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── GET /api/trips/:id ───────────────────────────────────────────────────────
 const getTrip = async (req, res, next) => {
   try {
@@ -1231,7 +1260,7 @@ const getPodFile = async (req, res, next) => {
 };
 
 module.exports = {
-  listTrips, getActiveTrip, getUpcomingTrip, getTrip, getTripByBooking, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
+  listTrips, getActiveTrip, getUpcomingTrip, getDriverDashboardSummary, getTrip, getTripByBooking, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
   reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
   createPaymentQrCode, getPaymentQrStatus, finalizeTripPayment,
 };

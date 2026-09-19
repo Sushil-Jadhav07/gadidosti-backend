@@ -97,6 +97,31 @@ class TripModel {
     return result.rows[0] || null;
   }
 
+  // Driver dashboard's "Total Trips / Total Distance / Total Earnings" stat cards, plus the
+  // current-vs-previous-month totals needed for the trend % shown under each card — one
+  // aggregate query so the dashboard doesn't have to pull every trip row to the app server just
+  // to sum them client-side. Only counts delivered/completed trips: a trip still in_transit
+  // hasn't been paid out yet, so it isn't "earnings" yet, mirroring the same completed-only
+  // convention used elsewhere (TripCard's DELETABLE_STATUSES, JobHistory's STATUS_BADGE).
+  static async dashboardSummaryByDriver(driverId) {
+    const result = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status IN ('delivered', 'completed')) AS total_trips,
+         COALESCE(SUM(distance) FILTER (WHERE status IN ('delivered', 'completed')), 0) AS total_distance,
+         COALESCE(SUM(earnings) FILTER (WHERE status IN ('delivered', 'completed')), 0) AS total_earnings,
+         COUNT(*) FILTER (WHERE status IN ('delivered', 'completed') AND created_at >= date_trunc('month', now())) AS current_trips,
+         COALESCE(SUM(distance) FILTER (WHERE status IN ('delivered', 'completed') AND created_at >= date_trunc('month', now())), 0) AS current_distance,
+         COALESCE(SUM(earnings) FILTER (WHERE status IN ('delivered', 'completed') AND created_at >= date_trunc('month', now())), 0) AS current_earnings,
+         COUNT(*) FILTER (WHERE status IN ('delivered', 'completed') AND created_at >= date_trunc('month', now() - interval '1 month') AND created_at < date_trunc('month', now())) AS previous_trips,
+         COALESCE(SUM(distance) FILTER (WHERE status IN ('delivered', 'completed') AND created_at >= date_trunc('month', now() - interval '1 month') AND created_at < date_trunc('month', now())), 0) AS previous_distance,
+         COALESCE(SUM(earnings) FILTER (WHERE status IN ('delivered', 'completed') AND created_at >= date_trunc('month', now() - interval '1 month') AND created_at < date_trunc('month', now())), 0) AS previous_earnings
+       FROM trips
+       WHERE driver_id = $1`,
+      [driverId]
+    );
+    return result.rows[0];
+  }
+
   static async findAllByBroker(brokerId, { status, page = 1, limit = 10 } = {}) {
     const conditions = [`tr.broker_id = $1`];
     const params = [brokerId];

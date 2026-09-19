@@ -79,7 +79,9 @@ class RazorpayPaymentProvider extends PaymentProvider {
   // needs neither. A QR is single_use, so any captured payment against it is the one that
   // matters; no need to sum/reconcile multiple.
   async fetchQrCodePayment(qrCodeId) {
-    const payments = await this.client.qrCode.fetchPayments(qrCodeId);
+    // The SDK method is fetchAllPayments, not fetchPayments — confirmed by reading
+    // node_modules/razorpay/dist/resources/qrCode.js directly (GET /payments/qr_codes/:id/payments).
+    const payments = await this.client.qrCode.fetchAllPayments(qrCodeId);
     const paid = (payments.items || []).find((p) => p.status === 'captured');
     return paid ? { paid: true, paymentId: paid.id, amount: paid.amount / 100 } : { paid: false };
   }

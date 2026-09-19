@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const {
-  listTrips, getActiveTrip, getUpcomingTrip, getTrip, getTripByBooking, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
+  listTrips, getActiveTrip, getUpcomingTrip, getDriverDashboardSummary, getTrip, getTripByBooking, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
   reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
   createPaymentQrCode, getPaymentQrStatus,
 } = require('../controllers/trip.controller');
@@ -86,6 +86,24 @@ router.get('/trips/active', authenticate, authorize('driver'), getActiveTrip);
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
 router.get('/trips/upcoming', authenticate, authorize('driver'), getUpcomingTrip);
+
+/**
+ * @swagger
+ * /api/trips/dashboard-summary:
+ *   get:
+ *     tags: [Trips]
+ *     summary: Driver dashboard totals (Total Trips / Total Distance / Total Earnings)
+ *     description: Aggregates the driver's own delivered/completed trips server-side, plus a current-vs-previous-month trend % per stat. Replaces the old client-side sum over GET /api/analytics/broker's settlement rows, which had no distance field and a payout amount rather than trip earnings.
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Dashboard summary fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ */
+router.get('/trips/dashboard-summary', authenticate, authorize('driver'), getDriverDashboardSummary);
 
 /**
  * @swagger
