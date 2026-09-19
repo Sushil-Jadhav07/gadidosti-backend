@@ -29,6 +29,7 @@ const chatRoutes    = require('./routes/chat.routes');
 const trackingRoutes = require('./routes/tracking.routes');
 const invoiceRoutes = require('./routes/invoice.routes');
 const clientPreferencesRoutes = require('./routes/clientPreferences.routes');
+const webhookRoutes = require('./routes/webhook.routes');
 const errorHandler  = require('./middleware/errorHandler.middleware');
 const logger        = require('./utils/logger');
 const allowedOrigins = require('./config/corsOrigins');
@@ -99,7 +100,12 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // ─── Body parsing ─────────────────────────────────────────────────────────────
-app.use(express.json({ limit: '10mb' }));
+// verify stashes the exact raw bytes on req.rawBody alongside the normal parsed req.body — the
+// Razorpay webhook (webhook.controller.js) needs the untouched raw payload to check its HMAC
+// signature; JSON.stringify(req.body) is not guaranteed to reproduce byte-for-byte what Razorpay
+// actually signed (key order/whitespace), so re-parsing from req.body would make verification
+// unreliable. Cheap to capture on every request, not just the webhook one.
+app.use(express.json({ limit: '10mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.urlencoded({ extended: true }));
 
 // ─── Logging ──────────────────────────────────────────────────────────────────
@@ -157,6 +163,7 @@ app.use('/api', chatRoutes);
 app.use('/api', trackingRoutes);
 app.use('/api', invoiceRoutes);
 app.use('/api', clientPreferencesRoutes);
+app.use('/api', webhookRoutes);
 
 // 404 handler
 app.use((req, res) => {

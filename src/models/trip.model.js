@@ -277,6 +277,23 @@ class TripModel {
     return result.rows[0] || null;
   }
 
+  // Razorpay QR payment collection — see RazorpayPaymentProvider.createQrCode. One active QR
+  // per trip at a time; a fresh create call just overwrites whatever was here before.
+  static async setRazorpayQrCode(id, { qrCodeId, imageUrl, status }) {
+    const result = await pool.query(
+      `UPDATE trips SET razorpay_qr_code_id = $1, razorpay_qr_image_url = $2, razorpay_qr_status = $3, updated_at = NOW()
+       WHERE id = $4 RETURNING *`,
+      [qrCodeId, imageUrl, status, id]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Looked up by the Razorpay webhook, which only ever hands back the qr_code id, not a trip id.
+  static async findByRazorpayQrCodeId(qrCodeId) {
+    const result = await pool.query(`${SELECT_WITH_JOINS} WHERE tr.razorpay_qr_code_id = $1`, [qrCodeId]);
+    return result.rows[0] || null;
+  }
+
   static async updateLocation(id, { lat, lng }) {
     const result = await pool.query(
       `UPDATE trips SET current_lat = $1, current_lng = $2, updated_at = NOW() WHERE id = $3 RETURNING id, current_lat, current_lng`,

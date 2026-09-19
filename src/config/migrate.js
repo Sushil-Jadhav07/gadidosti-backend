@@ -1098,6 +1098,18 @@ const runMigrations = async (client) => {
       END $$;
     `);
 
+    // ── RAZORPAY QR PAYMENTS (mirrors db/45razorpay_qr_payments.sql) ──
+    // Verified in-person collection via Razorpay's own QR Code API — an alternative to the
+    // existing raw UPI-intent QR (Personal/Company), which is a free peer-to-peer transfer with
+    // no independent proof of payment. One active QR per trip at a time.
+    await client.query(`
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS razorpay_qr_code_id TEXT;
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS razorpay_qr_image_url TEXT;
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS razorpay_qr_status TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_trips_razorpay_qr_code_id ON trips(razorpay_qr_code_id) WHERE razorpay_qr_code_id IS NOT NULL;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

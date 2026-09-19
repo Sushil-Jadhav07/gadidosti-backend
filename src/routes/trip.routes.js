@@ -4,6 +4,7 @@ const router = express.Router();
 const {
   listTrips, getActiveTrip, getUpcomingTrip, getTrip, getTripByBooking, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
   reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
+  createPaymentQrCode, getPaymentQrStatus,
 } = require('../controllers/trip.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -580,6 +581,74 @@ router.post('/trips/:id/pod', authenticate, authorize('driver', 'broker', 'admin
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/trips/:id/collect-payment', authenticate, authorize('driver', 'broker'), collectPaymentValidation, validate, collectPayment);
+
+/**
+ * @swagger
+ * /api/trips/{id}/collect-payment/qr:
+ *   post:
+ *     tags: [Trips]
+ *     summary: Generate (or reuse) a Razorpay-verified payment QR for this trip (driver/broker)
+ *     description: |
+ *       Only meaningful with PAYMENT_PROVIDER=razorpay. Unlike the raw UPI-intent QR
+ *       (Personal/Company, entirely client-side), this QR is created via Razorpay's own QR
+ *       Code API and independently confirmed by Razorpay — poll GET .../qr/status, or wait for
+ *       the qr_code.credited webhook, instead of the driver self-reporting "payment received".
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: QR code ready
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your trip
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Already paid, or Razorpay isn't the active payment provider
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/trips/:id/collect-payment/qr', authenticate, authorize('driver', 'broker'), createPaymentQrCode);
+
+/**
+ * @swagger
+ * /api/trips/{id}/collect-payment/qr/status:
+ *   get:
+ *     tags: [Trips]
+ *     summary: Poll whether this trip's Razorpay QR has been paid yet (driver/broker)
+ *     description: |
+ *       Immediate-feedback complement to the qr_code.credited webhook — if paid, this finalizes
+ *       the payment the same way PATCH .../collect-payment does (idempotent either way, in case
+ *       the webhook already beat this poll to it).
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: "{ paid: boolean }"
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: No QR code has been generated for this trip yet
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/trips/:id/collect-payment/qr/status', authenticate, authorize('driver', 'broker'), getPaymentQrStatus);
 
 /**
  * @swagger

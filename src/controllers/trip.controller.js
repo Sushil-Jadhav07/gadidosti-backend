@@ -18,6 +18,8 @@ const { toAbsoluteUrl } = require('../utils/fileUrl');
 const { haversineKm, AVERAGE_SPEED_KMPH } = require('../utils/geo');
 const { getIO } = require('../realtime/socket');
 
+const RazorpayPaymentProvider = require('../providers/payment/RazorpayPaymentProvider');
+
 const storageProvider = getStorageProvider();
 const STATUS_STEPS = ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
 
@@ -249,6 +251,13 @@ const projectTrip = async (row, timeline) => {
   // makes the option available when the admin has configured one.
   companyUpiId: settings?.company_upi_id || null,
   companyUpiName: settings?.company_upi_name || 'GadiDost Logistics',
+  // Whether the driver's Payments step should offer the Razorpay-verified QR option at all
+  // (see POST .../collect-payment/qr) — true only when the active gateway can actually create
+  // one. The raw Personal/Company UPI QR above stays available either way as the free fallback.
+  razorpayQrAvailable: process.env.PAYMENT_PROVIDER === 'razorpay',
+  razorpayQrCodeId: row.razorpay_qr_code_id || null,
+  razorpayQrImageUrl: row.razorpay_qr_image_url || null,
+  razorpayQrStatus: row.razorpay_qr_status || null,
   // Overage past the distance-tiered free halting window, already folded into amountToCollect
   // above (booking.amount is bumped by this same charge the moment it's computed — see
   // applyHaltingCharge). Kept here as a breakdown so the driver/client can see it was applied
@@ -1013,6 +1022,65 @@ const uploadPod = async (req, res, next) => {
   }
 };
 
+// Shared by collectPayment (manual tap — UPI/cash, self-reported), the Razorpay QR status poll,
+// and the Razorpay webhook below — every path that can mark a trip's booking paid funnels
+// through here so the booking update / notifications / audit log never drift between them.
+// `collectedByUserId`/`collectedByRole` are null for the webhook path (Razorpay confirmed it,
+// not a person in the app tapping anything).
+const finalizeTripPayment = async ({ trip, mode, collectedByUserId, collectedByRole }) => {
+  await BookingModel.update(trip.booking_id, {
+    payment_status: 'paid',
+    payment_mode: mode,
+    amount_paid: trip.booking_amount,
+    paid_at: new Date(),
+  });
+
+  const modeLabel = mode === 'upi' ? 'UPI' : mode === 'razorpay_qr' ? 'QR code' : 'cash';
+  const collectorLabel = collectedByRole === 'broker' ? (trip.broker_name || 'the broker')
+    : collectedByRole === 'driver' ? (trip.driver_name || 'the driver')
+    : (trip.driver_name || 'the driver'); // webhook path — no human tapped anything, attribute to the driver who showed the QR
+  if (trip.client_id) {
+    await NotificationModel.create({
+      userId: trip.client_id,
+      title: 'Payment Received',
+      message: `Your payment for ${trip.booking_number || 'your booking'} was collected by ${collectorLabel} via ${modeLabel}. Your receipt is ready to download.`,
+      type: 'payment',
+      meta: { trip_id: trip.id, booking_id: trip.booking_id, mode },
+    });
+  }
+  if (trip.broker_id && trip.broker_id !== collectedByUserId) {
+    await NotificationModel.create({
+      userId: trip.broker_id,
+      title: 'Payment Collected',
+      message: `Driver ${trip.driver_name || ''} collected payment for ${trip.booking_number || 'a booking'} via ${modeLabel}.`,
+      type: 'payment',
+      meta: { trip_id: trip.id, booking_id: trip.booking_id, mode },
+    });
+  }
+  if (trip.driver_id && trip.driver_id !== collectedByUserId) {
+    await NotificationModel.create({
+      userId: trip.driver_id,
+      title: 'Payment Collected',
+      message: collectedByRole === 'broker'
+        ? `Your broker collected payment for ${trip.booking_number || 'a booking'} via ${modeLabel} on your behalf.`
+        : `Payment for ${trip.booking_number || 'a booking'} was confirmed via ${modeLabel}.`,
+      type: 'payment',
+      meta: { trip_id: trip.id, booking_id: trip.booking_id, mode },
+    });
+  }
+
+  await AuditLogModel.log({
+    userId: collectedByUserId || null,
+    action: 'TRIP_PAYMENT_COLLECTED',
+    entity: 'bookings',
+    entityId: trip.booking_id,
+    meta: { trip_id: trip.id, mode },
+    ipAddress: null,
+  });
+
+  logger.info(`Payment collected for trip ${trip.id} via ${mode}${collectedByUserId ? ` by ${collectedByRole} ${collectedByUserId}` : ' (razorpay webhook)'}`);
+};
+
 // ─── PATCH /api/trips/:id/collect-payment ─────────────────────────────────────
 // Last step of the delivery-completion flow when the booking was paid_status='pending' (i.e.
 // COD, not paid up front at booking time) — records how payment was actually collected (UPI
@@ -1037,54 +1105,98 @@ const collectPayment = async (req, res, next) => {
       return errorResponse(res, 409, 'Payment has already been recorded for this booking');
     }
 
-    await BookingModel.update(trip.booking_id, {
-      payment_status: 'paid',
-      payment_mode: mode,
-      amount_paid: trip.booking_amount,
-      paid_at: new Date(),
+    await finalizeTripPayment({
+      trip, mode,
+      collectedByUserId: req.user.id,
+      collectedByRole: req.user.id === trip.broker_id ? 'broker' : 'driver',
     });
 
-    const modeLabel = mode === 'upi' ? 'UPI' : 'cash';
-    const collectorLabel = req.user.id === trip.broker_id ? (trip.broker_name || 'the broker') : (trip.driver_name || 'the driver');
-    if (trip.client_id) {
-      await NotificationModel.create({
-        userId: trip.client_id,
-        title: 'Payment Received',
-        message: `Your payment for ${trip.booking_number || 'your booking'} was collected by ${collectorLabel} via ${modeLabel}. Your receipt is ready to download.`,
-        type: 'payment',
-        meta: { trip_id: id, booking_id: trip.booking_id, mode },
-      });
-    }
-    if (trip.broker_id && trip.broker_id !== req.user.id) {
-      await NotificationModel.create({
-        userId: trip.broker_id,
-        title: 'Payment Collected',
-        message: `Driver ${trip.driver_name || ''} collected payment for ${trip.booking_number || 'a booking'} via ${modeLabel}.`,
-        type: 'payment',
-        meta: { trip_id: id, booking_id: trip.booking_id, mode },
-      });
-    }
-    if (trip.driver_id && trip.driver_id !== req.user.id) {
-      await NotificationModel.create({
-        userId: trip.driver_id,
-        title: 'Payment Collected',
-        message: `Your broker collected payment for ${trip.booking_number || 'a booking'} via ${modeLabel} on your behalf.`,
-        type: 'payment',
-        meta: { trip_id: id, booking_id: trip.booking_id, mode },
-      });
+    if (trip.razorpay_qr_code_id && trip.razorpay_qr_status !== 'closed') {
+      await new RazorpayPaymentProvider().closeQrCode(trip.razorpay_qr_code_id);
+      await TripModel.setRazorpayQrCode(id, { qrCodeId: trip.razorpay_qr_code_id, imageUrl: trip.razorpay_qr_image_url, status: 'closed' });
     }
 
-    await AuditLogModel.log({
-      userId: req.user.id,
-      action: 'TRIP_PAYMENT_COLLECTED',
-      entity: 'bookings',
-      entityId: trip.booking_id,
-      meta: { trip_id: id, mode },
-      ipAddress: req.ip,
-    });
-
-    logger.info(`Payment collected for trip ${id} via ${mode} by ${req.user.role} ${req.user.id}`);
     return successResponse(res, 200, 'Payment recorded', { paymentStatus: 'paid', paymentMode: mode });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/trips/:id/collect-payment/qr ────────────────────────────────────
+// Generates (or returns the still-open) Razorpay QR code for this trip's exact amount due —
+// the verified alternative to the raw UPI-intent Personal/Company QR (see
+// DeliveryCompletionFlow.jsx): Razorpay itself confirms payment (webhook + the status-poll
+// endpoint below), instead of the driver self-reporting "I received it". Only meaningful with
+// PAYMENT_PROVIDER=razorpay — the raw UPI QR remains available regardless as the free fallback.
+const createPaymentQrCode = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const trip = await TripModel.findById(id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (trip.driver_id !== req.user.id && trip.broker_id !== req.user.id) {
+      return errorResponse(res, 403, 'Not your trip');
+    }
+    if (!['pending', 'partial'].includes(trip.booking_payment_status)) {
+      return errorResponse(res, 409, 'Payment has already been recorded for this booking');
+    }
+    if (process.env.PAYMENT_PROVIDER !== 'razorpay') {
+      return errorResponse(res, 409, 'Razorpay QR collection is not enabled — use the UPI QR or cash instead.');
+    }
+
+    // Reuse the existing QR if one's already open rather than generating a new one on every
+    // screen visit — Razorpay's own amount/expiry are unchanged since the amount due doesn't
+    // change mid-collection.
+    if (trip.razorpay_qr_code_id && trip.razorpay_qr_status === 'active') {
+      return successResponse(res, 200, 'QR code ready', { qrCodeId: trip.razorpay_qr_code_id, imageUrl: trip.razorpay_qr_image_url });
+    }
+
+    const amountDue = Number(trip.booking_amount) - Number(trip.booking_amount_paid || 0);
+    const qr = await new RazorpayPaymentProvider().createQrCode({
+      amount: amountDue,
+      tripId: id,
+      bookingNumber: trip.booking_number,
+    });
+    await TripModel.setRazorpayQrCode(id, { qrCodeId: qr.id, imageUrl: qr.imageUrl, status: qr.status });
+
+    logger.info(`Razorpay QR code created for trip ${id}: ${qr.id}`);
+    return successResponse(res, 200, 'QR code ready', { qrCodeId: qr.id, imageUrl: qr.imageUrl });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── GET /api/trips/:id/collect-payment/qr/status ──────────────────────────────
+// Polled by the driver's Payments screen for immediate feedback — complements the
+// qr_code.credited webhook (razorpayWebhook below), which is the more reliable long-term
+// signal but depends on the webhook actually being configured on the Razorpay dashboard and
+// has its own delivery latency. Idempotent either way: finalizeTripPayment no-ops if the
+// webhook already beat this poll to it (booking_payment_status is no longer pending/partial).
+const getPaymentQrStatus = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const trip = await TripModel.findById(id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (trip.driver_id !== req.user.id && trip.broker_id !== req.user.id) {
+      return errorResponse(res, 403, 'Not your trip');
+    }
+    if (!['pending', 'partial'].includes(trip.booking_payment_status)) {
+      return successResponse(res, 200, 'Already paid', { paid: true });
+    }
+    if (!trip.razorpay_qr_code_id) {
+      return errorResponse(res, 404, 'No QR code has been generated for this trip yet');
+    }
+
+    const result = await new RazorpayPaymentProvider().fetchQrCodePayment(trip.razorpay_qr_code_id);
+    if (result.paid) {
+      await finalizeTripPayment({
+        trip, mode: 'razorpay_qr',
+        collectedByUserId: req.user.id,
+        collectedByRole: req.user.id === trip.broker_id ? 'broker' : 'driver',
+      });
+      await TripModel.setRazorpayQrCode(id, { qrCodeId: trip.razorpay_qr_code_id, imageUrl: trip.razorpay_qr_image_url, status: 'closed' });
+    }
+
+    return successResponse(res, 200, result.paid ? 'Payment confirmed' : 'Still waiting for payment', { paid: !!result.paid });
   } catch (err) {
     next(err);
   }
@@ -1121,4 +1233,5 @@ const getPodFile = async (req, res, next) => {
 module.exports = {
   listTrips, getActiveTrip, getUpcomingTrip, getTrip, getTripByBooking, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
   reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
+  createPaymentQrCode, getPaymentQrStatus, finalizeTripPayment,
 };
