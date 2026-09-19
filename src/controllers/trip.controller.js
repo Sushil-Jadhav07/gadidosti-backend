@@ -1194,6 +1194,33 @@ const createPaymentQrCode = async (req, res, next) => {
   }
 };
 
+// ─── GET /api/trips/:id/collect-payment/qr/image ───────────────────────────────
+// A same-origin proxy for Razorpay's own QR poster image (razorpay_qr_image_url, hosted on
+// Razorpay's CDN). DeliveryCompletionFlow.jsx needs the raw pixel data client-side (via
+// <canvas>) to auto-detect and crop out just the QR square from Razorpay's branded poster —
+// reading pixel data off a cross-origin <img> taints the canvas and throws, regardless of
+// what CSS crop is applied, so the frontend fetches the image through this route instead
+// (with its own auth header, then as a blob) to get bytes canvas can actually read.
+const getPaymentQrImage = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const trip = await TripModel.findById(id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (!assertCanView(trip, req.user)) return errorResponse(res, 403, 'You do not have access to this trip');
+    if (!trip.razorpay_qr_image_url) return errorResponse(res, 404, 'No QR image available for this trip');
+
+    const upstream = await fetch(trip.razorpay_qr_image_url);
+    if (!upstream.ok) return errorResponse(res, 502, 'Failed to fetch QR image');
+
+    res.set('Content-Type', upstream.headers.get('content-type') || 'image/png');
+    res.set('Cache-Control', 'private, max-age=300');
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    return res.send(buffer);
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── GET /api/trips/:id/collect-payment/qr/status ──────────────────────────────
 // Polled by the driver's Payments screen for immediate feedback — complements the
 // qr_code.credited webhook (razorpayWebhook below), which is the more reliable long-term
@@ -1262,5 +1289,5 @@ const getPodFile = async (req, res, next) => {
 module.exports = {
   listTrips, getActiveTrip, getUpcomingTrip, getDriverDashboardSummary, getTrip, getTripByBooking, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
   reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
-  createPaymentQrCode, getPaymentQrStatus, finalizeTripPayment,
+  createPaymentQrCode, getPaymentQrStatus, getPaymentQrImage, finalizeTripPayment,
 };

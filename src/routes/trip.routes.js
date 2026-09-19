@@ -4,7 +4,7 @@ const router = express.Router();
 const {
   listTrips, getActiveTrip, getUpcomingTrip, getDriverDashboardSummary, getTrip, getTripByBooking, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
   reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
-  createPaymentQrCode, getPaymentQrStatus,
+  createPaymentQrCode, getPaymentQrStatus, getPaymentQrImage,
 } = require('../controllers/trip.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -667,6 +667,31 @@ router.post('/trips/:id/collect-payment/qr', authenticate, authorize('driver', '
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/trips/:id/collect-payment/qr/status', authenticate, authorize('driver', 'broker'), getPaymentQrStatus);
+
+/**
+ * @swagger
+ * /api/trips/{id}/collect-payment/qr/image:
+ *   get:
+ *     tags: [Trips]
+ *     summary: Same-origin proxy for this trip's Razorpay QR poster image (driver/broker)
+ *     description: Streams Razorpay's own CDN-hosted QR image through our server so the frontend can read its pixel data via <canvas> (auto-cropping the QR out of the branded poster) without hitting a cross-origin canvas-taint error.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: The QR image bytes
+ *       404:
+ *         description: No QR image available for this trip
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/trips/:id/collect-payment/qr/image', authenticate, authorize('driver', 'broker'), getPaymentQrImage);
 
 /**
  * @swagger
