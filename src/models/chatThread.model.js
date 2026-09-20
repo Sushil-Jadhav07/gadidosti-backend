@@ -76,7 +76,8 @@ class ChatThreadModel {
          lm.message AS last_message, lm.created_at AS last_message_at,
          lm.sender_id AS last_sender_id, lm.sender_role AS last_sender_role,
          COALESCE(uc.unread_count, 0)::int AS unread_count,
-         FALSE AS is_direct
+         FALSE AS is_direct,
+         COALESCE(lm.created_at, ct.created_at) AS sort_key
        FROM chat_threads ct
        JOIN bookings b ON b.id = ct.booking_id
        LEFT JOIN users cu ON cu.id = b.client_id
@@ -111,7 +112,8 @@ class ChatThreadModel {
          lm.message AS last_message, lm.created_at AS last_message_at,
          lm.sender_id AS last_sender_id, lm.sender_role AS last_sender_role,
          COALESCE(uc.unread_count, 0)::int AS unread_count,
-         TRUE AS is_direct
+         TRUE AS is_direct,
+         COALESCE(lm.created_at, ct.created_at) AS sort_key
        FROM chat_threads ct
        LEFT JOIN users bu ON bu.id = ct.broker_id
        LEFT JOIN users du ON du.id = ct.driver_id
@@ -130,7 +132,7 @@ class ChatThreadModel {
        ) uc ON true
        WHERE ct.booking_id IS NULL AND ($2 = 'admin' OR $1 IN (ct.broker_id, ct.driver_id))
 
-       ORDER BY COALESCE(last_message_at, thread_created_at) DESC
+       ORDER BY sort_key DESC
        LIMIT 100`,
       [user.id, user.role]
     );
