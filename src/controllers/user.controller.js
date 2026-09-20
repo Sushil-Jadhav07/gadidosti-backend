@@ -115,6 +115,51 @@ const getUserById = async (req, res, next) => {
   }
 };
 
+// ─── PATCH /api/admin/users/:id ───────────────────────────────────────────────
+// Lets an admin correct a client's or broker's profile on their behalf (a typo'd name, a
+// stale email) — PATCH /api/users/profile above only ever lets someone edit themselves, and
+// there was no equivalent for an admin acting on someone else's record. Reuses the exact same
+// UserModel.updateProfile the self-service route calls, so both paths stay in sync
+// automatically. Deliberately excludes phone: it's the OTP-verified login identifier, not
+// just a display field — changing it here would desync from that verification, so it's
+// admin-view-only, same reasoning as why self-service PATCH /api/users/profile never let a
+// user change their own phone either.
+const updateUserByAdmin = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name, email, address, company_name } = req.body;
+
+    const targetUser = await UserModel.findById(id);
+    if (!targetUser) return errorResponse(res, 404, 'User not found');
+    if (targetUser.role === 'admin' && id !== req.user.id) {
+      return errorResponse(res, 403, 'Cannot modify another admin account');
+    }
+
+    if (email) {
+      const existing = await UserModel.findByEmail(email);
+      if (existing && existing.id !== id) {
+        return errorResponse(res, 409, 'Email already in use by another account');
+      }
+    }
+
+    const updated = await UserModel.updateProfile(id, { name, email, companyName: company_name, address });
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'USER_PROFILE_UPDATED_BY_ADMIN',
+      entity: 'users',
+      entityId: id,
+      meta: { fields: Object.keys(req.body) },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Admin ${req.user.id} updated user ${id}'s profile`);
+    return successResponse(res, 200, 'User updated', { user: updated });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── PATCH /api/admin/users/:id/status ───────────────────────────────────────
 const updateUserStatus = async (req, res, next) => {
   try {
@@ -221,6 +266,7 @@ module.exports = {
   changePassword,
   getAllUsers,
   getUserById,
+  updateUserByAdmin,
   updateUserStatus,
   forceLogoutUser,
   deleteUser,

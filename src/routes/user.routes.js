@@ -7,6 +7,7 @@ const {
   changePassword,
   getAllUsers,
   getUserById,
+  updateUserByAdmin,
   updateUserStatus,
   forceLogoutUser,
   deleteUser,
@@ -447,6 +448,49 @@ router.get('/admin/users', authenticate, authorize('admin'), getAllUsers);
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.get('/admin/users/:id', authenticate, authorize('admin'), getUserById);
+
+/**
+ * @swagger
+ * /api/admin/users/{id}:
+ *   patch:
+ *     tags: [Admin Management]
+ *     summary: Edit a user's profile fields on their behalf
+ *     description: Admin-only. Lets an admin correct a client's or broker's name/email/address/company name — the same fields the self-service PATCH /api/users/profile lets a user edit for themselves. Phone is deliberately not editable here (it's the OTP-verified login identifier). Cannot be used on another admin's account.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name: { type: string }
+ *               email: { type: string, format: email }
+ *               address: { type: string }
+ *               company_name: { type: string }
+ *     responses:
+ *       200:
+ *         description: User updated
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Cannot modify another admin account
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Email already in use by another account
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/admin/users/:id', authenticate, authorize('admin'), updateUserByAdmin);
 
 /**
  * @swagger
