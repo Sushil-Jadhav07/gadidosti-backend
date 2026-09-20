@@ -13,7 +13,7 @@ class ChatThreadModel {
 
     const result = await pool.query(
       `INSERT INTO chat_threads (booking_id) VALUES ($1)
-       ON CONFLICT (booking_id) DO UPDATE SET booking_id = EXCLUDED.booking_id
+       ON CONFLICT (booking_id) WHERE booking_id IS NOT NULL DO UPDATE SET booking_id = EXCLUDED.booking_id
        RETURNING *, (xmax = 0) AS created`,
       [bookingId]
     );
