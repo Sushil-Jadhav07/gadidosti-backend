@@ -901,13 +901,27 @@ const broadcastBooking = async (booking) => {
   // (DriverRequestModel.declineOthersForBooking is already N-way generic) with zero changes;
   // only the fan-out at creation time is new.
   if (booking.search_mode === 'truck') {
+    const radiusKm = booking.search_radius_km || DEFAULT_BROADCAST_RADIUS_KM;
     const candidates = await TruckModel.findNearbyForBroadcast({
       lat: booking.pickup_lat,
       lng: booking.pickup_lng,
-      radiusKm: booking.search_radius_km || DEFAULT_BROADCAST_RADIUS_KM,
+      radiusKm,
       category: booking.truck_category,
     });
-    await Promise.all(candidates.map(async (c) => {
+    // Logs exactly who the query found at this exact moment (name + driver id + distance) —
+    // a driver's eligibility (KYC, online status, live location freshness) can genuinely change
+    // second to second, so a pgAdmin check run even a minute later can legitimately show
+    // different results than what the broadcast itself saw. This is the only way to know what
+    // it actually saw, not what it looked like shortly before or after.
+    logger.info(`Booking ${booking.id} (${booking.booking_number}) broadcasting: found ${candidates.length} candidate(s) within ${radiusKm}km of [${booking.pickup_lat}, ${booking.pickup_lng}]${booking.truck_category ? ` for category '${booking.truck_category}'` : ''} — ${candidates.map((c) => `driver=${c.driver_id} truck=${c.truck_id} dist=${Number(c.distance_km).toFixed(2)}km`).join('; ') || 'none'}`);
+
+    // allSettled, not all — one candidate's row/notification failing (a bad broker_id FK, a
+    // transient DB blip) used to reject the whole Promise.all, which would throw all the way up
+    // through createBooking and fail the ENTIRE booking-creation request for the client even
+    // though the booking row itself already existed — and worse, any candidate before the
+    // failing one in iteration order could still have silently succeeded with no log of it. Each
+    // candidate is now fully independent and its own failure (if any) is explicit below.
+    const results = await Promise.allSettled(candidates.map(async (c) => {
       const driverRequest = await DriverRequestModel.create({
         bookingId: booking.id,
         truckId: c.truck_id,
@@ -928,7 +942,12 @@ const broadcastBooking = async (booking) => {
       const fresh = await DriverRequestModel.findById(driverRequest.id);
       emitDriverRequestCreated(c.driver_id, fresh);
     }));
-    logger.info(`Booking ${booking.id} broadcast to ${candidates.length} nearby drivers (radius ${booking.search_radius_km || DEFAULT_BROADCAST_RADIUS_KM}km)`);
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') {
+        logger.error(`Booking ${booking.id}: failed to notify driver ${candidates[i].driver_id} — ${r.reason?.message || r.reason}`);
+      }
+    });
+    logger.info(`Booking ${booking.id} broadcast to ${results.filter((r) => r.status === 'fulfilled').length}/${candidates.length} nearby drivers (radius ${radiusKm}km)`);
     return;
   }
 
@@ -995,16 +1014,22 @@ const broadcastBooking = async (booking) => {
 const rebroadcastFindTruck = async (booking) => {
   const pickupText = booking.pickup_location || 'an unspecified pickup point';
   const dropText = booking.drop_location || 'an unspecified drop point';
+  const radiusKm = booking.search_radius_km || DEFAULT_BROADCAST_RADIUS_KM;
 
   const liveDriverIds = new Set(await DriverRequestModel.findLiveDriverIdsForBooking(booking.id));
-  const candidates = (await TruckModel.findNearbyForBroadcast({
+  const allNearby = await TruckModel.findNearbyForBroadcast({
     lat: booking.pickup_lat,
     lng: booking.pickup_lng,
-    radiusKm: booking.search_radius_km || DEFAULT_BROADCAST_RADIUS_KM,
+    radiusKm,
     category: booking.truck_category,
-  })).filter((c) => !liveDriverIds.has(c.driver_id));
+  });
+  const candidates = allNearby.filter((c) => !liveDriverIds.has(c.driver_id));
+  // See the matching log in broadcastBooking above for why this is logged at the moment of the
+  // query rather than reconstructed later — also notes which nearby drivers were skipped for
+  // already having a live request (not excluded by eligibility, just not re-notified).
+  logger.info(`Booking ${booking.id} (${booking.booking_number}) re-broadcasting: ${allNearby.length} nearby, ${liveDriverIds.size} already live (skipped), ${candidates.length} to notify — ${candidates.map((c) => `driver=${c.driver_id} truck=${c.truck_id} dist=${Number(c.distance_km).toFixed(2)}km`).join('; ') || 'none'}`);
 
-  await Promise.all(candidates.map(async (c) => {
+  const results = await Promise.allSettled(candidates.map(async (c) => {
     const driverRequest = await DriverRequestModel.create({
       bookingId: booking.id,
       truckId: c.truck_id,
@@ -1022,9 +1047,15 @@ const rebroadcastFindTruck = async (booking) => {
     const fresh = await DriverRequestModel.findById(driverRequest.id);
     emitDriverRequestCreated(c.driver_id, fresh);
   }));
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      logger.error(`Booking ${booking.id}: failed to re-notify driver ${candidates[i].driver_id} — ${r.reason?.message || r.reason}`);
+    }
+  });
 
-  logger.info(`Booking ${booking.id} re-broadcast to ${candidates.length} nearby drivers (search again)`);
-  return candidates.length;
+  const notifiedCount = results.filter((r) => r.status === 'fulfilled').length;
+  logger.info(`Booking ${booking.id} re-broadcast to ${notifiedCount}/${candidates.length} nearby drivers (search again)`);
+  return notifiedCount;
 };
 
 // ─── PATCH /api/bookings/{id}/rebroadcast ──────────────────────────────────────
