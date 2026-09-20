@@ -24,13 +24,45 @@ const SELECT_WITH_JOINS = `
 `;
 
 class TruckModel {
+  // driverId here used to only ever write trucks.driver_id, leaving driver_profiles.truck_id
+  // (the OTHER half of the link — required by findNearbyForBroadcast's WHERE t.driver_id =
+  // dp.user_id AND dp.truck_id = t.id) completely untouched, and never cleared that driver's
+  // previous truck's driver_id either. A driver could end up listed on two trucks in the fleet
+  // list (trucks.driver_id) while driver_profiles.truck_id kept pointing at whichever truck it
+  // was last set to — silently invisible to Find Truck if that one didn't match, regardless of
+  // KYC/online/location, with nothing in the UI to explain why. assignDriver already keeps both
+  // sides in sync for a *reassignment*; this now does the same at creation time.
   static async create({ brokerId, driverId, registration, type, category, capacity, make, year, insuranceExpiry }) {
-    const result = await pool.query(
-      `INSERT INTO trucks (broker_id, driver_id, registration, type, category, capacity, make, year, insurance_expiry)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [brokerId, driverId || null, registration, type || null, category || null, capacity || null, make || null, year || null, insuranceExpiry || null]
-    );
-    return result.rows[0];
+    if (!driverId) {
+      const result = await pool.query(
+        `INSERT INTO trucks (broker_id, driver_id, registration, type, category, capacity, make, year, insurance_expiry)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        [brokerId, null, registration, type || null, category || null, capacity || null, make || null, year || null, insuranceExpiry || null]
+      );
+      return result.rows[0];
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await client.query(
+        `INSERT INTO trucks (broker_id, driver_id, registration, type, category, capacity, make, year, insurance_expiry)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+        [brokerId, driverId, registration, type || null, category || null, capacity || null, make || null, year || null, insuranceExpiry || null]
+      );
+      const truck = result.rows[0];
+      // Same two steps assignDriver uses for a reassignment — this driver can't stay linked to
+      // whatever truck they had before, and driver_profiles.truck_id must actually point here.
+      await client.query(`UPDATE trucks SET driver_id = NULL, updated_at = NOW() WHERE driver_id = $1 AND id != $2`, [driverId, truck.id]);
+      await client.query(`UPDATE driver_profiles SET truck_id = $1, updated_at = NOW() WHERE user_id = $2`, [truck.id, driverId]);
+      await client.query('COMMIT');
+      return truck;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   static async findById(id) {
