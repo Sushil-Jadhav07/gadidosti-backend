@@ -757,6 +757,33 @@ const declineTrip = async (req, res, next) => {
         meta: { booking_id: trip.booking_id },
       });
     }
+    // The client previously got nothing at all here — their booking silently reverted from
+    // "assigned, driver on the way" back to "confirmed, waiting for a driver" with no
+    // indication anything happened, until they noticed the driver's details had vanished (or
+    // just kept waiting, unaware the broker now has to manually assign someone else). Booking
+    // status intentionally stays 'confirmed', not 'cancelled' — the booking itself is still
+    // very much alive and can still be completed once reassigned, only this specific driver
+    // backed out.
+    if (trip.client_id) {
+      await NotificationModel.create({
+        userId: trip.client_id,
+        title: 'Driver Unavailable',
+        message: `Your assigned driver is no longer available for booking ${trip.booking_number || trip.booking_id}. We're finding you another one.`,
+        type: 'booking',
+        meta: { booking_id: trip.booking_id },
+      });
+    }
+    // Live push so an open BookingDetail.jsx/JobDetail.jsx refreshes immediately instead of
+    // only on next reload — both just treat this as "something changed here, refetch" rather
+    // than reading fields off the payload (see MyTrip.jsx/JobDetail.jsx's own
+    // useTripStatusSocket handlers), so a minimal shape naming the booking is enough even
+    // though the trip row itself no longer exists to re-project.
+    const io = getIO();
+    if (io) {
+      for (const userId of [trip.client_id, trip.broker_id]) {
+        if (userId) io.to(`user:${userId}`).emit('trip-status-updated', { id, bookingId: trip.booking_id, status: 'confirmed' });
+      }
+    }
 
     await AuditLogModel.log({
       userId: req.user.id,

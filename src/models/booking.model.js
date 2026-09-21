@@ -17,6 +17,14 @@ const SELECT_WITH_JOINS = `
          driver.phone AS driver_phone,
          t.registration AS truck_reg,
          trip.pod_url AS pod_url,
+         -- pod_url above is only ever the FIRST uploaded photo (trip.controller.js's uploadPod
+         -- sets it once and never overwrites it) — kept for old callers, but a driver can
+         -- upload up to MAX_PHOTOS_PER_TRIP photos/videos per trip (trip_pod_photos, one row
+         -- each), and nothing here ever surfaced the rest to the booking-detail views (client/
+         -- admin/broker all read from this projection, not GET /api/trips/:id). Aggregated as
+         -- JSON here rather than a second round-trip query per booking.
+         (SELECT COALESCE(json_agg(json_build_object('url', tpp.url, 'type', tpp.media_type) ORDER BY tpp.uploaded_at), '[]'::json)
+            FROM trip_pod_photos tpp WHERE tpp.trip_id = trip.id) AS pod_media,
          trip.started_at AS trip_started_at,
          trip.delivered_at AS trip_delivered_at,
          trip.current_lat AS trip_current_lat,

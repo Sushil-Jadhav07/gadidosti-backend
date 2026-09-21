@@ -88,6 +88,7 @@ const projectBooking = (row, timeline, role) => {
     distance: row.distance,
     platformFee: row.platform_fee,
     podUrl: row.pod_url || null,
+    podMedia: row.pod_media || [],
     rating: row.rating || null,
     // Live truck position + the full pickup/loading/unloading/drop sequence, sourced from the
     // linked trip — lets the broker's Job Detail map show the truck moving during the trip and
@@ -441,6 +442,20 @@ const cancelBooking = async (req, res, next) => {
       await TripModel.addTimelineStep(trip.id, { step: 'cancelled', position: 99 });
       if (trip.driver_id) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
       if (trip.truck_id) await TruckModel.update(trip.truck_id, { status: 'available' });
+      // The notification below lands in the driver's/broker's notification list, but their
+      // currently-open trip screen (MyTrip.jsx / JobDetail.jsx) has no reason to know anything
+      // changed until they navigate away and back — this is what PATCH /api/trips/:id/status
+      // already does via emitTripStatusUpdate for every OTHER status change, but this path
+      // updates the trip directly rather than through that controller, so it never fired here.
+      // Both listeners just treat this as "something changed, refetch" (MyTrip.jsx matches on
+      // `id`, JobDetail.jsx on `bookingId`) rather than reading fields off the payload, so a
+      // minimal shape is enough — no need to fully re-project the (now cancelled) trip.
+      const io = getIO();
+      if (io) {
+        for (const userId of [trip.driver_id, trip.broker_id]) {
+          if (userId) io.to(`user:${userId}`).emit('trip-status-updated', { id: trip.id, bookingId: id, status: 'cancelled' });
+        }
+      }
     } else if (booking.driver_id || booking.truck_id) {
       if (booking.driver_id) await DriverProfileModel.update(booking.driver_id, { status: 'available' });
       if (booking.truck_id) await TruckModel.update(booking.truck_id, { status: 'available' });
