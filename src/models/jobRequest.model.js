@@ -36,17 +36,26 @@ class JobRequestModel {
     return result.rows;
   }
 
+  // A job_request stays 'accepted' for the rest of its life — there's no separate "assigned"
+  // job_status — so once the broker has assigned a driver and that driver accepted (bookings.
+  // driver_id gets set by finalizeDriverRequest), the row would otherwise keep coming back here
+  // with its "Assign Driver" button. The frontend only hid it via an in-memory dismissed-ids set
+  // (JobRequests.jsx), which is lost on reload or on leaving and returning to the page. Excluded
+  // at the query level instead. If the driver later declines the trip, declineTrip clears
+  // bookings.driver_id again, so the request correctly reappears for reassignment.
   static async findByBroker(brokerId, { page = 1, limit = 10 } = {}) {
     const offset = (page - 1) * limit;
+    const notAlreadyAssigned = `NOT (jr.status = 'accepted' AND b.driver_id IS NOT NULL)`;
 
     const countResult = await pool.query(
-      `SELECT COUNT(*) FROM job_requests WHERE broker_id = $1`,
+      `SELECT COUNT(*) FROM job_requests jr JOIN bookings b ON b.id = jr.booking_id
+       WHERE jr.broker_id = $1 AND ${notAlreadyAssigned}`,
       [brokerId]
     );
     const total = parseInt(countResult.rows[0].count);
 
     const rows = await pool.query(
-      `${SELECT_WITH_JOINS} WHERE jr.broker_id = $1 ORDER BY jr.created_at DESC LIMIT $2 OFFSET $3`,
+      `${SELECT_WITH_JOINS} WHERE jr.broker_id = $1 AND ${notAlreadyAssigned} ORDER BY jr.created_at DESC LIMIT $2 OFFSET $3`,
       [brokerId, limit, offset]
     );
 
