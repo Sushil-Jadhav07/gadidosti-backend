@@ -646,6 +646,17 @@ const forceLogoutDriver = async (req, res, next) => {
     await RefreshTokenModel.revokeAllForUser(req.params.id);
     await UserModel.markSessionsReset(req.params.id);
 
+    // A driver being kicked out of their session is not the same thing as findNearbyForBroadcast
+    // knowing to stop matching them — that only ever looks at driver_profiles.status, which a
+    // force-logout previously left untouched. Without this, a driver who'd just been force-
+    // logged-out still showed 'available' everywhere (admin/broker driver lists, Find Truck
+    // broadcast eligibility) and could keep getting matched to new job requests they have no way
+    // to respond to, since they're logged out. Left alone if they're mid-trip ('on_trip') — the
+    // session ending doesn't end the trip itself, that's a separate action.
+    if (driver.status !== 'on_trip') {
+      await DriverProfileModel.update(req.params.id, { status: 'offline' });
+    }
+
     await AuditLogModel.log({
       userId: req.user.id,
       action: 'DRIVER_FORCE_LOGOUT',

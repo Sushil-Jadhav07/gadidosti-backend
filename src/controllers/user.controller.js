@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const UserModel = require('../models/user.model');
+const DriverProfileModel = require('../models/driverProfile.model');
 const RefreshTokenModel = require('../models/refreshToken.model');
 const AuditLogModel = require('../models/auditLog.model');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -219,6 +220,17 @@ const forceLogoutUser = async (req, res, next) => {
 
     await RefreshTokenModel.revokeAllForUser(id);
     await UserModel.markSessionsReset(id);
+
+    // Same reasoning as vehicle.controller.js's forceLogoutDriver — driver_profiles.status is
+    // what findNearbyForBroadcast (and every driver list) actually reads, and a force-logout
+    // previously left it untouched. Left alone if genuinely mid-trip; only relevant for a
+    // driver target at all (clients/brokers have no driver_profiles row).
+    if (targetUser.role === 'driver') {
+      const profile = await DriverProfileModel.findById(id);
+      if (profile && profile.status !== 'on_trip') {
+        await DriverProfileModel.update(id, { status: 'offline' });
+      }
+    }
 
     await AuditLogModel.log({
       userId: req.user.id,
