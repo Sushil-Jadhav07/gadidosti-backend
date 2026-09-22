@@ -4,7 +4,7 @@ const router = express.Router();
 const {
   createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
-  myAssignedTruck, updateDriverLocation, getMyUpiId, updateMyUpiId,
+  forceLogoutDriver, myAssignedTruck, updateDriverLocation, getMyUpiId, updateMyUpiId,
 } = require('../controllers/vehicle.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -671,5 +671,38 @@ router.patch('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin')
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.delete('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin'), deleteDriver);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/{id}/force-logout:
+ *   post:
+ *     tags: [Vehicles]
+ *     summary: End every active session for a driver (broker, own driver only; or admin)
+ *     description: Revokes every refresh token for this driver so a driver whose app was killed/lost connectivity without logging out (still counted as "logged in" by hasBlockingDriverSession, which allows only one active session) can log in again immediately, without needing an admin.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Sessions ended
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       403:
+ *         description: Not your driver
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Driver profile not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/vehicles/drivers/:id/force-logout', authenticate, authorize('broker', 'admin'), forceLogoutDriver);
 
 module.exports = router;

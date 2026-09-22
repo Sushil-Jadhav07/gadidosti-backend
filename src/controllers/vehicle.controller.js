@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const TruckModel = require('../models/truck.model');
 const DriverProfileModel = require('../models/driverProfile.model');
 const UserModel = require('../models/user.model');
+const RefreshTokenModel = require('../models/refreshToken.model');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -623,6 +624,37 @@ const deleteDriver = async (req, res, next) => {
   }
 };
 
+// POST /api/vehicles/drivers/:id/force-logout
+// A broker-reachable counterpart to admin's POST /api/admin/users/:id/force-logout (user.
+// controller.js) — that one is admin-only and scoped to any user, which a broker can't call for
+// their own driver. Same underlying fix it exists for: auth.controller.js's
+// hasBlockingDriverSession only allows one active session per driver, so a driver whose app was
+// killed/lost connectivity without logging out stays "logged in" (blocking a fresh login on a
+// new device) for up to the refresh token's 30-day expiry — this revokes every refresh token for
+// them so they can log in again immediately, without needing an admin.
+const forceLogoutDriver = async (req, res, next) => {
+  try {
+    const driver = await DriverProfileModel.findById(req.params.id);
+    if (!driver) return errorResponse(res, 404, 'Driver profile not found');
+    if (req.user.role === 'broker' && driver.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your driver');
+
+    await RefreshTokenModel.revokeAllForUser(req.params.id);
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'DRIVER_FORCE_LOGOUT',
+      entity: 'driver_profiles',
+      entityId: req.params.id,
+      ipAddress: req.ip,
+    });
+
+    logger.info(`${req.user.role} ${req.user.id} force-logged-out driver ${req.params.id}`);
+    return successResponse(res, 200, "All sessions for this driver have been ended — they can log in again now.");
+  } catch (err) {
+    next(err);
+  }
+};
+
 // GET /api/vehicles/drivers/me/truck
 // The driver's own current truck assignment — powers the driver dashboard's "your truck"
 // display. Single object (or null), since driver_profiles.truck_id is a single FK — a driver
@@ -728,5 +760,5 @@ const updateMyUpiId = async (req, res, next) => {
 module.exports = {
   createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
-  myAssignedTruck, updateDriverLocation, getMyUpiId, updateMyUpiId,
+  forceLogoutDriver, myAssignedTruck, updateDriverLocation, getMyUpiId, updateMyUpiId,
 };
