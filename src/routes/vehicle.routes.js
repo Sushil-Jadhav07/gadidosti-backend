@@ -4,7 +4,7 @@ const router = express.Router();
 const {
   createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
-  forceLogoutDriver, myAssignedTruck, updateDriverLocation, getMyUpiId, updateMyUpiId,
+  forceLogoutDriver, myAssignedTruck, updateMyStatus, updateDriverLocation, getMyUpiId, updateMyUpiId,
 } = require('../controllers/vehicle.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -521,6 +521,43 @@ router.get('/vehicles/drivers/me/truck', authenticate, authorize('driver'), myAs
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/vehicles/drivers/me/location', authenticate, authorize('driver'), driverLocationRateLimit, updateDriverLocationValidation, validate, updateDriverLocation);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/me/status:
+ *   patch:
+ *     tags: [Vehicles]
+ *     summary: Set my own available/offline status
+ *     description: Driver-only. Directly sets driver_profiles.status to 'available' or 'offline' — 'on_trip' is not settable here, it's managed by the trip flow. Rejected with 409 while the driver has an active trip.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [status]
+ *             properties:
+ *               status: { type: string, enum: [available, offline] }
+ *     responses:
+ *       200:
+ *         description: Status updated
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       409:
+ *         description: Has an active trip
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Invalid status value
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/vehicles/drivers/me/status', authenticate, authorize('driver'), updateMyStatus);
 
 /**
  * @swagger

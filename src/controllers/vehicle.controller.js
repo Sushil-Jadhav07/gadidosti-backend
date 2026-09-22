@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const TruckModel = require('../models/truck.model');
 const DriverProfileModel = require('../models/driverProfile.model');
+const TripModel = require('../models/trip.model');
 const UserModel = require('../models/user.model');
 const RefreshTokenModel = require('../models/refreshToken.model');
 const AuditLogModel = require('../models/auditLog.model');
@@ -675,6 +676,36 @@ const myAssignedTruck = async (req, res, next) => {
   }
 };
 
+// PATCH /api/vehicles/drivers/me/status
+// Lets a driver directly set their own available/offline status. Until now, the "Online" toggle
+// in useDriverLocationTracking.js never told the server anything directly: switching it ON only
+// ever became true in driver_profiles.status as a side effect of the driver's FIRST location
+// ping landing (see DriverProfileModel.updateLocation's `status = CASE WHEN status = 'offline'
+// THEN 'available'...` self-heal) — and switching it OFF had NO server-side effect at all, since
+// the toggle was purely local React state. driver_profiles.status would stay 'available' until
+// the 5-minute staleDriverLocationSweep cron eventually caught up, so every other screen reading
+// this driver's status (admin/broker driver lists, and Find Truck broadcast eligibility) could
+// keep showing them as available for minutes after they'd actually gone offline in their own
+// app. 'on_trip' is deliberately not settable here — that's system-managed by the trip flow
+// (finalizeDriverRequest/declineTrip/updateTripStatus), not something the driver toggles.
+const updateMyStatus = async (req, res, next) => {
+  try {
+    const { status } = req.body;
+    if (!['available', 'offline'].includes(status)) {
+      return errorResponse(res, 422, "status must be 'available' or 'offline'");
+    }
+    const activeTrip = await TripModel.findActiveByDriver(req.user.id);
+    if (activeTrip) {
+      return errorResponse(res, 409, 'You have an active trip — your status is managed automatically until it ends.');
+    }
+    const updated = await DriverProfileModel.update(req.user.id, { status });
+    if (!updated) return errorResponse(res, 404, 'Driver profile not found');
+    return successResponse(res, 200, `Status updated to ${status}`, { status: updated.status });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // PATCH /api/vehicles/drivers/me/location
 // Pinged periodically by the driver's own app while online, even before a trip starts.
 const updateDriverLocation = async (req, res, next) => {
@@ -760,5 +791,5 @@ const updateMyUpiId = async (req, res, next) => {
 module.exports = {
   createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
-  forceLogoutDriver, myAssignedTruck, updateDriverLocation, getMyUpiId, updateMyUpiId,
+  forceLogoutDriver, myAssignedTruck, updateMyStatus, updateDriverLocation, getMyUpiId, updateMyUpiId,
 };
