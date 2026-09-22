@@ -39,11 +39,19 @@ class UserModel {
   static async findById(id) {
     const result = await pool.query(
       `SELECT id, name, email, phone, role, status, is_phone_verified, is_email_verified,
-              profile_image, address, company_name, kyc_status, last_login_at, created_at, updated_at
+              profile_image, address, company_name, kyc_status, last_login_at, created_at, updated_at,
+              sessions_valid_after
        FROM users WHERE id = $1`,
       [id]
     );
     return result.rows[0] || null;
+  }
+
+  // Stamped with NOW() by a force-logout (admin's own, or a broker's on their driver) — see
+  // auth.middleware.js's authenticate, which rejects any access token issued before this,
+  // forcing a fresh login immediately instead of waiting out the token's own ~7-day expiry.
+  static async markSessionsReset(id) {
+    await pool.query(`UPDATE users SET sessions_valid_after = NOW() WHERE id = $1`, [id]);
   }
 
   // Find by phone (includes password hash for auth)

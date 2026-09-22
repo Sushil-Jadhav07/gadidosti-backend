@@ -203,6 +203,14 @@ const updateUserStatus = async (req, res, next) => {
 // them before that. Revokes every refresh token for the user, same mechanism already used by
 // the password-reset flow, just exposed here as a deliberate admin action instead of a
 // side-effect of another one.
+//
+// Revoking refresh tokens alone doesn't end an already-open session immediately — the access
+// token that session is still using stays valid (accepted on every request) until it naturally
+// expires, up to 7 days (JWT_EXPIRES_IN) — so the target user would stay fully logged in for up
+// to a week despite this being called. markSessionsReset stamps sessions_valid_after = NOW(),
+// which auth.middleware.js's authenticate checks on every request against the access token's own
+// issued-at time, rejecting it immediately if it predates this — forcing a fresh login now, not
+// just blocking renewal later.
 const forceLogoutUser = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -210,6 +218,7 @@ const forceLogoutUser = async (req, res, next) => {
     if (!targetUser) return errorResponse(res, 404, 'User not found');
 
     await RefreshTokenModel.revokeAllForUser(id);
+    await UserModel.markSessionsReset(id);
 
     await AuditLogModel.log({
       userId: req.user.id,

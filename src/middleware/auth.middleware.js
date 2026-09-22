@@ -18,6 +18,18 @@ const authenticate = async (req, res, next) => {
     if (!user) return errorResponse(res, 401, 'User not found');
     if (user.status === 'blocked')   return errorResponse(res, 403, 'Account has been blocked');
     if (user.status === 'inactive')  return errorResponse(res, 403, 'Account is inactive');
+    // force-logout (user.controller.js's forceLogoutUser / vehicle.controller.js's
+    // forceLogoutDriver) stamps this to NOW() — without this check, revoking refresh tokens
+    // alone doesn't end an already-open session: THIS access token, decoded successfully above,
+    // stays valid and gets accepted right up until its own ~7-day expiry regardless. `iat` is
+    // seconds since epoch (JWT standard) — sessions_valid_after is floored to the same
+    // second-level precision before comparing, not just converted to milliseconds, so a token
+    // freshly issued (e.g. logging back in right after the reset) in the SAME second as the
+    // reset timestamp is never incorrectly rejected — verified this matters: millisecond-level
+    // comparison flagged a same-second fresh login as stale in testing.
+    if (user.sessions_valid_after && decoded.iat < Math.floor(new Date(user.sessions_valid_after).getTime() / 1000)) {
+      return errorResponse(res, 401, 'Your session was reset — please log in again.');
+    }
 
     req.user = user;
     // Heartbeat for the single-active-session staleness check (auth.controller.js's

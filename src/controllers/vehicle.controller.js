@@ -639,7 +639,12 @@ const forceLogoutDriver = async (req, res, next) => {
     if (!driver) return errorResponse(res, 404, 'Driver profile not found');
     if (req.user.role === 'broker' && driver.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your driver');
 
+    // Revoking refresh tokens alone doesn't end an already-open session immediately — the
+    // access token it's still using stays valid for up to 7 days (JWT_EXPIRES_IN). See
+    // user.controller.js's forceLogoutUser for the full explanation of markSessionsReset,
+    // which auth.middleware.js checks on every request to force this out right now instead.
     await RefreshTokenModel.revokeAllForUser(req.params.id);
+    await UserModel.markSessionsReset(req.params.id);
 
     await AuditLogModel.log({
       userId: req.user.id,

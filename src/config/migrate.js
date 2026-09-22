@@ -1110,6 +1110,15 @@ const runMigrations = async (client) => {
       CREATE INDEX IF NOT EXISTS idx_trips_razorpay_qr_code_id ON trips(razorpay_qr_code_id) WHERE razorpay_qr_code_id IS NOT NULL;
     `);
 
+    // ── FORCE-LOGOUT SESSION CHECK (mirrors db/47force_logout_session_check.sql) ──
+    // force-logout used to only revoke refresh tokens — the already-issued access token stayed
+    // valid (accepted on every request) until it naturally expired, up to 7 days
+    // (JWT_EXPIRES_IN). This column, set to NOW() on every force-logout, lets auth.middleware.js
+    // reject any access token issued before it, forcing a fresh login immediately instead.
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_valid_after TIMESTAMPTZ;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

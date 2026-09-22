@@ -1,0 +1,21 @@
+-- ============================================================
+--  SSK LOGISTICS — FORCE-LOGOUT SESSION CHECK
+--  Database: ssk_logistics
+--  File:     db/47force_logout_session_check.sql
+--  Run this file in pgAdmin Query Tool on the ssk_logistics DB
+--  (mirrors the "FORCE-LOGOUT SESSION CHECK" block in src/config/migrate.js — keep both in sync)
+--
+--  Fixes POST /api/admin/users/:id/force-logout and
+--  POST /api/vehicles/drivers/:id/force-logout only ever revoking refresh tokens — the access
+--  token already issued to that session stays valid (and accepted on every request) until it
+--  naturally expires, which defaults to 7 days (JWT_EXPIRES_IN). A driver whose session was
+--  "reset" stayed fully logged in for up to a week.
+--
+--  users.sessions_valid_after: set to NOW() whenever a force-logout runs. auth.middleware.js's
+--  authenticate then rejects any access token issued (its `iat` claim) before this timestamp,
+--  forcing a fresh login on the very next request instead of waiting for natural expiry. NULL
+--  (the default — never force-logged-out) skips the check entirely, at no extra cost to every
+--  other request.
+-- ============================================================
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_valid_after TIMESTAMPTZ;
