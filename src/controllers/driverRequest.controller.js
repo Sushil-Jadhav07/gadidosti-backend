@@ -13,11 +13,17 @@ const logger = require('../utils/logger');
 
 const STATUS_STEPS = ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
 
-// Each side gets at most this many counter-offers before they're limited to Accept/Decline —
-// keeps negotiation from dragging out indefinitely. offer_history's very first entry is always
-// the seed starting price (set once in DriverRequestModel.create), never a real counter action
-// by either side, so it's excluded from both counts below.
-const MAX_COUNTERS_PER_SIDE = 2;
+// Counting is still tracked and shown to both sides (clientCountersUsed/respondentCountersUsed
+// below) — only the hard cap that used to block a 3rd counter is gone. Negotiation now continues
+// for as many rounds as either side wants, right up until the client accepts one specific offer
+// (finalizeDriverRequest then auto-declines every other still-open driver_requests row for this
+// booking — see job.controller.js's identical MAX_COUNTERS_PER_SIDE import). null (not a finite
+// number, and deliberately not Infinity — that serializes to `null` over JSON anyway, and would
+// make a naive `count >= maxCountersPerSide` check on the frontend evaluate against 0 instead)
+// signals "no limit" explicitly to every consumer of this field. offer_history's very first
+// entry is always the seed starting price (set once in DriverRequestModel.create), never a real
+// counter action by either side, so it's excluded from both counts below.
+const MAX_COUNTERS_PER_SIDE = null;
 const countClientCounters = (offerHistory) => (offerHistory || []).filter((entry, i) => i > 0 && entry.by === 'client').length;
 const countRespondentCounters = (offerHistory) => (offerHistory || []).filter((entry, i) => i > 0 && entry.by !== 'client').length;
 
@@ -375,9 +381,6 @@ const counterDriverRequest = async (req, res, next) => {
       return errorResponse(res, 409, 'This job was already agreed with the broker — accept or decline, no counter-offers.');
     }
     if (driverRequest.status !== 'pending') return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
-    if (countRespondentCounters(driverRequest.offer_history) >= MAX_COUNTERS_PER_SIDE) {
-      return errorResponse(res, 400, `You've reached the limit of ${MAX_COUNTERS_PER_SIDE} counter-offers — please accept or decline instead`);
-    }
 
     const updated = await DriverRequestModel.respondentCounter(driverRequest.id, { amount, note, actor: req.user.role });
     if (!updated) return errorResponse(res, 400, 'Request is already actioned');
@@ -530,9 +533,6 @@ const clientCounterDriverRequest = async (req, res, next) => {
       return errorResponse(res, 409, 'This request is being handled directly with the driver — no action needed from you.');
     }
     if (!['pending', 'countered'].includes(driverRequest.status)) return errorResponse(res, 400, `Request is not open for negotiation (${driverRequest.status})`);
-    if (countClientCounters(driverRequest.offer_history) >= MAX_COUNTERS_PER_SIDE) {
-      return errorResponse(res, 400, `You've reached the limit of ${MAX_COUNTERS_PER_SIDE} counter-offers — please accept or find another driver instead`);
-    }
 
     const updated = await DriverRequestModel.clientCounter(driverRequest.id, { amount, note });
     if (!updated) return errorResponse(res, 400, 'Request is already actioned');

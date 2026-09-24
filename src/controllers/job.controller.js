@@ -330,9 +330,6 @@ const counterJobRequest = async (req, res, next) => {
     if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
     if (jobRequest.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your job request');
     if (jobRequest.status !== 'pending') return errorResponse(res, 400, `Job request is not awaiting your response (${jobRequest.status})`);
-    if (countRespondentCounters(jobRequest.offer_history) >= MAX_COUNTERS_PER_SIDE) {
-      return errorResponse(res, 400, `You've reached the limit of ${MAX_COUNTERS_PER_SIDE} counter-offers — please accept or decline instead`);
-    }
 
     const updated = await JobRequestModel.brokerCounter(id, { amount, note });
     if (!updated) return errorResponse(res, 400, 'Job request is already actioned');
@@ -595,9 +592,6 @@ const clientCounterOffer = async (req, res, next) => {
     if (!jobRequest) return errorResponse(res, 404, 'Job request not found');
     if (jobRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
     if (!['pending', 'countered'].includes(jobRequest.status)) return errorResponse(res, 400, `Offer is not awaiting your response (${jobRequest.status})`);
-    if (countClientCounters(jobRequest.offer_history) >= MAX_COUNTERS_PER_SIDE) {
-      return errorResponse(res, 400, `You've reached the limit of ${MAX_COUNTERS_PER_SIDE} counter-offers — please accept or decline instead`);
-    }
 
     const updated = await JobRequestModel.clientCounter(id, { amount, note });
     if (!updated) return errorResponse(res, 400, 'Offer is already actioned');
