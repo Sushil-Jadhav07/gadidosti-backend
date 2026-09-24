@@ -2,12 +2,12 @@ const pool = require('../config/db');
 
 class UserModel {
   // Create admin user (active + verified immediately, no OTP needed)
-  static async createAdmin({ name, email, phone, passwordHash }) {
+  static async createAdmin({ name, email, phone, passwordHash, role = 'admin' }) {
     const result = await pool.query(
       `INSERT INTO users (name, email, phone, password_hash, role, status, is_phone_verified, is_email_verified)
-       VALUES ($1, $2, $3, $4, 'admin', 'active', true, true)
+       VALUES ($1, $2, $3, $4, $5, 'active', true, true)
        RETURNING id, name, email, phone, role, status, is_phone_verified, is_email_verified, created_at`,
-      [name, email || null, phone, passwordHash]
+      [name, email || null, phone, passwordHash, role]
     );
     return result.rows[0];
   }

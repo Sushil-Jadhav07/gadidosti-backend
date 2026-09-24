@@ -243,7 +243,7 @@ const login = async (req, res, next) => {
 // ─── POST /api/auth/admin/register ───────────────────────────────────────────
 const registerAdmin = async (req, res, next) => {
   try {
-    const { name, phone, email, password } = req.body;
+    const { name, phone, email, password, role = 'admin' } = req.body;
 
     const existingPhone = await UserModel.findByPhone(phone);
     if (existingPhone) return errorResponse(res, 409, 'Phone number already registered');
@@ -255,20 +255,21 @@ const registerAdmin = async (req, res, next) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // Admin accounts are created as active + verified immediately (no OTP needed)
-    const result = await UserModel.createAdmin({ name, phone, email, passwordHash });
+    // Admin/staff accounts are created as active + verified immediately (no OTP needed).
+    // 'staff' has no permission differences from 'admin' yet — see db/48add_staff_role.sql.
+    const result = await UserModel.createAdmin({ name, phone, email, passwordHash, role });
 
     await AuditLogModel.log({
       userId: req.user.id,
-      action: 'ADMIN_CREATED',
+      action: role === 'staff' ? 'STAFF_CREATED' : 'ADMIN_CREATED',
       entity: 'users',
       entityId: result.id,
-      meta: { created_by: req.user.email, new_admin_email: email, new_admin_phone: phone },
+      meta: { created_by: req.user.email, role, new_user_email: email, new_user_phone: phone },
       ipAddress: req.ip,
     });
 
-    logger.info(`New admin created by ${req.user.email}: ${email || phone}`);
-    return successResponse(res, 201, 'Admin account created successfully', { user: result });
+    logger.info(`New ${role} created by ${req.user.email}: ${email || phone}`);
+    return successResponse(res, 201, `${role === 'staff' ? 'Staff' : 'Admin'} account created successfully`, { user: result });
   } catch (err) {
     next(err);
   }

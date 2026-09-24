@@ -49,6 +49,7 @@ const registerAdminValidation = [
   body('email').trim().notEmpty().withMessage('Email is required').isEmail().withMessage('Enter a valid email address'),
   body('password').notEmpty().withMessage('Password is required')
     .isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+  body('role').optional().isIn(['admin', 'staff']).withMessage("Role must be 'admin' or 'staff'"),
 ];
 const sendOtpValidation = [];
 const verifyOtpValidation = [];

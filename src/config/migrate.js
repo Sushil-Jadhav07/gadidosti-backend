@@ -1119,6 +1119,16 @@ const runMigrations = async (client) => {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_valid_after TIMESTAMPTZ;
     `);
 
+    // ── STAFF ROLE (mirrors db/48add_staff_role.sql) ──
+    // A second admin-dashboard role alongside 'admin' — created the same way (POST
+    // /api/auth/admin/register, admin-only), no permission differences from 'admin' yet.
+    // Deliberately not wired into any authorize(...) checks beyond that: until real permission
+    // boundaries are defined, a 'staff' account can log in but doesn't unlock anything an
+    // existing authorize('admin') route wasn't already blocking.
+    await client.query(`
+      ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'staff';
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
