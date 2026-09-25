@@ -2,7 +2,7 @@ const logger = require('../utils/logger');
 const { errorResponse } = require('../utils/response');
 
 const errorHandler = (err, req, res, next) => {
-  logger.error(`${err.message} — ${req.method} ${req.originalUrl}`, err);
+  logger.error(`${err.message || err.error?.description || 'Unknown error'} — ${req.method} ${req.originalUrl}`, err);
 
   // PostgreSQL unique violation
   if (err.code === '23505') {

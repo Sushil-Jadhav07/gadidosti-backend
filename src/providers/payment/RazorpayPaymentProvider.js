@@ -6,6 +6,22 @@ const PaymentProvider = require('./PaymentProvider');
 // createOrder just opens a gateway order; nothing about the booking changes until verifyPayment
 // confirms the signature (see booking.controller.js's createPaymentOrder/verifyBookingPayment,
 // which are the only callers).
+// Razorpay SDK errors come back shaped like { statusCode, error: { code, description } } — no
+// top-level `.message` (errorHandler.middleware.js was logging literal "undefined" for these),
+// and letting `.statusCode` fall straight through to our own response is actively dangerous:
+// Razorpay's 401 ("bad API key") is a completely different thing from OUR api returning 401
+// ("your session is invalid"), but every frontend in this project treats any 401 from us as the
+// latter and force-logs-out the user (see useAuth.jsx's global 401 handler). A Razorpay-side
+// auth failure must never surface as our own 401. Wrapping every SDK call here normalizes it to
+// a proper Error with a real message and a safe status code instead.
+const wrapRazorpayError = (err) => {
+  const description = err?.error?.description || err?.message || 'Razorpay request failed';
+  const wrapped = new Error(`Razorpay: ${description}`);
+  wrapped.statusCode = 502;
+  wrapped.cause = err;
+  return wrapped;
+};
+
 class RazorpayPaymentProvider extends PaymentProvider {
   constructor() {
     super();
@@ -18,12 +34,17 @@ class RazorpayPaymentProvider extends PaymentProvider {
   async createOrder({ bookingId, amount }) {
     // Razorpay wants the amount in paise (smallest currency unit), and receipt capped at 40
     // chars — booking UUIDs alone are 36, so this is already right at the limit.
-    const order = await this.client.orders.create({
-      amount: Math.round(Number(amount) * 100),
-      currency: 'INR',
-      receipt: `booking_${bookingId}`.slice(0, 40),
-      notes: { bookingId },
-    });
+    let order;
+    try {
+      order = await this.client.orders.create({
+        amount: Math.round(Number(amount) * 100),
+        currency: 'INR',
+        receipt: `booking_${bookingId}`.slice(0, 40),
+        notes: { bookingId },
+      });
+    } catch (err) {
+      throw wrapRazorpayError(err);
+    }
     return {
       orderId: order.id,
       amount,
@@ -60,16 +81,21 @@ class RazorpayPaymentProvider extends PaymentProvider {
   // closeQrCode) so a QR generated for one delivery can't quietly linger and be paid against
   // days later.
   async createQrCode({ amount, tripId, bookingNumber, closeByMinutes = 60 }) {
-    const qr = await this.client.qrCode.create({
-      type: 'upi_qr',
-      name: `GadiDost — ${bookingNumber || tripId}`,
-      usage: 'single_use',
-      fixed_amount: true,
-      payment_amount: Math.round(Number(amount) * 100),
-      description: `Trip ${bookingNumber || tripId}`,
-      close_by: Math.floor(Date.now() / 1000) + closeByMinutes * 60,
-      notes: { trip_id: tripId },
-    });
+    let qr;
+    try {
+      qr = await this.client.qrCode.create({
+        type: 'upi_qr',
+        name: `GadiDost — ${bookingNumber || tripId}`,
+        usage: 'single_use',
+        fixed_amount: true,
+        payment_amount: Math.round(Number(amount) * 100),
+        description: `Trip ${bookingNumber || tripId}`,
+        close_by: Math.floor(Date.now() / 1000) + closeByMinutes * 60,
+        notes: { trip_id: tripId },
+      });
+    } catch (err) {
+      throw wrapRazorpayError(err);
+    }
     return { id: qr.id, imageUrl: qr.image_url, status: qr.status };
   }
 
@@ -81,7 +107,12 @@ class RazorpayPaymentProvider extends PaymentProvider {
   async fetchQrCodePayment(qrCodeId) {
     // The SDK method is fetchAllPayments, not fetchPayments — confirmed by reading
     // node_modules/razorpay/dist/resources/qrCode.js directly (GET /payments/qr_codes/:id/payments).
-    const payments = await this.client.qrCode.fetchAllPayments(qrCodeId);
+    let payments;
+    try {
+      payments = await this.client.qrCode.fetchAllPayments(qrCodeId);
+    } catch (err) {
+      throw wrapRazorpayError(err);
+    }
     const paid = (payments.items || []).find((p) => p.status === 'captured');
     return paid ? { paid: true, paymentId: paid.id, amount: paid.amount / 100 } : { paid: false };
   }
