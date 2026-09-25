@@ -231,6 +231,8 @@ const projectTrip = async (row, timeline) => {
   podPhotos: podPhotos.map((p) => p.url),
   podMedia: podPhotos.map((p) => ({ url: p.url, type: p.media_type })),
   podMinRequired: TripPodPhotoModel.MIN_UPLOADS_PER_TRIP,
+  podStatus: row.pod_status || 'not_submitted',
+  podRejectionReason: row.pod_rejection_reason || null,
   // Drives the driver app's delivery-completion flow: whether the Payments step is needed
   // at all (paymentStatus — now 'pending' OR 'partial', not just 'pending', since a >5k
   // booking may have had only a 20% advance paid upfront), and what to show on it
@@ -524,23 +526,23 @@ const updateTripStatus = async (req, res, next) => {
     // duplicate/retried PATCH calls can't both win and double up the settlement.
     let isNewCompletion = false;
     if (status === 'completed') {
-      // Confirmed requirement — at least MIN_UPLOADS_PER_TRIP proof-of-delivery items (photo
-      // or video, mixed freely) before the trip can be marked done. Checked here rather than
-      // at upload time, since the driver may upload them one at a time across separate calls —
-      // this is the actual gate, same pattern as the loading/unloading stops check above.
+      // POD must actually be CLIENT-VERIFIED before a driver can close the trip out — not just
+      // uploaded (see pod_status on trips, and verifyPod/rejectPod below). Checked here rather
+      // than at upload time since verification is an async step the client does on their own
+      // schedule; this is the actual gate, same pattern as the loading/unloading stops check
+      // above.
       //
       // Skipped for the trip's own broker or an admin — same manual-override reasoning as the
       // GPS/OTP bypass above and completeTripStop's isOverride: if the driver is stuck/
-      // unreachable and never got to upload proof of delivery at all, requiring it here would
-      // make the trip impossible for anyone to ever close out.
-      if (req.user.role === 'driver') {
-        const podCount = await TripPodPhotoModel.countByTrip(id);
-        if (podCount < TripPodPhotoModel.MIN_UPLOADS_PER_TRIP) {
-          return errorResponse(
-            res, 409,
-            `At least ${TripPodPhotoModel.MIN_UPLOADS_PER_TRIP} proof-of-delivery photos/videos are required before completing this trip (${podCount} uploaded so far).`
-          );
-        }
+      // unreachable or the client never gets around to reviewing, requiring it here would make
+      // the trip impossible for anyone to ever close out.
+      if (req.user.role === 'driver' && trip.pod_status !== 'verified') {
+        const message = trip.pod_status === 'pending_verification'
+          ? 'Your proof-of-delivery photos are waiting for the customer to review — this trip can be completed once they confirm.'
+          : trip.pod_status === 'rejected'
+          ? `Your last proof of delivery was rejected${trip.pod_rejection_reason ? `: ${trip.pod_rejection_reason}` : ''} — please upload new photos.`
+          : `At least ${TripPodPhotoModel.MIN_UPLOADS_PER_TRIP} proof-of-delivery photos/videos are required before completing this trip.`;
+        return errorResponse(res, 409, message);
       }
       const completed = await TripModel.completeIfNotAlready(id);
       if (!completed) {
@@ -1054,6 +1056,27 @@ const uploadPod = async (req, res, next) => {
       await TripModel.updatePodUrl(id, uploadedUrls[0]);
     }
 
+    // Enough photos to actually submit for review — every upload while below the minimum (the
+    // driver can add them one at a time) leaves pod_status untouched. Also fires the moment a
+    // *previously rejected* trip crosses the threshold again, clearing the old rejection reason
+    // and giving the client a fresh review (see TripModel.setPodStatus).
+    let updatedTrip = trip;
+    const newCount = await TripPodPhotoModel.countByTrip(id);
+    if (newCount >= TripPodPhotoModel.MIN_UPLOADS_PER_TRIP && trip.pod_status !== 'pending_verification') {
+      updatedTrip = await TripModel.setPodStatus(id, { status: 'pending_verification' });
+      if (trip.client_id) {
+        await NotificationModel.create({
+          userId: trip.client_id,
+          title: 'Proof of delivery ready for review',
+          message: 'Your driver has uploaded proof of delivery — please review and confirm.',
+          type: 'trip',
+          meta: { trip_id: id, booking_id: trip.booking_id },
+        });
+      }
+      const timeline = await TripModel.getTimeline(id);
+      await emitTripStatusUpdate(updatedTrip, timeline);
+    }
+
     await AuditLogModel.log({
       userId: req.user.id,
       action: 'TRIP_POD_UPLOADED',
@@ -1072,7 +1095,93 @@ const uploadPod = async (req, res, next) => {
       podPhotos: allPhotos.map((p) => p.url),
       podMedia: allPhotos.map((p) => ({ url: p.url, type: p.media_type })),
       minRequired: TripPodPhotoModel.MIN_UPLOADS_PER_TRIP,
+      podStatus: updatedTrip.pod_status,
     });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/trips/:id/pod/verify ───────────────────────────────────────────
+// The client's approval — the actual gate on the driver's 'delivered' -> 'completed' transition
+// (see updateTripStatus above). Deliberately just flips pod_status; doesn't complete the trip
+// itself. The driver's own app is what calls PATCH .../status {completed} next (already polling/
+// listening for trip-status-updated), so this reuses the exact same completion path — settlement,
+// notifications, freeing up the driver/truck — rather than duplicating any of that here.
+const verifyPod = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const trip = await TripModel.findById(id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (trip.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (trip.pod_status !== 'pending_verification') {
+      return errorResponse(res, 409, 'There is no proof of delivery waiting for your review on this trip.');
+    }
+
+    const updated = await TripModel.setPodStatus(id, { status: 'verified', verifiedBy: req.user.id });
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'TRIP_POD_VERIFIED', entity: 'trips', entityId: id, ipAddress: req.ip,
+    });
+
+    if (trip.driver_id) {
+      await NotificationModel.create({
+        userId: trip.driver_id,
+        title: 'Proof of delivery approved',
+        message: 'The customer confirmed your proof of delivery — you can now complete the trip.',
+        type: 'trip',
+        meta: { trip_id: id, booking_id: trip.booking_id },
+      });
+    }
+
+    const timeline = await TripModel.getTimeline(id);
+    await emitTripStatusUpdate(updated, timeline);
+
+    logger.info(`Client ${req.user.id} verified POD for trip ${id}`);
+    return successResponse(res, 200, 'Proof of delivery approved', { trip: await projectTrip(updated, timeline) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/trips/:id/pod/reject ───────────────────────────────────────────
+// Sends the driver back to re-upload. Existing trip_pod_photos rows are left alone (audit
+// trail) — the next upload that brings the count back over MIN_UPLOADS_PER_TRIP re-triggers
+// 'pending_verification' automatically (see uploadPod), giving the client another look.
+const rejectPod = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    if (!reason || !reason.trim()) return errorResponse(res, 400, 'A reason is required to reject proof of delivery.');
+
+    const trip = await TripModel.findById(id);
+    if (!trip) return errorResponse(res, 404, 'Trip not found');
+    if (trip.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
+    if (trip.pod_status !== 'pending_verification') {
+      return errorResponse(res, 409, 'There is no proof of delivery waiting for your review on this trip.');
+    }
+
+    const updated = await TripModel.setPodStatus(id, { status: 'rejected', rejectionReason: reason.trim(), verifiedBy: req.user.id });
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'TRIP_POD_REJECTED', entity: 'trips', entityId: id, meta: { reason: reason.trim() }, ipAddress: req.ip,
+    });
+
+    if (trip.driver_id) {
+      await NotificationModel.create({
+        userId: trip.driver_id,
+        title: 'Proof of delivery rejected',
+        message: `The customer rejected your proof of delivery: ${reason.trim()}. Please upload new photos.`,
+        type: 'trip',
+        meta: { trip_id: id, booking_id: trip.booking_id },
+      });
+    }
+
+    const timeline = await TripModel.getTimeline(id);
+    await emitTripStatusUpdate(updated, timeline);
+
+    logger.info(`Client ${req.user.id} rejected POD for trip ${id}: ${reason.trim()}`);
+    return successResponse(res, 200, 'Proof of delivery rejected', { trip: await projectTrip(updated, timeline) });
   } catch (err) {
     next(err);
   }
@@ -1315,6 +1424,6 @@ const getPodFile = async (req, res, next) => {
 
 module.exports = {
   listTrips, getActiveTrip, getUpcomingTrip, getDriverDashboardSummary, getTrip, getTripByBooking, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
-  reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
+  reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, verifyPod, rejectPod, collectPayment, getPodFile,
   createPaymentQrCode, getPaymentQrStatus, getPaymentQrImage, finalizeTripPayment,
 };

@@ -25,6 +25,9 @@ const SELECT_WITH_JOINS = `
          -- JSON here rather than a second round-trip query per booking.
          (SELECT COALESCE(json_agg(json_build_object('url', tpp.url, 'type', tpp.media_type) ORDER BY tpp.uploaded_at), '[]'::json)
             FROM trip_pod_photos tpp WHERE tpp.trip_id = trip.id) AS pod_media,
+         trip.id AS trip_id,
+         trip.pod_status AS trip_pod_status,
+         trip.pod_rejection_reason AS trip_pod_rejection_reason,
          trip.started_at AS trip_started_at,
          trip.delivered_at AS trip_delivered_at,
          trip.current_lat AS trip_current_lat,

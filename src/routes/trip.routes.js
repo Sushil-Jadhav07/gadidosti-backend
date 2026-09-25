@@ -3,7 +3,7 @@ const router = express.Router();
 
 const {
   listTrips, getActiveTrip, getUpcomingTrip, getDriverDashboardSummary, getTrip, getTripByBooking, updateTripStatus, completeTripStop, declineTrip, updateTripLocation,
-  reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, collectPayment, getPodFile,
+  reportIssue, listIncidents, resolveIncident, updateMechanicRequest, uploadPod, verifyPod, rejectPod, collectPayment, getPodFile,
   createPaymentQrCode, getPaymentQrStatus, getPaymentQrImage,
 } = require('../controllers/trip.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
@@ -13,7 +13,7 @@ const upload = require('../middleware/upload.middleware');
 const { podUpload } = require('../middleware/upload.middleware');
 const {
   updateTripStatusValidation, updateTripLocationValidation, reportIssueValidation, resolveIncidentValidation,
-  updateMechanicRequestValidation, collectPaymentValidation,
+  updateMechanicRequestValidation, collectPaymentValidation, rejectPodValidation,
 } = require('../validations/trip.validation');
 const TripPodPhotoModel = require('../models/tripPodPhoto.model');
 
@@ -548,6 +548,53 @@ router.patch('/trips/:id/incidents/:incidentId/mechanic', authenticate, authoriz
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/trips/:id/pod', authenticate, authorize('driver', 'broker', 'admin'), podUpload.array('files', TripPodPhotoModel.MAX_PHOTOS_PER_TRIP), uploadPod);
+
+/**
+ * @swagger
+ * /api/trips/{id}/pod/verify:
+ *   patch:
+ *     tags: [Trips]
+ *     summary: Client approves the driver's uploaded proof of delivery
+ *     description: Only the booking's own client. Only valid while pod_status is pending_verification. Doesn't complete the trip itself — the driver's app calls PATCH /trips/{id}/status {completed} next, which is now gated on pod_status being verified.
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Approved
+ *       403:
+ *         description: Not your booking
+ *       409:
+ *         description: Nothing waiting for review
+ */
+router.patch('/trips/:id/pod/verify', authenticate, authorize('client'), verifyPod);
+
+/**
+ * @swagger
+ * /api/trips/{id}/pod/reject:
+ *   patch:
+ *     tags: [Trips]
+ *     summary: Client rejects the driver's uploaded proof of delivery
+ *     description: Only the booking's own client. Sends the driver back to re-upload — the next upload that meets the minimum photo count re-submits for review automatically.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reason]
+ *             properties:
+ *               reason: { type: string }
+ *     responses:
+ *       200:
+ *         description: Rejected
+ *       403:
+ *         description: Not your booking
+ *       409:
+ *         description: Nothing waiting for review
+ */
+router.patch('/trips/:id/pod/reject', authenticate, authorize('client'), rejectPodValidation, validate, rejectPod);
 
 /**
  * @swagger

@@ -16,6 +16,10 @@ const resolveIncidentValidation = [
   body('resolution').isString().trim().notEmpty().withMessage('resolution is required'),
 ];
 
+const rejectPodValidation = [
+  body('reason').isString().trim().notEmpty().withMessage('reason is required'),
+];
+
 const MECHANIC_STATUS_VALUES = ['requested', 'mechanic_assigned', 'in_progress', 'resolved'];
 
 const updateMechanicRequestValidation = [
@@ -31,5 +35,5 @@ const collectPaymentValidation = [
 
 module.exports = {
   updateTripStatusValidation, updateTripLocationValidation, reportIssueValidation, resolveIncidentValidation,
-  updateMechanicRequestValidation, collectPaymentValidation,
+  updateMechanicRequestValidation, collectPaymentValidation, rejectPodValidation,
 };

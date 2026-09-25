@@ -302,6 +302,25 @@ class TripModel {
     return result.rows[0] || null;
   }
 
+  // Moves POD through its review lifecycle. 'pending_verification' (a fresh upload met the
+  // minimum count) always clears any prior rejection reason — a new submission shouldn't still
+  // show the old complaint. 'verified'/'rejected' stamp who/when; verifiedBy is null for the
+  // 'pending_verification' transition (nobody's reviewed it yet).
+  static async setPodStatus(id, { status, rejectionReason = null, verifiedBy = null }) {
+    const result = await pool.query(
+      `UPDATE trips
+       SET pod_status = $1,
+           pod_rejection_reason = $2,
+           pod_verified_at = CASE WHEN $1 IN ('verified', 'rejected') THEN NOW() ELSE pod_verified_at END,
+           pod_verified_by = CASE WHEN $1 IN ('verified', 'rejected') THEN $3 ELSE pod_verified_by END,
+           updated_at = NOW()
+       WHERE id = $4
+       RETURNING *`,
+      [status, rejectionReason, verifiedBy, id]
+    );
+    return result.rows[0] || null;
+  }
+
   // Razorpay QR payment collection — see RazorpayPaymentProvider.createQrCode. One active QR
   // per trip at a time; a fresh create call just overwrites whatever was here before.
   static async setRazorpayQrCode(id, { qrCodeId, imageUrl, status }) {

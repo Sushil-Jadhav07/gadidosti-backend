@@ -1129,6 +1129,31 @@ const runMigrations = async (client) => {
       ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'staff';
     `);
 
+    // ── POD VERIFICATION (mirrors db/49pod_verification.sql) ──
+    // POD was previously "compulsory" only in the sense that a driver couldn't reach
+    // 'completed' without uploading MIN_UPLOADS_PER_TRIP photos — nobody ever looked at them.
+    // pod_status tracks the actual review: 'not_submitted' -> (upload) -> 'pending_verification'
+    // -> (client approves) -> 'verified', or -> (client rejects) -> 'rejected', which routes the
+    // driver back to re-upload (another upload while 'rejected' flips it back to
+    // 'pending_verification' — see trip.controller.js's uploadPod). The driver's own
+    // 'delivered' -> 'completed' transition now gates on pod_status === 'verified' instead of
+    // just the raw photo count (see updateTripStatus) — broker/admin keep their existing manual
+    // override, unaffected.
+    await client.query(`
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS pod_status TEXT NOT NULL DEFAULT 'not_submitted';
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS pod_rejection_reason TEXT;
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS pod_verified_at TIMESTAMPTZ;
+      ALTER TABLE trips ADD COLUMN IF NOT EXISTS pod_verified_by UUID REFERENCES users(id);
+    `);
+    await client.query(`
+      DO $$ BEGIN
+          ALTER TABLE trips ADD CONSTRAINT trips_pod_status_chk
+            CHECK (pod_status IN ('not_submitted', 'pending_verification', 'verified', 'rejected'));
+      EXCEPTION
+          WHEN duplicate_object THEN NULL;
+      END $$;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

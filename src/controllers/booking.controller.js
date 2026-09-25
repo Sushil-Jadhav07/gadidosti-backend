@@ -89,6 +89,9 @@ const projectBooking = (row, timeline, role) => {
     platformFee: row.platform_fee,
     podUrl: row.pod_url || null,
     podMedia: row.pod_media || [],
+    tripId: row.trip_id || null,
+    podStatus: row.trip_pod_status || 'not_submitted',
+    podRejectionReason: row.trip_pod_rejection_reason || null,
     rating: row.rating || null,
     // Live truck position + the full pickup/loading/unloading/drop sequence, sourced from the
     // linked trip — lets the broker's Job Detail map show the truck moving during the trip and
