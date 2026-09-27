@@ -153,6 +153,32 @@ class KycModel {
     return resultQuery.rows[0];
   }
 
+  // Caches the ref_id from a successful Aadhaar OTP send — see sendAadhaarOtp in
+  // kyc.controller.js for why: Cashfree's cooldown response for a repeat request omits ref_id
+  // entirely, so this is the only way to recover it for someone who already received the OTP.
+  static async saveAadhaarOtpRef(userId, refId) {
+    await pool.query(
+      `INSERT INTO kyc_submissions (user_id, aadhaar_otp_ref_id, aadhaar_otp_sent_at, updated_at)
+       VALUES ($1, $2, NOW(), NOW())
+       ON CONFLICT (user_id) DO UPDATE
+         SET aadhaar_otp_ref_id = $2, aadhaar_otp_sent_at = NOW(), updated_at = NOW()`,
+      [userId, refId]
+    );
+  }
+
+  // Only returns a ref_id sent within the last `maxAgeMinutes` — Cashfree's OTPs expire, so an
+  // old cached ref_id isn't a safe fallback once it's plausibly stale.
+  static async getRecentAadhaarOtpRef(userId, maxAgeMinutes = 10) {
+    const result = await pool.query(
+      `SELECT aadhaar_otp_ref_id AS ref_id, aadhaar_otp_sent_at
+       FROM kyc_submissions
+       WHERE user_id = $1 AND aadhaar_otp_ref_id IS NOT NULL
+         AND aadhaar_otp_sent_at > NOW() - ($2 || ' minutes')::interval`,
+      [userId, maxAgeMinutes]
+    );
+    return result.rows[0] || null;
+  }
+
   // Admin/broker: manual approve or reject — the fallback path for whatever the automated
   // checks in submitKyc's autoVerify didn't clear (see kyc.controller.js's submitKyc).
   // auto_verified is explicitly reset to false here since this is by definition NOT automatic,

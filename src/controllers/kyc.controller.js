@@ -501,6 +501,14 @@ const brokerRejectKyc = async (req, res, next) => {
 // KYC; the admin/broker reviewer sees the result alongside the documents and still makes that
 // call themselves (see KycModel.updateVerificationResult's own reasoning).
 
+// The 4 endpoints below deliberately don't call next(err) on a provider failure — the global
+// error handler masks err.message down to a bare "Internal server error" in production (by
+// design, for errors it can't classify), which left a real, actionable reason (a rate limit, a
+// transient Cashfree outage) looking like an unexplained crash. These are expected, recoverable
+// failures of a third-party call, not bugs, so they get their own clear, safe message — still
+// logged in full server-side via logger.error either way.
+const VERIFICATION_UNAVAILABLE_MESSAGE = 'Verification service is temporarily unavailable — please try again in a few minutes.';
+
 // ─── POST /api/kyc/verify/pan ──────────────────────────────────────────────────
 const verifyPan = async (req, res, next) => {
   try {
@@ -518,7 +526,8 @@ const verifyPan = async (req, res, next) => {
     logger.info(`PAN verification for ${req.user.id}: ${result.status}`);
     return successResponse(res, 200, result.status === 'verified' ? 'PAN verified' : 'PAN verification did not pass', result);
   } catch (err) {
-    next(err);
+    logger.error(`PAN verification failed for ${req.user.id}: ${err.message}`, err);
+    return errorResponse(res, 503, VERIFICATION_UNAVAILABLE_MESSAGE);
   }
 };
 
@@ -539,7 +548,8 @@ const verifyDrivingLicense = async (req, res, next) => {
     logger.info(`Driving license verification for ${req.user.id}: ${result.status}`);
     return successResponse(res, 200, result.status === 'verified' ? 'Driving license verified' : 'Driving license verification did not pass', result);
   } catch (err) {
-    next(err);
+    logger.error(`DL verification failed for ${req.user.id}: ${err.message}`, err);
+    return errorResponse(res, 503, VERIFICATION_UNAVAILABLE_MESSAGE);
   }
 };
 
@@ -552,7 +562,28 @@ const sendAadhaarOtp = async (req, res, next) => {
     const { aadhaar_number } = req.body;
     if (!aadhaar_number) return errorResponse(res, 422, 'aadhaar_number is required');
 
-    const { refId, status } = await verificationProvider.sendAadhaarOtp(aadhaar_number);
+    let refId, status;
+    try {
+      ({ refId, status } = await verificationProvider.sendAadhaarOtp(aadhaar_number));
+      await KycModel.saveAadhaarOtpRef(req.user.id, refId);
+    } catch (err) {
+      // Cashfree rate-limits repeat requests for the same Aadhaar within a cooldown window and
+      // omits ref_id on that response — but the OTP it sent on the earlier, successful call is
+      // still valid. Fall back to whatever ref_id was cached from that call instead of stranding
+      // someone who already has the OTP in hand with no way to submit it.
+      if (err.cashfreeNoRefId) {
+        const cached = await KycModel.getRecentAadhaarOtpRef(req.user.id);
+        if (cached) {
+          logger.info(`Aadhaar OTP send rate-limited for ${req.user.id} — reusing cached ref_id`);
+          refId = cached.ref_id;
+          status = 'otp_sent';
+        } else {
+          throw err;
+        }
+      } else {
+        throw err;
+      }
+    }
 
     await AuditLogModel.log({
       userId: req.user.id, action: 'KYC_AADHAAR_OTP_SENT', entity: 'kyc_submissions',
@@ -562,7 +593,10 @@ const sendAadhaarOtp = async (req, res, next) => {
     logger.info(`Aadhaar OTP sent for ${req.user.id}`);
     return successResponse(res, 200, 'OTP sent to the mobile number linked to this Aadhaar', { refId, status });
   } catch (err) {
-    next(err);
+    logger.error(`Aadhaar OTP send failed for ${req.user.id}: ${err.message}`, err);
+    return errorResponse(res, 503, err.cashfreeNoRefId
+      ? 'An OTP was already sent recently — please wait a few minutes before requesting a new one.'
+      : VERIFICATION_UNAVAILABLE_MESSAGE);
   }
 };
 
@@ -583,7 +617,8 @@ const verifyAadhaarOtp = async (req, res, next) => {
     logger.info(`Aadhaar verification for ${req.user.id}: ${result.status}`);
     return successResponse(res, 200, result.status === 'verified' ? 'Aadhaar verified' : 'Aadhaar verification did not pass', result);
   } catch (err) {
-    next(err);
+    logger.error(`Aadhaar verification failed for ${req.user.id}: ${err.message}`, err);
+    return errorResponse(res, 503, VERIFICATION_UNAVAILABLE_MESSAGE);
   }
 };
 

@@ -88,7 +88,14 @@ class CashfreeVerificationProvider extends VerificationProvider {
   async sendAadhaarOtp(aadhaarNumber) {
     const { body } = await this.request('/offline-aadhaar/otp', { aadhaar_number: aadhaarNumber });
     if (!body.ref_id) {
-      throw new Error(body.message || 'Failed to send Aadhaar OTP');
+      // Cashfree rate-limits repeat requests for the same Aadhaar within a cooldown window (e.g.
+      // "Otp generated for this aadhaar, please try after some time") and, in that case, doesn't
+      // hand back a ref_id at all — even though the OTP it sent earlier is still valid. Flagged
+      // so the caller (kyc.controller.js) can fall back to whatever ref_id it cached from that
+      // earlier successful send, instead of stranding someone who already has the OTP in hand.
+      const err = new Error(body.message || 'Failed to send Aadhaar OTP');
+      err.cashfreeNoRefId = true;
+      throw err;
     }
     return { refId: body.ref_id, status: body.status || 'otp_sent' };
   }

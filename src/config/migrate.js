@@ -1270,6 +1270,17 @@ const runMigrations = async (client) => {
       ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS auto_verified BOOLEAN NOT NULL DEFAULT false;
     `);
 
+    // ── AADHAAR OTP REF_ID CACHE (mirrors db/57kyc_aadhaar_otp_cache.sql) ──
+    // Cashfree rate-limits repeat OTP requests for the same Aadhaar within a cooldown window and,
+    // in that response, omits ref_id entirely — even though the OTP it sent on the earlier,
+    // successful call is still valid. Caching that ref_id here lets a rate-limited retry fall
+    // back to it instead of stranding someone who already received the OTP but has no ref_id to
+    // submit it with (see kyc.controller.js's sendAadhaarOtp).
+    await client.query(`
+      ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS aadhaar_otp_ref_id TEXT;
+      ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS aadhaar_otp_sent_at TIMESTAMPTZ;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
