@@ -1,6 +1,10 @@
 const { body, query } = require('express-validator');
+const { TRUCK_TYPE_VALUES, LEGACY_TRUCK_CATEGORIES } = require('../constants/truckTypes');
 
-const TRUCK_CATEGORIES = ['small', 'medium', 'large', 'part'];
+// The 8 new specific types, plus the old small/medium/large (existing trucks aren't force-
+// migrated — see db/51vehicle_pricing.sql) and 'part' (kept for backward compat, even though no
+// frontend truck-creation form actually offers it as a truck size).
+const TRUCK_CATEGORIES = [...TRUCK_TYPE_VALUES, ...LEGACY_TRUCK_CATEGORIES, 'part'];
 // Loose Indian vehicle-registration format, e.g. "MH12AB1234" or "MH-12-AB-1234".
 const REGISTRATION_REGEX = /^[A-Z]{2}[-\s]?\d{1,2}[-\s]?[A-Z]{1,3}[-\s]?\d{1,4}$/i;
 const CURRENT_YEAR = new Date().getFullYear();

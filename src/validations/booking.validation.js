@@ -1,6 +1,10 @@
 const { body } = require('express-validator');
+const { TRUCK_TYPE_VALUES, LEGACY_TRUCK_CATEGORIES } = require('../constants/truckTypes');
 
 const TRANSPORT_TYPES = ['intra', 'inter'];
+// 'part' (part-load — a booking mode, not a truck size) is still selectable on top of every
+// real truck type, plus the legacy small/medium/large a booking may still reference.
+const BOOKING_TRUCK_CATEGORIES = [...TRUCK_TYPE_VALUES, ...LEGACY_TRUCK_CATEGORIES, 'part'];
 
 const isWithinCity = (location, city) =>
   String(location || '').toLowerCase().includes(String(city || '').toLowerCase());
@@ -88,7 +92,7 @@ const createBookingValidation = [
 
 const quoteBookingValidation = [
   body('truck_category').trim().notEmpty().withMessage('truck_category is required')
-    .isIn(['small', 'medium', 'large', 'part']).withMessage('truck_category must be one of: small, medium, large, part'),
+    .isIn(BOOKING_TRUCK_CATEGORIES).withMessage(`truck_category must be one of: ${BOOKING_TRUCK_CATEGORIES.join(', ')}`),
   body('transport_type').optional({ nullable: true, checkFalsy: true })
     .isIn(TRANSPORT_TYPES).withMessage(`transport_type must be one of: ${TRANSPORT_TYPES.join(', ')}`),
   body('distance').notEmpty().withMessage('distance is required')

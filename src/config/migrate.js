@@ -1211,6 +1211,25 @@ const runMigrations = async (client) => {
       EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     `);
 
+    // ── VEHICLE PRICING RETAXONOMY (mirrors db/51vehicle_pricing.sql) ──
+    // Replaces the old broad small/medium/large truck sizing with 8 specific types (3 Wheeler,
+    // Tata Ace, Pickup 8ft/10ft, 14/17/19/22ft) — additive only, old values are NOT removed
+    // (Postgres can't cheaply drop enum values anyway, and existing trucks/bookings keep working
+    // under their old category rather than being force-migrated — see pricing.model.js's
+    // LEGACY_CATEGORY_TO_VEHICLE_TYPE / VEHICLE_TYPE_TO_LEGACY_BUCKET for how fare/halting-rate
+    // lookups still resolve a legacy category to something sensible). 'part' (part-load booking)
+    // is untouched — it was never a truck size to begin with.
+    await client.query(`
+      ALTER TYPE truck_category ADD VALUE IF NOT EXISTS '3_wheeler';
+      ALTER TYPE truck_category ADD VALUE IF NOT EXISTS 'tata_ace';
+      ALTER TYPE truck_category ADD VALUE IF NOT EXISTS 'pickup_8ft';
+      ALTER TYPE truck_category ADD VALUE IF NOT EXISTS 'pickup_10ft';
+      ALTER TYPE truck_category ADD VALUE IF NOT EXISTS '14ft';
+      ALTER TYPE truck_category ADD VALUE IF NOT EXISTS '17ft';
+      ALTER TYPE truck_category ADD VALUE IF NOT EXISTS '19ft';
+      ALTER TYPE truck_category ADD VALUE IF NOT EXISTS '22ft';
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

@@ -1,7 +1,10 @@
 const { body } = require('express-validator');
+const { TRUCK_TYPE_VALUES } = require('../constants/truckTypes');
 
 const PRICING_TYPES = ['fixed', 'per_km'];
-const TRUCK_CATEGORIES = ['small', 'medium', 'large', 'part'];
+// No historical data on this field (a client's desired truck type for the enquiry) and 'part'
+// load doesn't make sense here — this is about wanting a specific full truck for a month.
+const TRUCK_CATEGORIES = TRUCK_TYPE_VALUES;
 
 const createEnquiryValidation = [
   body('location').isString().trim().notEmpty().withMessage('location is required'),

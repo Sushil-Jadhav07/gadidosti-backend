@@ -1,4 +1,5 @@
 const { body } = require('express-validator');
+const { TRUCK_TYPE_VALUES, LEGACY_TRUCK_CATEGORIES } = require('../constants/truckTypes');
 
 const registerValidation = [];
 const loginValidation = [];
@@ -8,9 +9,9 @@ const loginValidation = [];
 // the two validation files don't otherwise depend on each other).
 const REGISTRATION_REGEX = /^[A-Z]{2}[-\s]?\d{1,2}[-\s]?[A-Z]{1,3}[-\s]?\d{1,4}$/i;
 // Mirrors vehicle.validation.js's TRUCK_CATEGORIES/CURRENT_YEAR — the "Truck Type" dropdown on
-// this form (Small/Medium/Large/Part) is the same category enum used everywhere else trucks
-// are created, not a separate freeform "type" field.
-const TRUCK_CATEGORIES = ['small', 'medium', 'large', 'part'];
+// this form is the same category enum used everywhere else trucks are created, not a separate
+// freeform "type" field.
+const TRUCK_CATEGORIES = [...TRUCK_TYPE_VALUES, ...LEGACY_TRUCK_CATEGORIES];
 const CURRENT_YEAR = new Date().getFullYear();
 
 // Self-service signup for an independent owner-operator driver — creates the account and

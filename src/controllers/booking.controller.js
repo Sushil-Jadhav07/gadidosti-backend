@@ -875,7 +875,7 @@ const quoteBooking = async (req, res, next) => {
     const {
       truck_category, transport_type = 'intra', distance,
       capacity_used_pct, duration_min, duration_in_traffic_min,
-      pickup_lat, pickup_lng, is_express,
+      pickup_lat, pickup_lng, is_express, drop_state,
     } = req.body;
 
     if (is_express && transport_type !== 'intra') {
@@ -892,6 +892,7 @@ const quoteBooking = async (req, res, next) => {
       pickupLat: pickup_lat,
       pickupLng: pickup_lng,
       isExpress: is_express,
+      dropState: drop_state,
     });
     // Estimated delivery DATE (not just days-from-now) — computed here since quoteBooking has
     // no scheduled_date/is_scheduled context of its own; always relative to "now", since a
@@ -1182,7 +1183,7 @@ const listEligibleBrokers = async (req, res, next) => {
 const createBooking = async (req, res, next) => {
   try {
     const {
-      pickup_location, pickup_lat, pickup_lng, drop_location, drop_lat, drop_lng,
+      pickup_location, pickup_lat, pickup_lng, drop_location, drop_lat, drop_lng, drop_state,
       truck_type, truck_category, weight, weight_unit, quantity, material,
       transport_type = 'intra', city, scheduled_date, distance, duration_min, duration_in_traffic_min,
       amount: providedAmount, payment_status, notes,
@@ -1217,6 +1218,7 @@ const createBooking = async (req, res, next) => {
         pickupLat: pickup_lat,
         pickupLng: pickup_lng,
         isExpress: is_express,
+        dropState: drop_state,
       });
       amount = amount != null ? amount : pricingBreakdown.total;
       platformFee = pricingBreakdown.platformFee;

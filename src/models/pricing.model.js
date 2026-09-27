@@ -14,6 +14,115 @@ const NEARBY_SURGE_MULTIPLIER = 1.05;
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
+// ─── VEHICLE PRICING (replaces the old flat per-category intra/inter split) ────────────────────
+// One unified, distance-tiered rate card per specific truck type — the per-km rate depends on
+// how far the trip is (shorter trips cost more per km), not on whether it's "intra-city" or
+// "inter-city"; that split still exists elsewhere (halting grace periods, SLA) but no longer
+// drives the base fare itself. Confirmed rate card, one column per truck type.
+const DISTANCE_BANDS_KM = [25, 50, 100, 300, 1000, 1500, 2000, null];
+
+const DEFAULT_VEHICLE_PRICING = {
+  '3_wheeler':   { minimumFare: 400,  ratesByBand: [35, 27, 32, 17, 12, 12, 12, 12] },
+  tata_ace:      { minimumFare: 800,  ratesByBand: [55, 32, 37, 20, 13, 13, 13, 13] },
+  pickup_8ft:    { minimumFare: 900,  ratesByBand: [65, 37, 47, 26, 15, 15, 15, 15] },
+  pickup_10ft:   { minimumFare: 1000, ratesByBand: [80, 53, 70, 30, 16, 16, 16, 16] },
+  '14ft':        { minimumFare: 1700, ratesByBand: [110, 68, 88, 33, 20, 20, 20, 20] },
+  '17ft':        { minimumFare: 2700, ratesByBand: [160, 100, 128, 36, 21, 21, 21, 21] },
+  '19ft':        { minimumFare: 3800, ratesByBand: [210, 122, 146, 40, 23, 23, 23, 23] },
+  '22ft':        { minimumFare: 4400, ratesByBand: [250, 142, 161, 43, 25, 25, 25, 25] },
+};
+
+// Flat per-km rates for a handful of far/harder-to-reach regions — override the distance-band
+// lookup above entirely when the drop-off falls in one of these zones (see getRegionZoneForState),
+// since a plain distance-based rate would undercharge routes that are this far out regardless of
+// exact km (tolls/permits/return-load scarcity). Priced above even the longest distance band.
+const DEFAULT_REGION_RATES = {
+  southEast:    { '3_wheeler': 17, tata_ace: 18, pickup_8ft: 20, pickup_10ft: 22, '14ft': 25, '17ft': 26, '19ft': 28, '22ft': 30 },
+  guwahatiSide: { '3_wheeler': 20, tata_ace: 21, pickup_8ft: 23, pickup_10ft: 24, '14ft': 27, '17ft': 29, '19ft': 31, '22ft': 33 },
+  kerala:       { '3_wheeler': 22, tata_ace: 25, pickup_8ft: 26, pickup_10ft: 26, '14ft': 29, '17ft': 31, '19ft': 33, '22ft': 35 },
+};
+
+// Which Indian states count as each named zone — a judgment call (not given explicitly), kept
+// here as plain admin-editable config rather than hardcoded logic so it can be corrected without
+// a deploy. southEast: the non-Kerala South, since Kerala gets its own row on the rate card.
+// guwahatiSide: the North-East states. Matched case-insensitively against the drop address's
+// state text (see getRegionZoneForState) — no drop state resolved just skips regional pricing
+// entirely and falls back to the normal distance band, same as an unmatched state would.
+const DEFAULT_REGION_ZONES = {
+  southEast: ['Tamil Nadu', 'Andhra Pradesh', 'Telangana', 'Karnataka', 'Puducherry'],
+  guwahatiSide: ['Assam', 'Meghalaya', 'Manipur', 'Mizoram', 'Nagaland', 'Tripura', 'Arunachal Pradesh', 'Sikkim'],
+  kerala: ['Kerala'],
+};
+
+// Old trucks/bookings that still carry a pre-retaxonomy category ('small'/'medium'/'large') —
+// kept valid in the DB (existing rows aren't force-migrated, see db/51vehicle_pricing.sql) but
+// need *some* vehicle-pricing entry to compute a fare against. Maps each to the new type it's
+// closest to, for pricing purposes only — never rewrites the stored category itself.
+const LEGACY_CATEGORY_TO_VEHICLE_TYPE = { small: 'pickup_8ft', medium: '14ft', large: '19ft' };
+
+// Same legacy trucks, but for the *other* direction: getHaltingRate below still reads the old
+// small/medium/large waitingCharge buckets (unchanged, out of scope for this pricing update), so
+// a new-taxonomy category needs to resolve back down to one of those three buckets.
+const VEHICLE_TYPE_TO_LEGACY_BUCKET = {
+  '3_wheeler': 'small', tata_ace: 'small', pickup_8ft: 'small',
+  pickup_10ft: 'medium', '14ft': 'medium',
+  '17ft': 'large', '19ft': 'large', '22ft': 'large',
+};
+
+const resolveVehicleTypeKey = (truckCategory) => {
+  if (DEFAULT_VEHICLE_PRICING[truckCategory]) return truckCategory;
+  return LEGACY_CATEGORY_TO_VEHICLE_TYPE[truckCategory] || '14ft';
+};
+
+// Case-insensitive match of the drop-off state against the configured zones — null if it's
+// blank or doesn't fall in any of them (normal distance-band pricing applies either way).
+const getRegionZoneForState = (config, dropState) => {
+  if (!dropState) return null;
+  const zones = (config?.regionZones && Object.keys(config.regionZones).length) ? config.regionZones : DEFAULT_REGION_ZONES;
+  const normalized = String(dropState).trim().toLowerCase();
+  for (const [zoneKey, states] of Object.entries(zones)) {
+    if ((states || []).some((s) => String(s).trim().toLowerCase() === normalized)) return zoneKey;
+  }
+  return null;
+};
+
+// The actual fare lookup — floors at minimumFare (a short trip is never cheaper than the floor),
+// otherwise dist * the applicable per-km rate (region override if the drop state matches one of
+// the named zones, else whichever distance band the total trip length falls into).
+// baseFare/distanceFare split is cosmetic (existing UI shows them as two line items) but always
+// sums to the true total: baseFare is exactly the minimum-fare floor, distanceFare is whatever's
+// owed on top of it (0 whenever the trip doesn't clear the floor at all).
+const computeVehicleFare = (distanceKm, truckCategory, dropState, config) => {
+  const dist = Number(distanceKm) || 0;
+  const key = resolveVehicleTypeKey(truckCategory);
+  const pricing = (config?.vehiclePricing && config.vehiclePricing[key]) || DEFAULT_VEHICLE_PRICING[key];
+  const minimumFare = Number(pricing.minimumFare) || 0;
+
+  const zone = getRegionZoneForState(config, dropState);
+  let ratePerKm = null;
+  let regionApplied = null;
+  if (zone) {
+    const regionRates = (config?.regionRates && Object.keys(config.regionRates).length) ? config.regionRates : DEFAULT_REGION_RATES;
+    const zoneRate = Number(regionRates?.[zone]?.[key]);
+    if (zoneRate > 0) {
+      ratePerKm = zoneRate;
+      regionApplied = zone;
+    }
+  }
+  if (ratePerKm == null) {
+    const rates = pricing.ratesByBand || DEFAULT_VEHICLE_PRICING[key].ratesByBand;
+    let idx = DISTANCE_BANDS_KM.findIndex((maxKm) => maxKm == null || dist <= maxKm);
+    if (idx === -1) idx = DISTANCE_BANDS_KM.length - 1;
+    ratePerKm = Number(rates[idx]) || 0;
+  }
+
+  const rawFare = round2(dist * ratePerKm);
+  const baseFare = minimumFare;
+  const distanceFare = round2(Math.max(0, rawFare - minimumFare));
+  const subtotal = round2(baseFare + distanceFare);
+  return { baseFare, distanceFare, subtotal, ratePerKm, minimumFareApplied: rawFare < minimumFare, regionApplied };
+};
+
 // Inter-city halting: above a 200km base threshold, a distance-tiered free grace period applies
 // before halting charges kick in (confirmed design — three tiers by distance band). The overage
 // rate reuses each truck category's existing (previously dead) intraCity.<category>.waitingCharge
@@ -35,10 +144,15 @@ const getHaltingTier = (distanceKm) => {
   return HALTING_TIERS.find((t) => dist > t.minKm && dist <= t.maxKm) || HALTING_TIERS[HALTING_TIERS.length - 1];
 };
 
-// Per-hour overage rate for a truck category — falls back to 'medium' for 'part' or an unknown
-// category, same fallback PricingModel.estimate already uses for intra-city base rates.
+// Per-hour overage rate for a truck category — the waiting-charge buckets themselves are still
+// only small/medium/large (unchanged, out of scope for the vehicle-pricing retaxonomy above), so
+// any of the 8 new specific truck types resolves down to whichever bucket it's closest in size to
+// (see VEHICLE_TYPE_TO_LEGACY_BUCKET), falling back to 'medium' only for 'part' or anything
+// genuinely unrecognized.
 const getHaltingRate = (config, truckCategory) => {
-  const category = ['small', 'medium', 'large'].includes(truckCategory) ? truckCategory : 'medium';
+  const category = ['small', 'medium', 'large'].includes(truckCategory)
+    ? truckCategory
+    : (VEHICLE_TYPE_TO_LEGACY_BUCKET[truckCategory] || 'medium');
   return Number(config?.intraCity?.[category]?.waitingCharge || 0);
 };
 
@@ -167,7 +281,7 @@ class PricingModel {
   // behavior change from before this multiplier existed).
   static async estimate({
     truckCategory, transportType, distance, capacityUsedPct, durationMin, durationInTrafficMin,
-    pickupLat, pickupLng, isExpress,
+    pickupLat, pickupLng, isExpress, dropState,
   }) {
     const configRow = await this.getConfig();
     if (!configRow) throw new Error('Pricing configuration not found');
@@ -219,12 +333,20 @@ class PricingModel {
       };
     }
 
+    // The base/distance fare itself now comes from the unified vehicle-pricing rate card
+    // (computeVehicleFare) regardless of intra/inter — fuel surcharge, toll and platform fee
+    // stay wired to their existing admin-configurable places (config.interCity /
+    // config.intraCity[<legacy bucket>]) since this update didn't touch those.
+    const legacyBucket = ['small', 'medium', 'large'].includes(truckCategory)
+      ? truckCategory
+      : (VEHICLE_TYPE_TO_LEGACY_BUCKET[truckCategory] || 'medium');
+
     if (transportType === 'inter') {
       const cfg = config.interCity || {};
-      const baseFare = round2(dist * (cfg.baseRatePerKm || 0));
-      const fuel = round2(baseFare * (cfg.fuelSurcharge || 0));
+      const { baseFare, distanceFare, ratePerKm, minimumFareApplied, regionApplied } = computeVehicleFare(dist, truckCategory, dropState, config);
+      const fuel = round2((baseFare + distanceFare) * (cfg.fuelSurcharge || 0));
       const toll = cfg.tollHandling === 'fixed' ? Number(cfg.tollFixedAmount || 0) : Number(cfg.tollFixedAmount || 0);
-      const subtotal = round2(baseFare + fuel + toll);
+      const subtotal = round2(baseFare + distanceFare + fuel + toll);
       const trafficSurcharge = round2(subtotal * (trafficMultiplier - 1));
       const supplySurcharge = round2(subtotal * (supplyMultiplier - 1));
       const adjustedSubtotal = round2(subtotal + trafficSurcharge + supplySurcharge);
@@ -234,10 +356,13 @@ class PricingModel {
       return {
         baseFare,
         distance: dist,
-        distanceFare: round2(fuel + toll), // client view groups fuel+toll into one distance-based figure
+        distanceFare: round2(distanceFare + fuel + toll), // client view groups distance+fuel+toll into one figure
         subtotal,
         fuel,
         toll,
+        ratePerKm,
+        minimumFareApplied,
+        regionApplied,
         trafficMultiplier,
         trafficSurcharge,
         nearbyTruckCount,
@@ -259,10 +384,10 @@ class PricingModel {
       };
     }
 
-    // intra-city — keyed per truck category (default to medium if an unknown category slips through)
-    const cfg = (config.intraCity && config.intraCity[truckCategory]) || config.intraCity?.medium || {};
-    const baseFare = Number(cfg.baseFare || 0);
-    const distanceFare = round2(dist * (cfg.perKmRate || 0) * (cfg.demandMultiplier || 1));
+    // intra-city — platformFee still comes from the legacy per-bucket config (unchanged); the
+    // fare itself is the same unified vehicle-pricing lookup used above.
+    const cfg = (config.intraCity && config.intraCity[legacyBucket]) || config.intraCity?.medium || {};
+    const { baseFare, distanceFare, ratePerKm, minimumFareApplied, regionApplied } = computeVehicleFare(dist, truckCategory, dropState, config);
     const subtotal = round2(baseFare + distanceFare);
     const trafficSurcharge = round2(subtotal * (trafficMultiplier - 1));
     const supplySurcharge = round2(subtotal * (supplyMultiplier - 1));
@@ -282,6 +407,7 @@ class PricingModel {
     return {
       baseFare, distance: dist, distanceFare, subtotal, trafficMultiplier, trafficSurcharge,
       nearbyTruckCount, supplyMultiplier, supplySurcharge, platformFee, total,
+      ratePerKm, minimumFareApplied, regionApplied,
       isExpress: expressActive,
       expressSurcharge,
       expectedDeliveryHours,
@@ -294,6 +420,12 @@ class PricingModel {
 PricingModel.getHaltingTier = getHaltingTier;
 PricingModel.getHaltingRate = getHaltingRate;
 PricingModel.computeAdvanceAmount = computeAdvanceAmount;
+PricingModel.computeVehicleFare = computeVehicleFare;
+PricingModel.getRegionZoneForState = getRegionZoneForState;
+PricingModel.DEFAULT_VEHICLE_PRICING = DEFAULT_VEHICLE_PRICING;
+PricingModel.DEFAULT_REGION_RATES = DEFAULT_REGION_RATES;
+PricingModel.DEFAULT_REGION_ZONES = DEFAULT_REGION_ZONES;
+PricingModel.DISTANCE_BANDS_KM = DISTANCE_BANDS_KM;
 PricingModel.DEFAULT_ADVANCE_TIERS = DEFAULT_ADVANCE_TIERS;
 PricingModel.HALTING_BASE_THRESHOLD_KM = HALTING_BASE_THRESHOLD_KM;
 PricingModel.getExpectedDeliveryHours = getExpectedDeliveryHours;

@@ -1,13 +1,15 @@
 const { successResponse, errorResponse } = require('../utils/response');
 const { getLocationProvider } = require('../providers/location');
 const PricingModel = require('../models/pricing.model');
+const { TRUCK_TYPES } = require('../constants/truckTypes');
 
 const locationProvider = getLocationProvider();
 
+// The 8 specific truck types (see constants/truckTypes.js) plus 'part' (part-load — a booking
+// mode, not a truck size, kept exactly as it was) — this is the live source BookTruck.jsx's
+// Step 3 truck-selection cards render from.
 const VEHICLE_TYPES = [
-  { id: 'small', name: 'Tata Ace / Pickup', capacity: 'Up to 1 Ton' },
-  { id: 'medium', name: 'Medium Truck', capacity: 'Up to 5 Tons' },
-  { id: 'large', name: 'Large Truck', capacity: 'Up to 20 Tons' },
+  ...TRUCK_TYPES.map((t) => ({ id: t.value, name: t.label, capacity: t.capacity })),
   { id: 'part', name: 'Part Truck', capacity: 'Share capacity with others', featured: true, savePercent: 40 },
 ];
 
@@ -15,17 +17,17 @@ const MATERIAL_TYPES = ['Electronics', 'FMCG', 'Construction', 'Furniture', 'Pha
 
 const CITIES = ['Mumbai', 'Pune', 'Delhi', 'Bengaluru', 'Chennai', 'Hyderabad', 'Jaipur', 'Ahmedabad', 'Surat', 'Nashik', 'Nagpur', 'Kolhapur', 'Indore', 'Goa', 'Aurangabad'];
 
-// Attaches the admin-configured base fare (pricing_config.intraCity.<id>.baseFare) to each
-// vehicle type, so the truck-selection card always reflects whatever Pricing Management
-// currently has saved — no hardcoded price ever ships in this response. Part truck has no
-// fixed base fare (billed by capacity used %, see PricingModel.estimate), so it stays null.
+// Attaches the admin-configured minimum fare (pricing_config.vehiclePricing.<id>.minimumFare) to
+// each vehicle type, so the truck-selection card always reflects whatever Pricing Management
+// currently has saved — no hardcoded price ever ships in this response. Part truck has no fixed
+// minimum fare (billed by capacity used %, see PricingModel.estimate), so it stays null.
 const listVehicleTypes = async (req, res, next) => {
   try {
     const configRow = await PricingModel.getConfig();
-    const intraCity = configRow?.config?.intraCity || {};
+    const vehiclePricing = configRow?.config?.vehiclePricing || {};
     const vehicleTypes = VEHICLE_TYPES.map((v) => ({
       ...v,
-      basePrice: intraCity[v.id]?.baseFare ?? null,
+      basePrice: vehiclePricing[v.id]?.minimumFare ?? PricingModel.DEFAULT_VEHICLE_PRICING[v.id]?.minimumFare ?? null,
     }));
     return successResponse(res, 200, 'Vehicle types fetched', { vehicleTypes });
   } catch (err) {
