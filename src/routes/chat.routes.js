@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const { getThreadForBooking, getThreadForDriver, getThreadWithMyBroker, listThreads, listMessages, sendMessage, sendBotAction, markThreadRead, getUnreadCount } = require('../controllers/chat.controller');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { sendMessageValidation } = require('../validations/chat.validation');
 
@@ -123,7 +123,7 @@ router.get('/chat/broker/thread', authenticate, authorize('driver'), getThreadWi
  *                       properties:
  *                         threads: { type: array, items: { type: object } }
  */
-router.get('/chat/threads', authenticate, listThreads);
+router.get('/chat/threads', authenticate, requireAdminPage('chats'), listThreads);
 
 /**
  * @swagger
@@ -168,7 +168,7 @@ router.get('/chat/threads', authenticate, listThreads);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/chat/threads/:threadId/messages', authenticate, listMessages);
+router.get('/chat/threads/:threadId/messages', authenticate, requireAdminPage('chats'), listMessages);
 
 /**
  * @swagger

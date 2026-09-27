@@ -153,13 +153,13 @@ const projectBooking = (row, timeline, role) => {
   // can already see the client's phone elsewhere, e.g. job_requests/driver_requests
   // projections) — client contact fields here are needed so the broker's invoice-email UI can
   // pre-fill a recipient, not just for admin.
-  if (role === 'admin' || role === 'broker') {
+  if (role === 'admin' || role === 'staff' || role === 'broker') {
     base.client = row.client_name;
     base.clientPhone = row.client_phone;
     base.clientEmail = row.client_email;
   }
 
-  if (role === 'admin') {
+  if (role === 'admin' || role === 'staff') {
     base.driverPhone = row.driver_phone;
     base.brokerPhone = row.broker_phone;
     // Only admin ever needs to know a booking was soft-deleted by its broker/driver — that's
@@ -182,7 +182,9 @@ const projectBooking = (row, timeline, role) => {
 };
 
 const assertCanView = (booking, user) => {
-  if (user.role === 'admin') return true;
+  // 'staff' only ever reaches here at all once requireAdminPage has confirmed they were granted
+  // the bookings/invoices page — same full-visibility treatment as admin at that point.
+  if (user.role === 'admin' || user.role === 'staff') return true;
   if (user.role === 'client') return booking.client_id === user.id;
   if (user.role === 'broker') return booking.broker_id === user.id;
   if (user.role === 'driver') return booking.driver_id === user.id;

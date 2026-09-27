@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const { listDevices, getDeviceByName, getDeviceByImei } = require('../controllers/tracking.controller');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 
 /**
  * @swagger
@@ -25,7 +25,7 @@ const { authenticate, authorize } = require('../middleware/auth.middleware');
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/tracking/devices', authenticate, authorize('admin'), listDevices);
+router.get('/tracking/devices', authenticate, authorize('admin', 'staff'), requireAdminPage('tracking'), listDevices);
 
 /**
  * @swagger
@@ -53,7 +53,7 @@ router.get('/tracking/devices', authenticate, authorize('admin'), listDevices);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/tracking/devices/name/:name', authenticate, getDeviceByName);
+router.get('/tracking/devices/name/:name', authenticate, requireAdminPage('tracking'), getDeviceByName);
 
 /**
  * @swagger
@@ -81,6 +81,6 @@ router.get('/tracking/devices/name/:name', authenticate, getDeviceByName);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/tracking/devices/imei/:imei', authenticate, getDeviceByImei);
+router.get('/tracking/devices/imei/:imei', authenticate, requireAdminPage('tracking'), getDeviceByImei);
 
 module.exports = router;

@@ -190,7 +190,9 @@ const getKycFile = async (req, res, next) => {
     const file = rows[0];
     if (!file) return errorResponse(res, 404, 'File not found');
 
-    if (req.user.role !== 'admin' && req.user.id !== file.user_id) {
+    // 'staff' only reaches here once requireAdminPage has confirmed 'kyc' page access — same
+    // full-visibility treatment as admin at that point.
+    if (!['admin', 'staff'].includes(req.user.role) && req.user.id !== file.user_id) {
       // A broker may fetch documents for a driver in their own fleet (broker_id match) —
       // same ownership rule as brokerVerifyKyc/brokerRejectKyc below.
       let allowed = false;

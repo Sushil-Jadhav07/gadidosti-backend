@@ -9,6 +9,7 @@ const {
   getUserById,
   updateUserByAdmin,
   updateUserStatus,
+  updateUserPagePermissions,
   forceLogoutUser,
   deleteUser,
 } = require('../controllers/user.controller');
@@ -19,12 +20,13 @@ const {
   registerDeviceToken,
   unregisterDeviceToken,
 } = require('../controllers/notification.controller');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const {
   updateProfileValidation,
   changePasswordValidation,
   updateUserStatusValidation,
+  updateUserPagePermissionsValidation,
 } = require('../validations/auth.validation');
 const { deviceTokenValidation, unregisterDeviceTokenValidation } = require('../validations/notification.validation');
 
@@ -405,7 +407,7 @@ router.delete('/users/device-token', authenticate, unregisterDeviceTokenValidati
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/admin/users', authenticate, authorize('admin'), getAllUsers);
+router.get('/admin/users', authenticate, authorize('admin', 'staff'), requireAdminPage('users'), getAllUsers);
 
 /**
  * @swagger
@@ -447,7 +449,7 @@ router.get('/admin/users', authenticate, authorize('admin'), getAllUsers);
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/admin/users/:id', authenticate, authorize('admin'), getUserById);
+router.get('/admin/users/:id', authenticate, authorize('admin', 'staff'), requireAdminPage('users'), getUserById);
 
 /**
  * @swagger
@@ -490,7 +492,7 @@ router.get('/admin/users/:id', authenticate, authorize('admin'), getUserById);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.patch('/admin/users/:id', authenticate, authorize('admin'), updateUserByAdmin);
+router.patch('/admin/users/:id', authenticate, authorize('admin', 'staff'), requireAdminPage('users'), updateUserByAdmin);
 
 /**
  * @swagger
@@ -549,7 +551,52 @@ router.patch('/admin/users/:id', authenticate, authorize('admin'), updateUserByA
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.patch('/admin/users/:id/status', authenticate, authorize('admin'), updateUserStatusValidation, validate, updateUserStatus);
+router.patch('/admin/users/:id/status', authenticate, authorize('admin', 'staff'), requireAdminPage('users'), updateUserStatusValidation, validate, updateUserStatus);
+
+/**
+ * @swagger
+ * /api/admin/users/{id}/permissions:
+ *   patch:
+ *     tags: [Admin Management]
+ *     summary: Set which admin-dashboard pages a staff account can access
+ *     description: Admin-only, cannot be granted to staff itself — a staff member must never be able to grant page access, including to their own account. Replaces the target's full page list (not a merge). Target must have role='staff'; has no effect on an admin account (which always has full access).
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [pages]
+ *             properties:
+ *               pages:
+ *                 type: array
+ *                 items: { type: string }
+ *                 example: ["bookings", "drivers", "trucks"]
+ *     responses:
+ *       200:
+ *         description: Page access updated
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       400:
+ *         description: Target isn't a staff account
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: User not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/admin/users/:id/permissions', authenticate, authorize('admin'), updateUserPagePermissionsValidation, validate, updateUserPagePermissions);
 
 /**
  * @swagger
@@ -582,7 +629,7 @@ router.patch('/admin/users/:id/status', authenticate, authorize('admin'), update
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/admin/users/:id/force-logout', authenticate, authorize('admin'), forceLogoutUser);
+router.post('/admin/users/:id/force-logout', authenticate, authorize('admin', 'staff'), requireAdminPage('users'), forceLogoutUser);
 
 /**
  * @swagger
@@ -621,6 +668,6 @@ router.post('/admin/users/:id/force-logout', authenticate, authorize('admin'), f
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.delete('/admin/users/:id', authenticate, authorize('admin'), deleteUser);
+router.delete('/admin/users/:id', authenticate, authorize('admin', 'staff'), requireAdminPage('users'), deleteUser);
 
 module.exports = router;

@@ -40,7 +40,7 @@ class UserModel {
     const result = await pool.query(
       `SELECT id, name, email, phone, role, status, is_phone_verified, is_email_verified,
               profile_image, address, company_name, kyc_status, last_login_at, created_at, updated_at,
-              sessions_valid_after
+              sessions_valid_after, page_permissions
        FROM users WHERE id = $1`,
       [id]
     );
@@ -118,7 +118,7 @@ class UserModel {
   static async findByEmail(email) {
     const result = await pool.query(
       `SELECT id, name, email, phone, password_hash, role, status,
-              is_phone_verified, is_email_verified, last_login_at
+              is_phone_verified, is_email_verified, last_login_at, page_permissions
        FROM users WHERE email = $1`,
       [email]
     );
@@ -181,6 +181,19 @@ class UserModel {
     return result.rows[0] || null;
   }
 
+  // Which admin-dashboard pages a 'staff' account can use — see auth.middleware.js's
+  // requireAdminPage. role='staff' guard is defensive: this column is a no-op for 'admin'
+  // anyway (never checked), but should never silently get set on one by mistake.
+  static async updatePagePermissions(id, pages) {
+    const result = await pool.query(
+      `UPDATE users SET page_permissions = $1::jsonb, updated_at = NOW()
+       WHERE id = $2 AND role = 'staff'
+       RETURNING id, name, email, phone, role, page_permissions, updated_at`,
+      [JSON.stringify(pages), id]
+    );
+    return result.rows[0] || null;
+  }
+
   // Soft delete (admin)
   static async delete(id) {
     await pool.query(
@@ -233,7 +246,7 @@ class UserModel {
 
     const usersResult = await pool.query(
       `SELECT id, name, email, phone, role, status, is_phone_verified, is_email_verified,
-              profile_image, kyc_status, last_login_at, created_at, updated_at
+              profile_image, kyc_status, last_login_at, created_at, updated_at, page_permissions
        FROM users ${where}
        ORDER BY created_at DESC
        LIMIT $${idx} OFFSET $${idx + 1}`,

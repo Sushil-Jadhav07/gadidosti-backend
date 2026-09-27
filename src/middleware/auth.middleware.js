@@ -59,4 +59,18 @@ const authorize = (...roles) => {
   };
 };
 
-module.exports = { authenticate, authorize };
+// Gates an admin-dashboard page (or, for an endpoint shared by more than one page — e.g.
+// GET /vehicles/trucks backs both the Trucks page and the Brokers page's fleet count — any of
+// several pages) for the 'staff' role. See db/58staff_page_permissions.sql. Only ever intercepts
+// role === 'staff'; every other role (admin, broker, driver, client) passes straight through,
+// since authorize(...) upstream already decided which roles reach this middleware at all. That's
+// what makes it safe to append to routes shared with other roles (e.g.
+// authorize('broker', 'admin', 'staff') truck/driver routes) without touching their behavior.
+const requireAdminPage = (...pageKeys) => (req, res, next) => {
+  if (req.user.role !== 'staff') return next();
+  const granted = Array.isArray(req.user.page_permissions) ? req.user.page_permissions : [];
+  if (pageKeys.some((key) => granted.includes(key))) return next();
+  return errorResponse(res, 403, "You don't have access to this page. Ask an admin to grant it.");
+};
+
+module.exports = { authenticate, authorize, requireAdminPage };

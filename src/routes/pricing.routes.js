@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const { getPricingConfig, updatePricingConfig } = require('../controllers/pricing.controller');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { updatePricingConfigValidation } = require('../validations/pricing.validation');
 
@@ -22,7 +22,7 @@ const { updatePricingConfigValidation } = require('../validations/pricing.valida
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
-router.get('/admin/pricing', authenticate, getPricingConfig);
+router.get('/admin/pricing', authenticate, requireAdminPage('pricing'), getPricingConfig);
 
 /**
  * @swagger
@@ -51,6 +51,6 @@ router.get('/admin/pricing', authenticate, getPricingConfig);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.put('/admin/pricing', authenticate, authorize('admin'), updatePricingConfigValidation, validate, updatePricingConfig);
+router.put('/admin/pricing', authenticate, authorize('admin', 'staff'), requireAdminPage('pricing'), updatePricingConfigValidation, validate, updatePricingConfig);
 
 module.exports = router;

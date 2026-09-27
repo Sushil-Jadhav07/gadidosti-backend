@@ -7,7 +7,7 @@ const {
   forceLogoutDriver, myAssignedTruck, updateMyStatus, updateDriverLocation, getMyUpiId, updateMyUpiId,
   getMyQrCode, uploadMyQrCode, deleteMyQrCode,
 } = require('../controllers/vehicle.controller');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const driverLocationRateLimit = require('../middleware/driverLocationRateLimit.middleware');
 const upload = require('../middleware/upload.middleware');
@@ -54,7 +54,7 @@ const {
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/vehicles/trucks', authenticate, authorize('broker', 'admin'), createTruckValidation, validate, createTruck);
+router.post('/vehicles/trucks', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('trucks'), createTruckValidation, validate, createTruck);
 
 /**
  * @swagger
@@ -81,7 +81,7 @@ router.post('/vehicles/trucks', authenticate, authorize('broker', 'admin'), crea
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
-router.get('/vehicles/trucks', authenticate, authorize('broker', 'admin'), listTrucks);
+router.get('/vehicles/trucks', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('trucks', 'brokers'), listTrucks);
 
 /**
  * @swagger
@@ -160,7 +160,7 @@ router.get('/vehicles/trucks/nearby', authenticate, nearbyTrucksValidation, vali
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin'), getTruck);
+router.get('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('trucks'), getTruck);
 
 /**
  * @swagger
@@ -197,7 +197,7 @@ router.get('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin'), g
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.patch('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin'), updateTruckValidation, validate, updateTruck);
+router.patch('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('trucks'), updateTruckValidation, validate, updateTruck);
 
 /**
  * @swagger
@@ -244,7 +244,7 @@ router.patch('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin'),
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/vehicles/trucks/:id/assign-driver', authenticate, authorize('broker', 'admin'), assignDriverValidation, validate, assignDriverToTruck);
+router.post('/vehicles/trucks/:id/assign-driver', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('trucks'), assignDriverValidation, validate, assignDriverToTruck);
 
 /**
  * @swagger
@@ -277,7 +277,7 @@ router.post('/vehicles/trucks/:id/assign-driver', authenticate, authorize('broke
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.delete('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin'), deleteTruck);
+router.delete('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('trucks'), deleteTruck);
 
 // ─── DRIVERS ──────────────────────────────────────────────────────────────────
 
@@ -317,7 +317,7 @@ router.delete('/vehicles/trucks/:id', authenticate, authorize('broker', 'admin')
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/vehicles/drivers/lookup', authenticate, authorize('broker', 'admin'), lookupDriverByPhone);
+router.get('/vehicles/drivers/lookup', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('drivers'), lookupDriverByPhone);
 
 /**
  * @swagger
@@ -355,7 +355,7 @@ router.get('/vehicles/drivers/lookup', authenticate, authorize('broker', 'admin'
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/vehicles/drivers', authenticate, authorize('broker', 'admin'), createDriverValidation, validate, createDriver);
+router.post('/vehicles/drivers', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('drivers'), createDriverValidation, validate, createDriver);
 
 /**
  * @swagger
@@ -393,7 +393,7 @@ router.post('/vehicles/drivers', authenticate, authorize('broker', 'admin'), cre
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/vehicles/drivers/register', authenticate, authorize('broker', 'admin'), registerDriverValidation, validate, registerDriver);
+router.post('/vehicles/drivers/register', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('drivers'), registerDriverValidation, validate, registerDriver);
 
 /**
  * @swagger
@@ -431,7 +431,7 @@ router.post('/vehicles/drivers/register', authenticate, authorize('broker', 'adm
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
-router.get('/vehicles/drivers', authenticate, authorize('broker', 'admin'), listDrivers);
+router.get('/vehicles/drivers', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('drivers'), listDrivers);
 
 /**
  * @swagger
@@ -693,7 +693,7 @@ router.delete('/vehicles/drivers/me/qr-code', authenticate, authorize('driver'),
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin'), getDriver);
+router.get('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('drivers'), getDriver);
 
 /**
  * @swagger
@@ -730,7 +730,7 @@ router.get('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin'), 
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.patch('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin'), updateDriverValidation, validate, updateDriver);
+router.patch('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('drivers'), updateDriverValidation, validate, updateDriver);
 
 /**
  * @swagger
@@ -762,7 +762,7 @@ router.patch('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin')
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.delete('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin'), deleteDriver);
+router.delete('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('drivers'), deleteDriver);
 
 /**
  * @swagger
@@ -795,6 +795,6 @@ router.delete('/vehicles/drivers/:id', authenticate, authorize('broker', 'admin'
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.post('/vehicles/drivers/:id/force-logout', authenticate, authorize('broker', 'admin'), forceLogoutDriver);
+router.post('/vehicles/drivers/:id/force-logout', authenticate, authorize('broker', 'admin', 'staff'), requireAdminPage('drivers'), forceLogoutDriver);
 
 module.exports = router;

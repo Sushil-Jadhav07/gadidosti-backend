@@ -3,7 +3,7 @@ const router = express.Router();
 
 const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, listBookingDriverRequests, rebroadcastBooking, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory } = require('../controllers/booking.controller');
 const { getBookingOffers } = require('../controllers/job.controller');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
 const { createBookingValidation, quoteBookingValidation } = require('../validations/booking.validation');
@@ -228,7 +228,10 @@ router.get('/bookings/eligible-brokers', authenticate, authorize('client'), list
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
-router.get('/bookings', authenticate, listBookings);
+// requireAdminPage no-ops for anyone except 'staff' (see auth.middleware.js) — client/broker/
+// driver/admin are completely unaffected; a staff account needs 'bookings' or 'invoices' (the
+// Invoices admin page reuses this exact endpoint) to see anything here at all.
+router.get('/bookings', authenticate, requireAdminPage('bookings', 'invoices'), listBookings);
 
 /**
  * @swagger
@@ -260,7 +263,7 @@ router.get('/bookings', authenticate, listBookings);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/bookings/:id', authenticate, getBooking);
+router.get('/bookings/:id', authenticate, requireAdminPage('bookings', 'invoices'), getBooking);
 
 /**
  * @swagger
@@ -902,7 +905,7 @@ router.post('/bookings/:id/rate', authenticate, authorize('client'), rateBooking
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.delete('/bookings/:id', authenticate, authorize('admin', 'broker', 'driver'), deleteBooking);
+router.delete('/bookings/:id', authenticate, authorize('admin', 'broker', 'driver', 'staff'), requireAdminPage('bookings'), deleteBooking);
 
 /**
  * @swagger

@@ -22,9 +22,9 @@ const projectDispute = (row, role) => {
     updatedAt: row.updated_at,
   };
 
-  // Contact numbers for every party on the booking — admin-only, so support can call whoever's
-  // relevant mid-dispute without needing to look up the booking separately.
-  if (role === 'admin') {
+  // Contact numbers for every party on the booking — admin/staff only, so support can call
+  // whoever's relevant mid-dispute without needing to look up the booking separately.
+  if (role === 'admin' || role === 'staff') {
     base.clientName = row.client_name;
     base.clientPhone = row.client_phone;
     base.brokerName = row.broker_name;
@@ -83,7 +83,10 @@ const listDisputes = async (req, res, next) => {
     const { status, issue_type, page = 1, limit = 10 } = req.query;
 
     const result = await DisputeModel.findAll({
-      scopeUserId: req.user.role === 'admin' ? undefined : req.user.id,
+      // 'staff' only reaches here once requireAdminPage has confirmed 'disputes' page access —
+      // same full-visibility treatment as admin at that point, not scoped to their own id (they
+      // never raise disputes themselves).
+      scopeUserId: ['admin', 'staff'].includes(req.user.role) ? undefined : req.user.id,
       status,
       issueType: issue_type,
       page: parseInt(page),
@@ -101,7 +104,7 @@ const getDispute = async (req, res, next) => {
   try {
     const dispute = await DisputeModel.findById(req.params.id);
     if (!dispute) return errorResponse(res, 404, 'Dispute not found');
-    if (req.user.role !== 'admin' && dispute.raised_by_user_id !== req.user.id) {
+    if (!['admin', 'staff'].includes(req.user.role) && dispute.raised_by_user_id !== req.user.id) {
       return errorResponse(res, 403, 'You do not have access to this dispute');
     }
 

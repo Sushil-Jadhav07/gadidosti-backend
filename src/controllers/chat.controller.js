@@ -78,7 +78,11 @@ const getThreadWithMyBroker = async (req, res, next) => {
 // exists, for admin. Powers the chat-list screen in every dashboard.
 const listThreads = async (req, res, next) => {
   try {
-    const rows = await ChatThreadModel.listForUser(req.user);
+    // ChatThreadModel.listForUser's WHERE clause checks role === 'admin' for full visibility —
+    // 'staff' only reaches here once requireAdminPage has confirmed 'chats' page access, so it
+    // gets the same treatment without needing the SQL itself to know about a 3rd role.
+    const scopedUser = req.user.role === 'staff' ? { ...req.user, role: 'admin' } : req.user;
+    const rows = await ChatThreadModel.listForUser(scopedUser);
     return successResponse(res, 200, 'Threads fetched', { threads: rows.map(chatService.projectThreadListItem) });
   } catch (err) {
     next(err);

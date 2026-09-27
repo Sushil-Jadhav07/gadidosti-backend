@@ -22,7 +22,7 @@ const {
   sendAadhaarOtp,
   verifyAadhaarOtp,
 } = require('../controllers/kyc.controller');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const upload = require('../middleware/upload.middleware');
 const {
@@ -301,7 +301,7 @@ router.get('/kyc/documents', authenticate, authorize('broker', 'driver'), listMy
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/kyc/documents/file/:id', authenticate, authorize('broker', 'driver', 'admin'), getKycFile);
+router.get('/kyc/documents/file/:id', authenticate, authorize('broker', 'driver', 'admin', 'staff'), requireAdminPage('kyc'), getKycFile);
 
 /**
  * @swagger
@@ -416,7 +416,7 @@ router.get('/kyc/:userId', authenticate, authorize('broker', 'driver'), getKycBy
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/admin/kyc/pending', authenticate, authorize('admin'), getAllKyc);
+router.get('/admin/kyc/pending', authenticate, authorize('admin', 'staff'), requireAdminPage('kyc'), getAllKyc);
 
 /**
  * @swagger
@@ -445,7 +445,7 @@ router.get('/admin/kyc/pending', authenticate, authorize('admin'), getAllKyc);
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/admin/kyc/:userId', authenticate, authorize('admin'), getUserKyc);
+router.get('/admin/kyc/:userId', authenticate, authorize('admin', 'staff'), requireAdminPage('kyc'), getUserKyc);
 
 /**
  * @swagger
@@ -473,7 +473,7 @@ router.get('/admin/kyc/:userId', authenticate, authorize('admin'), getUserKyc);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/admin/kyc/:userId/documents', authenticate, authorize('admin'), listUserKycDocuments);
+router.get('/admin/kyc/:userId/documents', authenticate, authorize('admin', 'staff'), requireAdminPage('kyc'), listUserKycDocuments);
 
 /**
  * @swagger
@@ -509,7 +509,7 @@ router.get('/admin/kyc/:userId/documents', authenticate, authorize('admin'), lis
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.patch('/admin/kyc/:userId/verify', authenticate, authorize('admin'), verifyKyc);
+router.patch('/admin/kyc/:userId/verify', authenticate, authorize('admin', 'staff'), requireAdminPage('kyc'), verifyKyc);
 
 /**
  * @swagger
@@ -560,7 +560,7 @@ router.patch('/admin/kyc/:userId/verify', authenticate, authorize('admin'), veri
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.patch('/admin/kyc/:userId/reject', authenticate, authorize('admin'), rejectKycValidation, validate, rejectKyc);
+router.patch('/admin/kyc/:userId/reject', authenticate, authorize('admin', 'staff'), requireAdminPage('kyc'), rejectKycValidation, validate, rejectKyc);
 
 // ─── Broker — KYC review for own fleet ──────────────────────────────────────────
 // Same shape as the admin endpoints above, but scoped to drivers whose driver_profiles.broker_id

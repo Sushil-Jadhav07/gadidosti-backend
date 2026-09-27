@@ -27,7 +27,9 @@ const isLocked = (booking) => LOCKED_BOOKING_STATUSES.includes(booking.status);
 
 // Admin can always view (read-only history is still visible after locking, for
 // support/dispute purposes) — only actual participants can send, and only while unlocked.
-const canView = (booking, user) => user.role === 'admin' || isParticipant(booking, user.id);
+// 'staff' only ever reaches a chat route at all once requireAdminPage has confirmed 'chats' page
+// access (see chat.routes.js) — same full-visibility treatment as admin at that point.
+const canView = (booking, user) => user.role === 'admin' || user.role === 'staff' || isParticipant(booking, user.id);
 const canSend = (booking, user) => {
   if (isLocked(booking)) return false;
   return user.role === 'admin' || isParticipant(booking, user.id);

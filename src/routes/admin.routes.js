@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const { getDashboard, getAdminAnalytics, getSettings, updateSettings, listOpenIncidents } = require('../controllers/admin.controller');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { updateSettingsValidation } = require('../validations/admin.validation');
 
@@ -32,7 +32,7 @@ const { updateSettingsValidation } = require('../validations/admin.validation');
  *                           properties:
  *                             openIncidents: { type: integer, description: 'Count of unresolved trip_incidents platform-wide — see GET /api/admin/incidents for the full list' }
  */
-router.get('/admin/dashboard', authenticate, authorize('admin'), getDashboard);
+router.get('/admin/dashboard', authenticate, authorize('admin', 'staff'), requireAdminPage('dashboard'), getDashboard);
 
 /**
  * @swagger
@@ -69,7 +69,7 @@ router.get('/admin/dashboard', authenticate, authorize('admin'), getDashboard);
  *                         limit:       { type: integer }
  *                         total_pages: { type: integer }
  */
-router.get('/admin/incidents', authenticate, authorize('admin'), listOpenIncidents);
+router.get('/admin/incidents', authenticate, authorize('admin', 'staff'), requireAdminPage('incidents'), listOpenIncidents);
 
 /**
  * @swagger
@@ -87,7 +87,7 @@ router.get('/admin/incidents', authenticate, authorize('admin'), listOpenInciden
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
-router.get('/analytics/admin', authenticate, authorize('admin'), getAdminAnalytics);
+router.get('/analytics/admin', authenticate, authorize('admin', 'staff'), requireAdminPage('analytics'), getAdminAnalytics);
 
 /**
  * @swagger
@@ -104,7 +104,7 @@ router.get('/analytics/admin', authenticate, authorize('admin'), getAdminAnalyti
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
-router.get('/admin/settings', authenticate, authorize('admin'), getSettings);
+router.get('/admin/settings', authenticate, authorize('admin', 'staff'), requireAdminPage('settings'), getSettings);
 
 /**
  * @swagger
@@ -131,6 +131,6 @@ router.get('/admin/settings', authenticate, authorize('admin'), getSettings);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.put('/admin/settings', authenticate, authorize('admin'), updateSettingsValidation, validate, updateSettings);
+router.put('/admin/settings', authenticate, authorize('admin', 'staff'), requireAdminPage('settings'), updateSettingsValidation, validate, updateSettings);
 
 module.exports = router;

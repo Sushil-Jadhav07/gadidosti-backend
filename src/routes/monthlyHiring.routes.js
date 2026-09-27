@@ -6,7 +6,7 @@ const {
   createListing, listMyListings, updateListingStatus, deleteListing,
   adminListEnquiries, adminUpdateEnquiryStatus, adminListListings,
 } = require('../controllers/monthlyHiring.controller');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const {
   createEnquiryValidation, createListingValidation, updateListingStatusValidation, adminUpdateEnquiryStatusValidation,
@@ -23,10 +23,10 @@ router.patch('/monthly-hiring/listings/:id', authenticate, authorize('driver', '
 router.delete('/monthly-hiring/listings/:id', authenticate, authorize('driver', 'broker'), deleteListing);
 
 // ─── Admin ───────────────────────────────────────────────────────────────────────
-// 'staff' deliberately excluded — same as every other authorize('admin')-only route (see
-// db/48add_staff_role.sql: staff has no permission differences from admin defined yet).
-router.get('/admin/monthly-hiring/enquiries', authenticate, authorize('admin'), adminListEnquiries);
-router.patch('/admin/monthly-hiring/enquiries/:id/status', authenticate, authorize('admin'), adminUpdateEnquiryStatusValidation, validate, adminUpdateEnquiryStatus);
-router.get('/admin/monthly-hiring/listings', authenticate, authorize('admin'), adminListListings);
+// 'staff' now included, gated per-page (see db/58staff_page_permissions.sql) — the blanket
+// exclusion noted in db/48add_staff_role.sql is exactly what this replaces.
+router.get('/admin/monthly-hiring/enquiries', authenticate, authorize('admin', 'staff'), requireAdminPage('monthly_hiring'), adminListEnquiries);
+router.patch('/admin/monthly-hiring/enquiries/:id/status', authenticate, authorize('admin', 'staff'), requireAdminPage('monthly_hiring'), adminUpdateEnquiryStatusValidation, validate, adminUpdateEnquiryStatus);
+router.get('/admin/monthly-hiring/listings', authenticate, authorize('admin', 'staff'), requireAdminPage('monthly_hiring'), adminListListings);
 
 module.exports = router;

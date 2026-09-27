@@ -1281,6 +1281,18 @@ const runMigrations = async (client) => {
       ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS aadhaar_otp_sent_at TIMESTAMPTZ;
     `);
 
+    // ── STAFF PER-PAGE ACCESS CONTROL (mirrors db/58staff_page_permissions.sql) ──
+    // 'staff' (see 48add_staff_role.sql) has been creatable for a while but every admin route
+    // still flatly requires role='admin', so a staff account could log in but nothing worked.
+    // This column is what an admin grants: which admin-dashboard pages a given staff account can
+    // use, by page key (e.g. 'bookings', 'drivers') — see auth.middleware.js's requireAdminPage.
+    // Defaults to empty — a staff account has zero access until an admin explicitly grants pages,
+    // deliberately, for both new AND already-existing staff rows. Meaningless for role='admin',
+    // which stays full-access regardless (never checked).
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS page_permissions JSONB NOT NULL DEFAULT '[]'::jsonb;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const { createDispute, listDisputes, getDispute, resolveDispute } = require('../controllers/dispute.controller');
-const { authenticate, authorize } = require('../middleware/auth.middleware');
+const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { createDisputeValidation, resolveDisputeValidation } = require('../validations/dispute.validation');
 
@@ -87,7 +87,9 @@ router.post('/disputes', authenticate, authorize('client', 'broker'), createDisp
  *                         limit:       { type: integer }
  *                         total_pages: { type: integer }
  */
-router.get('/disputes', authenticate, listDisputes);
+// requireAdminPage no-ops for anyone except 'staff' — client/broker raising/viewing their own
+// disputes are completely unaffected.
+router.get('/disputes', authenticate, requireAdminPage('disputes'), listDisputes);
 
 /**
  * @swagger
@@ -122,7 +124,7 @@ router.get('/disputes', authenticate, listDisputes);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/disputes/:id', authenticate, getDispute);
+router.get('/disputes/:id', authenticate, requireAdminPage('disputes'), getDispute);
 
 /**
  * @swagger
@@ -166,6 +168,6 @@ router.get('/disputes/:id', authenticate, getDispute);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.patch('/disputes/:id/resolve', authenticate, authorize('admin'), resolveDisputeValidation, validate, resolveDispute);
+router.patch('/disputes/:id/resolve', authenticate, authorize('admin', 'staff'), requireAdminPage('disputes'), resolveDisputeValidation, validate, resolveDispute);
 
 module.exports = router;

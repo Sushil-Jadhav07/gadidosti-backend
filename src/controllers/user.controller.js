@@ -196,6 +196,39 @@ const updateUserStatus = async (req, res, next) => {
   }
 };
 
+// ─── PATCH /api/admin/users/:id/permissions ───────────────────────────────────
+// admin-only (never 'staff' — see auth.routes wiring) — a staff member must never be able to
+// grant page access, including to themselves. `pages` is validated against the known page-key
+// whitelist by updateUserPagePermissionsValidation before this runs.
+const updateUserPagePermissions = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { pages } = req.body;
+
+    const targetUser = await UserModel.findById(id);
+    if (!targetUser) return errorResponse(res, 404, 'User not found');
+    if (targetUser.role !== 'staff') {
+      return errorResponse(res, 400, 'Page access only applies to staff accounts — admin already has full access');
+    }
+
+    const updated = await UserModel.updatePagePermissions(id, pages);
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'STAFF_PERMISSIONS_UPDATED',
+      entity: 'users',
+      entityId: id,
+      meta: { previous_pages: targetUser.page_permissions, new_pages: pages },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Admin ${req.user.id} set staff ${id}'s page access to: ${pages.join(', ') || '(none)'}`);
+    return successResponse(res, 200, 'Page access updated', { user: updated });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── POST /api/admin/users/:id/force-logout ───────────────────────────────────
 // The operational escape hatch for the single-active-session rule on driver logins (see
 // auth.controller.js's hasBlockingDriverSession): if a driver's app was killed/lost
@@ -289,6 +322,7 @@ module.exports = {
   getUserById,
   updateUserByAdmin,
   updateUserStatus,
+  updateUserPagePermissions,
   forceLogoutUser,
   deleteUser,
 };

@@ -1,5 +1,6 @@
 const { body } = require('express-validator');
 const { TRUCK_TYPE_VALUES, LEGACY_TRUCK_CATEGORIES } = require('../constants/truckTypes');
+const { ADMIN_PAGE_KEYS } = require('../constants/adminPages');
 
 const registerValidation = [];
 const loginValidation = [];
@@ -62,6 +63,12 @@ const changePasswordValidation = [];
 const googleSignInValidation = [];
 const updateUserStatusValidation = [];
 
+// ─── PATCH /api/admin/users/:id/permissions ────────────────────────────────────
+const updateUserPagePermissionsValidation = [
+  body('pages').isArray().withMessage('pages must be an array'),
+  body('pages.*').isIn(ADMIN_PAGE_KEYS).withMessage(`Each page must be one of: ${ADMIN_PAGE_KEYS.join(', ')}`),
+];
+
 module.exports = {
   registerValidation,
   registerAdminValidation,
@@ -76,4 +83,5 @@ module.exports = {
   changePasswordValidation,
   googleSignInValidation,
   updateUserStatusValidation,
+  updateUserPagePermissionsValidation,
 };
