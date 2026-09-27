@@ -1230,6 +1230,25 @@ const runMigrations = async (client) => {
       ALTER TYPE truck_category ADD VALUE IF NOT EXISTS '22ft';
     `);
 
+    // ── MONTHLY HIRING START/END DATE (mirrors db/52monthly_hiring_dates.sql) ──
+    // duration_months (a vague "how many months") is replaced by exact start_date/end_date —
+    // duration_months itself is kept (nullable, no longer collected on the form) for old rows,
+    // and now computed server-side from the date range for display rather than user-entered
+    // (see monthlyHiring.controller.js's createEnquiry).
+    await client.query(`
+      ALTER TABLE monthly_hiring_enquiries ADD COLUMN IF NOT EXISTS start_date DATE;
+      ALTER TABLE monthly_hiring_enquiries ADD COLUMN IF NOT EXISTS end_date DATE;
+    `);
+
+    // ── DRIVER PAYMENT QR UPLOAD (mirrors db/53driver_qr_code.sql) ──
+    // Lets a driver upload a photo of their own bank/UPI app's QR code as an alternative to (or
+    // alongside) the generated UPI-intent QR — some drivers' banks don't support the intent
+    // format cleanly, or they just prefer their own app's code. Same storage-provider pattern as
+    // KYC documents (see kyc.controller.js's uploadKycDocument) — this column just holds the URL.
+    await client.query(`
+      ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS qr_code_url TEXT;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

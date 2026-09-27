@@ -7,12 +7,12 @@ const SELECT_WITH_JOINS = `
 `;
 
 class MonthlyHiringEnquiryModel {
-  static async create({ clientId, location, truckCategory, durationMonths, pricingType, budgetAmount, description }) {
+  static async create({ clientId, location, truckCategory, startDate, endDate, durationMonths, pricingType, budgetAmount, description }) {
     const result = await pool.query(
-      `INSERT INTO monthly_hiring_enquiries (client_id, location, truck_category, duration_months, pricing_type, budget_amount, description)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO monthly_hiring_enquiries (client_id, location, truck_category, start_date, end_date, duration_months, pricing_type, budget_amount, description)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
-      [clientId, location, truckCategory || null, durationMonths || null, pricingType, budgetAmount || null, description || null]
+      [clientId, location, truckCategory || null, startDate || null, endDate || null, durationMonths || null, pricingType, budgetAmount || null, description || null]
     );
     return result.rows[0];
   }

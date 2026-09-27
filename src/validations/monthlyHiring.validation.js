@@ -10,7 +10,10 @@ const createEnquiryValidation = [
   body('location').isString().trim().notEmpty().withMessage('location is required'),
   body('pricing_type').isIn(PRICING_TYPES).withMessage(`pricing_type must be one of ${PRICING_TYPES.join(', ')}`),
   body('truck_category').optional().isIn(TRUCK_CATEGORIES).withMessage(`truck_category must be one of ${TRUCK_CATEGORIES.join(', ')}`),
-  body('duration_months').optional().isInt({ min: 1 }).withMessage('duration_months must be a positive number'),
+  body('start_date').isISO8601().withMessage('start_date is required and must be a valid date'),
+  body('end_date').isISO8601().withMessage('end_date is required and must be a valid date')
+    .custom((value, { req }) => !req.body.start_date || new Date(value) > new Date(req.body.start_date))
+    .withMessage('end_date must be after start_date'),
   body('budget_amount').optional().isFloat({ min: 0 }).withMessage('budget_amount must be a positive number'),
   body('description').optional().isString().trim().isLength({ max: 2000 }),
 ];

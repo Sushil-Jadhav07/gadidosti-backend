@@ -12,6 +12,8 @@ const projectEnquiry = (row) => ({
   clientEmail: row.client_email,
   location: row.location,
   truckCategory: row.truck_category,
+  startDate: row.start_date,
+  endDate: row.end_date,
   durationMonths: row.duration_months,
   pricingType: row.pricing_type,
   budgetAmount: row.budget_amount != null ? Number(row.budget_amount) : null,
@@ -46,13 +48,23 @@ const projectListing = (row) => ({
 // creates any matching booking.
 const createEnquiry = async (req, res, next) => {
   try {
-    const { location, truck_category, duration_months, pricing_type, budget_amount, description } = req.body;
+    const { location, truck_category, start_date, end_date, pricing_type, budget_amount, description } = req.body;
+
+    // duration_months is no longer collected from the client — computed here from the exact
+    // date range instead (rounded up, so a 45-day hire reads as "2 months" rather than "1.5").
+    // Not stored if only one of start/end is given (shouldn't happen — both are required by
+    // validation — but stays null rather than a nonsense partial calculation either way).
+    const durationMonths = start_date && end_date
+      ? Math.max(1, Math.ceil((new Date(end_date) - new Date(start_date)) / (1000 * 60 * 60 * 24 * 30)))
+      : null;
 
     const enquiry = await MonthlyHiringEnquiryModel.create({
       clientId: req.user.id,
       location,
       truckCategory: truck_category,
-      durationMonths: duration_months,
+      startDate: start_date,
+      endDate: end_date,
+      durationMonths,
       pricingType: pricing_type,
       budgetAmount: budget_amount,
       description,
