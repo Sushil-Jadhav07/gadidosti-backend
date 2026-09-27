@@ -38,7 +38,7 @@ class KycModel {
   // from an admin verification, without needing a separate column on kyc_submissions.
   static async findByUserId(userId) {
     const result = await pool.query(
-      `SELECT k.id, k.user_id, k.documents, k.rejection_reason, k.reviewed_at, k.submitted_at, k.updated_at,
+      `SELECT k.id, k.user_id, k.documents, k.verification_results, k.rejection_reason, k.reviewed_at, k.submitted_at, k.updated_at,
               k.reviewed_by, r.name AS reviewer_name, r.role AS reviewer_role
        FROM kyc_submissions k
        LEFT JOIN users r ON r.id = k.reviewed_by
@@ -86,7 +86,7 @@ class KycModel {
 
     const rows = await pool.query(
       `SELECT u.id AS user_id, u.name, u.email, u.phone, u.role, u.kyc_status, u.created_at AS registered_at,
-              k.documents, k.rejection_reason, k.reviewed_at, k.submitted_at,
+              k.documents, k.verification_results, k.rejection_reason, k.reviewed_at, k.submitted_at,
               k.reviewed_by, r.name AS reviewer_name, r.role AS reviewer_role
        FROM users u
        LEFT JOIN kyc_submissions k ON k.user_id = u.id
@@ -132,6 +132,24 @@ class KycModel {
       [userId]
     );
     return result.rows;
+  }
+
+  // Merges one automated verification result (key: 'pan' | 'drivingLicense' | 'aadhaar') into
+  // verification_results, creating a bare submission row first if the user hasn't submitted
+  // anything yet — a check can run the moment a field is filled in, before the final Submit tap.
+  // Deliberately a separate UPDATE from upsertSubmission (see that method's comment) so a later
+  // resubmission never wipes an already-recorded result.
+  static async updateVerificationResult(userId, key, result) {
+    const resultQuery = await pool.query(
+      `INSERT INTO kyc_submissions (user_id, verification_results, updated_at)
+       VALUES ($1, jsonb_build_object($2::text, $3::jsonb), NOW())
+       ON CONFLICT (user_id) DO UPDATE
+         SET verification_results = COALESCE(kyc_submissions.verification_results, '{}'::jsonb) || jsonb_build_object($2::text, $3::jsonb),
+             updated_at = NOW()
+       RETURNING id, user_id, verification_results`,
+      [userId, key, JSON.stringify(result)]
+    );
+    return resultQuery.rows[0];
   }
 
   // Admin: approve or reject a user's KYC

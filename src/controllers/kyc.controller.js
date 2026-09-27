@@ -8,8 +8,10 @@ const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 const { getStorageProvider } = require('../providers/storage');
 const { getFileUrl, toAbsoluteUrl } = require('../utils/fileUrl');
+const { getVerificationProvider } = require('../providers/verification');
 
 const storageProvider = getStorageProvider();
+const verificationProvider = getVerificationProvider();
 
 // ─── POST /api/kyc/broker, POST /api/kyc/driver ─────────────────────────────────
 // Shared handler — role-specific required fields are enforced by validation
@@ -459,6 +461,99 @@ const brokerRejectKyc = async (req, res, next) => {
   }
 };
 
+// ─── Automated verification (Cashfree, or the fake provider — see src/providers/verification) ──
+// Deliberately assistive, not a gate: a driver/broker can call these the moment they've typed a
+// field, before ever hitting the final Submit — the result is stored immediately either way, so
+// it survives even if they never submit that session. Nothing here auto-approves/auto-rejects
+// KYC; the admin/broker reviewer sees the result alongside the documents and still makes that
+// call themselves (see KycModel.updateVerificationResult's own reasoning).
+
+// ─── POST /api/kyc/verify/pan ──────────────────────────────────────────────────
+const verifyPan = async (req, res, next) => {
+  try {
+    const { pan, name } = req.body;
+    if (!pan) return errorResponse(res, 422, 'pan is required');
+
+    const result = await verificationProvider.verifyPan({ pan, name });
+    await KycModel.updateVerificationResult(req.user.id, 'pan', result);
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'KYC_PAN_VERIFICATION_ATTEMPTED', entity: 'kyc_submissions',
+      entityId: req.user.id, meta: { status: result.status }, ipAddress: req.ip,
+    });
+
+    logger.info(`PAN verification for ${req.user.id}: ${result.status}`);
+    return successResponse(res, 200, result.status === 'verified' ? 'PAN verified' : 'PAN verification did not pass', result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/kyc/verify/driving-license ──────────────────────────────────────
+const verifyDrivingLicense = async (req, res, next) => {
+  try {
+    const { dl_number, dob } = req.body;
+    if (!dl_number || !dob) return errorResponse(res, 422, 'dl_number and dob are both required');
+
+    const result = await verificationProvider.verifyDrivingLicense({ dlNumber: dl_number, dob });
+    await KycModel.updateVerificationResult(req.user.id, 'drivingLicense', result);
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'KYC_DL_VERIFICATION_ATTEMPTED', entity: 'kyc_submissions',
+      entityId: req.user.id, meta: { status: result.status }, ipAddress: req.ip,
+    });
+
+    logger.info(`Driving license verification for ${req.user.id}: ${result.status}`);
+    return successResponse(res, 200, result.status === 'verified' ? 'Driving license verified' : 'Driving license verification did not pass', result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/kyc/verify/aadhaar/send-otp ─────────────────────────────────────
+// Aadhaar can't be verified in one call like PAN/DL — Cashfree sends an OTP to the mobile
+// number linked to the Aadhaar, which the user has to actually receive and type back in (see
+// verifyAadhaarOtp below). refId here must be passed back on that second call.
+const sendAadhaarOtp = async (req, res, next) => {
+  try {
+    const { aadhaar_number } = req.body;
+    if (!aadhaar_number) return errorResponse(res, 422, 'aadhaar_number is required');
+
+    const { refId, status } = await verificationProvider.sendAadhaarOtp(aadhaar_number);
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'KYC_AADHAAR_OTP_SENT', entity: 'kyc_submissions',
+      entityId: req.user.id, ipAddress: req.ip,
+    });
+
+    logger.info(`Aadhaar OTP sent for ${req.user.id}`);
+    return successResponse(res, 200, 'OTP sent to the mobile number linked to this Aadhaar', { refId, status });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/kyc/verify/aadhaar/verify-otp ───────────────────────────────────
+const verifyAadhaarOtp = async (req, res, next) => {
+  try {
+    const { ref_id, otp } = req.body;
+    if (!ref_id || !otp) return errorResponse(res, 422, 'ref_id and otp are both required');
+
+    const result = await verificationProvider.verifyAadhaarOtp({ refId: ref_id, otp });
+    await KycModel.updateVerificationResult(req.user.id, 'aadhaar', result);
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'KYC_AADHAAR_VERIFICATION_ATTEMPTED', entity: 'kyc_submissions',
+      entityId: req.user.id, meta: { status: result.status }, ipAddress: req.ip,
+    });
+
+    logger.info(`Aadhaar verification for ${req.user.id}: ${result.status}`);
+    return successResponse(res, 200, result.status === 'verified' ? 'Aadhaar verified' : 'Aadhaar verification did not pass', result);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   submitKyc,
   uploadKycDocument,
@@ -475,4 +570,8 @@ module.exports = {
   listDriverKycDocumentsForBroker,
   brokerVerifyKyc,
   brokerRejectKyc,
+  verifyPan,
+  verifyDrivingLicense,
+  sendAadhaarOtp,
+  verifyAadhaarOtp,
 };

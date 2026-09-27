@@ -17,6 +17,10 @@ const {
   listDriverKycDocumentsForBroker,
   brokerVerifyKyc,
   brokerRejectKyc,
+  verifyPan,
+  verifyDrivingLicense,
+  sendAadhaarOtp,
+  verifyAadhaarOtp,
 } = require('../controllers/kyc.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -26,6 +30,10 @@ const {
   submitDriverKycValidation,
   rejectKycValidation,
   uploadKycDocumentValidation,
+  verifyPanValidation,
+  verifyDrivingLicenseValidation,
+  sendAadhaarOtpValidation,
+  verifyAadhaarOtpValidation,
 } = require('../validations/kyc.validation');
 
 // ─── Broker/Driver — submit KYC ──────────────────────────────────────────────
@@ -684,5 +692,104 @@ router.patch('/broker/kyc/:driverId/verify', authenticate, authorize('broker'), 
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/broker/kyc/:driverId/reject', authenticate, authorize('broker'), rejectKycValidation, validate, brokerRejectKyc);
+
+// ─── Automated verification (Cashfree, or the fake provider) ────────────────────
+// Callable by the driver/broker themselves, any time — before the final KYC submit, not just
+// after. Purely assistive: stores a result the reviewer sees, never auto-approves/rejects.
+
+/**
+ * @swagger
+ * /api/kyc/verify/pan:
+ *   post:
+ *     tags: [KYC]
+ *     summary: Verify a PAN number (broker or driver)
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [pan]
+ *             properties:
+ *               pan: { type: string, example: "ABCDE1234F" }
+ *               name: { type: string, example: "Rakesh Kumar" }
+ *     responses:
+ *       200:
+ *         description: Result of the verification attempt (status 'verified' or 'failed')
+ */
+router.post('/kyc/verify/pan', authenticate, authorize('broker', 'driver'), verifyPanValidation, validate, verifyPan);
+
+/**
+ * @swagger
+ * /api/kyc/verify/driving-license:
+ *   post:
+ *     tags: [KYC]
+ *     summary: Verify a driving license (driver only)
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [dl_number, dob]
+ *             properties:
+ *               dl_number: { type: string, example: "MH1220190012345" }
+ *               dob: { type: string, format: date, example: "1994-08-05" }
+ *     responses:
+ *       200:
+ *         description: Result of the verification attempt (status 'verified' or 'failed')
+ */
+router.post('/kyc/verify/driving-license', authenticate, authorize('driver'), verifyDrivingLicenseValidation, validate, verifyDrivingLicense);
+
+/**
+ * @swagger
+ * /api/kyc/verify/aadhaar/send-otp:
+ *   post:
+ *     tags: [KYC]
+ *     summary: Send an OTP to the mobile number linked to an Aadhaar number (broker or driver)
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [aadhaar_number]
+ *             properties:
+ *               aadhaar_number: { type: string, example: "234567890123" }
+ *     responses:
+ *       200:
+ *         description: OTP sent — refId must be passed to /kyc/verify/aadhaar/verify-otp
+ */
+router.post('/kyc/verify/aadhaar/send-otp', authenticate, authorize('broker', 'driver'), sendAadhaarOtpValidation, validate, sendAadhaarOtp);
+
+/**
+ * @swagger
+ * /api/kyc/verify/aadhaar/verify-otp:
+ *   post:
+ *     tags: [KYC]
+ *     summary: Submit the OTP to complete Aadhaar verification (broker or driver)
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ref_id, otp]
+ *             properties:
+ *               ref_id: { type: string }
+ *               otp: { type: string, example: "123456" }
+ *     responses:
+ *       200:
+ *         description: Result of the verification attempt (status 'verified' or 'failed')
+ */
+router.post('/kyc/verify/aadhaar/verify-otp', authenticate, authorize('broker', 'driver'), verifyAadhaarOtpValidation, validate, verifyAadhaarOtp);
 
 module.exports = router;

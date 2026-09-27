@@ -1249,6 +1249,17 @@ const runMigrations = async (client) => {
       ALTER TABLE driver_profiles ADD COLUMN IF NOT EXISTS qr_code_url TEXT;
     `);
 
+    // ── CASHFREE KYC VERIFICATION (mirrors db/54kyc_verification.sql) ──
+    // Automated PAN/Aadhaar/Driving-License checks via Cashfree's Verification Suite — stored in
+    // its own column (not inside kyc_submissions.documents) because upsertSubmission REPLACES
+    // `documents` wholesale on every resubmission; keeping verification results separate means a
+    // resubmit never silently wipes an already-passed check. Purely assistive — it does not
+    // auto-approve/auto-reject; the human reviewer (admin/broker) still makes that call, now with
+    // these results visible alongside the documents.
+    await client.query(`
+      ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS verification_results JSONB NOT NULL DEFAULT '{}'::jsonb;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
