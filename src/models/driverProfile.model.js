@@ -259,6 +259,22 @@ class DriverProfileModel {
     return result.rows[0] || null;
   }
 
+  // Uploaded payment QR — an alternative to (or alongside) the generated UPI-intent QR, for a
+  // driver whose bank/UPI app doesn't scan the intent format cleanly, or who just prefers their
+  // own app's code. Same shape as getUpiId/updateUpiId above.
+  static async getQrCode(userId) {
+    const result = await pool.query(`SELECT qr_code_url FROM driver_profiles WHERE user_id = $1`, [userId]);
+    return result.rows[0]?.qr_code_url || null;
+  }
+
+  static async updateQrCode(userId, qrCodeUrl) {
+    const result = await pool.query(
+      `UPDATE driver_profiles SET qr_code_url = $1, updated_at = NOW() WHERE user_id = $2 RETURNING qr_code_url`,
+      [qrCodeUrl, userId]
+    );
+    return result.rows[0] || null;
+  }
+
   static async incrementTotalTrips(userId) {
     await pool.query(`UPDATE driver_profiles SET total_trips = total_trips + 1, updated_at = NOW() WHERE user_id = $1`, [userId]);
   }

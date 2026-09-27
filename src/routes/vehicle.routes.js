@@ -5,10 +5,12 @@ const {
   createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
   forceLogoutDriver, myAssignedTruck, updateMyStatus, updateDriverLocation, getMyUpiId, updateMyUpiId,
+  getMyQrCode, uploadMyQrCode, deleteMyQrCode,
 } = require('../controllers/vehicle.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const driverLocationRateLimit = require('../middleware/driverLocationRateLimit.middleware');
+const upload = require('../middleware/upload.middleware');
 const {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
   registerDriverValidation, updateDriverLocationValidation, assignDriverValidation, nearbyTrucksValidation,
@@ -612,6 +614,59 @@ router.get('/vehicles/drivers/me/upi-id', authenticate, authorize('driver'), get
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/vehicles/drivers/me/upi-id', authenticate, authorize('driver'), updateMyUpiId);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/me/qr-code:
+ *   get:
+ *     tags: [Vehicles]
+ *     summary: Get the driver's own uploaded payment QR code URL (if any)
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: QR code URL fetched (null if none uploaded)
+ */
+router.get('/vehicles/drivers/me/qr-code', authenticate, authorize('driver'), getMyQrCode);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/me/qr-code:
+ *   post:
+ *     tags: [Vehicles]
+ *     summary: Upload a photo of the driver's own bank/UPI app QR code
+ *     description: An alternative to the generated UPI-intent QR — for a driver whose bank app doesn't scan the intent format cleanly, or who just prefers their own app's code.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file: { type: string, format: binary }
+ *     responses:
+ *       200:
+ *         description: QR code uploaded
+ *       422:
+ *         description: No file uploaded
+ */
+router.post('/vehicles/drivers/me/qr-code', authenticate, authorize('driver'), upload.single('file'), uploadMyQrCode);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/me/qr-code:
+ *   delete:
+ *     tags: [Vehicles]
+ *     summary: Remove the driver's own uploaded payment QR code
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: QR code removed
+ */
+router.delete('/vehicles/drivers/me/qr-code', authenticate, authorize('driver'), deleteMyQrCode);
 
 /**
  * @swagger

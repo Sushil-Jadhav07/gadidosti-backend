@@ -247,6 +247,11 @@ const projectTrip = async (row, timeline) => {
   // way a manually-uploaded static QR image (no encoded amount) used to be. Null until the
   // driver's saved one in their profile.
   driverUpiId: row.driver_upi_id || null,
+  // Brought back deliberately, as an ADDITIONAL option alongside (not a replacement for) the
+  // generated UPI-intent QR above — some drivers' bank apps don't scan the intent format
+  // cleanly, or they just prefer their own app's code. Same caveat as before it was removed: no
+  // amount is encoded in an uploaded static image, unlike the generated one.
+  driverQrCodeUrl: row.driver_qr_code_url || null,
   // The platform-wide Company UPI (admin-set) — an alternative to the driver's own personal
   // one above. Whether the driver shows this or their personal QR for a given collection is
   // entirely their own choice on the Payments step (see DeliveryCompletionFlow.jsx); this just

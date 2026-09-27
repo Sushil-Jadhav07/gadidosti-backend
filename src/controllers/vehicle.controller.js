@@ -804,8 +804,67 @@ const updateMyUpiId = async (req, res, next) => {
   }
 };
 
+// GET /api/vehicles/drivers/me/qr-code — mirrors getMyUpiId above; lets the Payments-step QR
+// picker (and the driver's own profile page) know whether one's already uploaded.
+const getMyQrCode = async (req, res, next) => {
+  try {
+    const qrCodeUrl = await DriverProfileModel.getQrCode(req.user.id);
+    return successResponse(res, 200, 'QR code fetched', { qrCodeUrl });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// POST /api/vehicles/drivers/me/qr-code — a driver's own bank/UPI app QR, as an alternative to
+// the generated UPI-intent QR (see gadidosti-broker-driver's PaymentsStep). Reuses the same
+// storage-provider + KYC-file-serving path as KYC document uploads (resource defaults to 'kyc'
+// in storageProvider.upload — see PostgresStorageProvider.js) purely so this works identically
+// under STORAGE_PROVIDER=postgres too, without a second dedicated file-serving route; the file
+// itself has nothing to do with KYC review, it's just piggybacking on the same generic
+// authenticated-file-storage mechanism.
+const uploadMyQrCode = async (req, res, next) => {
+  try {
+    if (!req.file) return errorResponse(res, 422, 'No file uploaded — attach it as multipart form field "file"');
+
+    const { url } = await storageProvider.upload({
+      buffer: req.file.buffer,
+      filename: req.file.originalname,
+      mimeType: req.file.mimetype,
+      documentKey: 'payment_qr_code',
+      folder: `qr-codes/${req.user.id}`,
+    });
+    const absoluteUrl = toAbsoluteUrl(req, url);
+
+    const updated = await DriverProfileModel.updateQrCode(req.user.id, absoluteUrl);
+    if (!updated) return errorResponse(res, 404, 'Driver profile not found');
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'DRIVER_QR_CODE_UPLOADED', entity: 'driver_profiles',
+      entityId: req.user.id, ipAddress: req.ip,
+    });
+
+    logger.info(`Payment QR code uploaded for driver ${req.user.id}`);
+    return successResponse(res, 200, 'QR code uploaded', { qrCodeUrl: updated.qr_code_url });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// DELETE /api/vehicles/drivers/me/qr-code — removes the uploaded QR, falling back to the
+// generated UPI-intent QR (if a UPI ID is saved) or the other available sources.
+const deleteMyQrCode = async (req, res, next) => {
+  try {
+    await DriverProfileModel.updateQrCode(req.user.id, null);
+    logger.info(`Payment QR code removed for driver ${req.user.id}`);
+    return successResponse(res, 200, 'QR code removed');
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
   forceLogoutDriver, myAssignedTruck, updateMyStatus, updateDriverLocation, getMyUpiId, updateMyUpiId,
+  getMyQrCode, uploadMyQrCode, deleteMyQrCode,
 };

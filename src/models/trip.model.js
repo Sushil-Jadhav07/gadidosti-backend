@@ -8,7 +8,8 @@ const SELECT_WITH_JOINS = `
          b.truck_id, b.booking_number, t.registration AS truck_reg,
          b.payment_status AS booking_payment_status, b.amount AS booking_amount,
          b.amount_paid AS booking_amount_paid, b.transport_type, b.truck_category, b.is_express AS booking_is_express,
-         dp.upi_id AS driver_upi_id
+         dp.upi_id AS driver_upi_id,
+         dp.qr_code_url AS driver_qr_code_url
   FROM trips tr
   JOIN bookings b       ON b.id = tr.booking_id
   JOIN users client     ON client.id = b.client_id
