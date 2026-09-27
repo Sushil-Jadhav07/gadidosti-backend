@@ -1260,6 +1260,16 @@ const runMigrations = async (client) => {
       ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS verification_results JSONB NOT NULL DEFAULT '{}'::jsonb;
     `);
 
+    // ── AUTOMATIC KYC APPROVAL (mirrors db/56kyc_auto_verified.sql) ──
+    // Once PAN + Aadhaar (+ Driving License for drivers) all come back 'verified' in
+    // verification_results, submitKyc flips kyc_status straight to 'verified' itself — no
+    // admin/broker click required. This column just distinguishes that from a human-reviewed
+    // verification (KycModel.review sets it back to false), so the admin/broker dashboards can
+    // show "Auto-verified" vs "Reviewed by X" instead of guessing from reviewed_by being null.
+    await client.query(`
+      ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS auto_verified BOOLEAN NOT NULL DEFAULT false;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

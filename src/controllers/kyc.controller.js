@@ -13,6 +13,16 @@ const { getVerificationProvider } = require('../providers/verification');
 const storageProvider = getStorageProvider();
 const verificationProvider = getVerificationProvider();
 
+// A submission auto-clears straight to 'verified' the moment every check Cashfree can run for
+// this role has already come back 'verified' (via the /kyc/verify/* endpoints, called from the
+// onboarding wizard before this final submit). Anything short of that — a check that failed,
+// was skipped, or errored — falls back to the old 'submitted' queue, where the admin/broker
+// manual-review screens (still present, just no longer the default path) pick it up.
+const REQUIRED_CHECKS_BY_ROLE = {
+  driver: ['pan', 'aadhaar', 'drivingLicense'],
+  broker: ['pan', 'aadhaar'],
+};
+
 // ─── POST /api/kyc/broker, POST /api/kyc/driver ─────────────────────────────────
 // Shared handler — role-specific required fields are enforced by validation
 // middleware on each route (kyc.validation.js), not here.
@@ -20,19 +30,42 @@ const submitKyc = async (req, res, next) => {
   try {
     const { documents } = req.body;
 
-    const submission = await KycModel.upsertSubmission(req.user.id, documents);
+    let submission = await KycModel.upsertSubmission(req.user.id, documents);
+
+    const requiredChecks = REQUIRED_CHECKS_BY_ROLE[req.user.role] || [];
+    const results = submission.verification_results || {};
+    const autoVerified = requiredChecks.length > 0 && requiredChecks.every((key) => results[key]?.status === 'verified');
+
+    let kycStatus = 'submitted';
+    if (autoVerified) {
+      submission = await KycModel.autoVerify(req.user.id);
+      kycStatus = 'verified';
+    }
 
     await AuditLogModel.log({
       userId: req.user.id,
-      action: 'KYC_SUBMITTED',
+      action: autoVerified ? 'KYC_AUTO_VERIFIED' : 'KYC_SUBMITTED',
       entity: 'kyc_submissions',
       entityId: submission.id,
-      meta: { document_keys: Object.keys(documents) },
+      meta: { document_keys: Object.keys(documents), auto_verified: autoVerified },
       ipAddress: req.ip,
     });
 
-    logger.info(`KYC submitted: ${req.user.id} [${req.user.role}]`);
-    return successResponse(res, 200, 'KYC documents submitted for review', { submission, kyc_status: 'submitted' });
+    if (autoVerified) {
+      await NotificationModel.create({
+        userId: req.user.id,
+        title: 'KYC Verified',
+        message: 'Your documents were verified automatically. You now have full access to the platform.',
+        type: 'kyc',
+      });
+    }
+
+    logger.info(`KYC submitted: ${req.user.id} [${req.user.role}]${autoVerified ? ' — auto-verified' : ''}`);
+    return successResponse(
+      res, 200,
+      autoVerified ? 'KYC verified automatically' : 'KYC documents submitted for review',
+      { submission, kyc_status: kycStatus }
+    );
   } catch (err) {
     next(err);
   }

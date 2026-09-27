@@ -15,9 +15,10 @@ class KycModel {
                rejection_reason = NULL,
                reviewed_by = NULL,
                reviewed_at = NULL,
+               auto_verified = false,
                submitted_at = NOW(),
                updated_at = NOW()
-         RETURNING id, user_id, documents, rejection_reason, reviewed_at, submitted_at, updated_at`,
+         RETURNING id, user_id, documents, verification_results, auto_verified, rejection_reason, reviewed_at, submitted_at, updated_at`,
         [userId, JSON.stringify(documents)]
       );
 
@@ -38,7 +39,7 @@ class KycModel {
   // from an admin verification, without needing a separate column on kyc_submissions.
   static async findByUserId(userId) {
     const result = await pool.query(
-      `SELECT k.id, k.user_id, k.documents, k.verification_results, k.rejection_reason, k.reviewed_at, k.submitted_at, k.updated_at,
+      `SELECT k.id, k.user_id, k.documents, k.verification_results, k.auto_verified, k.rejection_reason, k.reviewed_at, k.submitted_at, k.updated_at,
               k.reviewed_by, r.name AS reviewer_name, r.role AS reviewer_role
        FROM kyc_submissions k
        LEFT JOIN users r ON r.id = k.reviewed_by
@@ -86,7 +87,7 @@ class KycModel {
 
     const rows = await pool.query(
       `SELECT u.id AS user_id, u.name, u.email, u.phone, u.role, u.kyc_status, u.created_at AS registered_at,
-              k.documents, k.verification_results, k.rejection_reason, k.reviewed_at, k.submitted_at,
+              k.documents, k.verification_results, k.auto_verified, k.rejection_reason, k.reviewed_at, k.submitted_at,
               k.reviewed_by, r.name AS reviewer_name, r.role AS reviewer_role
        FROM users u
        LEFT JOIN kyc_submissions k ON k.user_id = u.id
@@ -152,7 +153,11 @@ class KycModel {
     return resultQuery.rows[0];
   }
 
-  // Admin: approve or reject a user's KYC
+  // Admin/broker: manual approve or reject — the fallback path for whatever the automated
+  // checks in submitKyc's autoVerify didn't clear (see kyc.controller.js's submitKyc).
+  // auto_verified is explicitly reset to false here since this is by definition NOT automatic,
+  // even for a 'verified' outcome — keeps "Auto-verified" vs "Reviewed by X" accurate in the
+  // admin/broker dashboards.
   static async review(userId, { status, reviewerId, reason }) {
     const client = await pool.connect();
     try {
@@ -162,10 +167,39 @@ class KycModel {
 
       const result = await client.query(
         `UPDATE kyc_submissions
-         SET rejection_reason = $1, reviewed_by = $2, reviewed_at = NOW(), updated_at = NOW()
+         SET rejection_reason = $1, reviewed_by = $2, reviewed_at = NOW(), auto_verified = false, updated_at = NOW()
          WHERE user_id = $3
          RETURNING id, user_id, documents, rejection_reason, reviewed_at, submitted_at, updated_at`,
         [status === 'rejected' ? (reason || null) : null, reviewerId, userId]
+      );
+
+      await client.query('COMMIT');
+      return result.rows[0] || null;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Automatic counterpart to review() — called from submitKyc the moment the required
+  // Cashfree checks (PAN + Aadhaar, + Driving License for drivers) are all 'verified'. No
+  // reviewerId: nobody reviewed this, the system did, which is exactly what auto_verified=true
+  // records.
+  static async autoVerify(userId) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      await client.query(`UPDATE users SET kyc_status = 'verified', updated_at = NOW() WHERE id = $1`, [userId]);
+
+      const result = await client.query(
+        `UPDATE kyc_submissions
+         SET rejection_reason = NULL, reviewed_by = NULL, reviewed_at = NOW(), auto_verified = true, updated_at = NOW()
+         WHERE user_id = $1
+         RETURNING id, user_id, documents, verification_results, auto_verified, reviewed_at, submitted_at, updated_at`,
+        [userId]
       );
 
       await client.query('COMMIT');
