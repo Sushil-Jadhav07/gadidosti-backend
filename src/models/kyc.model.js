@@ -167,8 +167,11 @@ class KycModel {
   }
 
   // Only returns a ref_id sent within the last `maxAgeMinutes` — Cashfree's OTPs expire, so an
-  // old cached ref_id isn't a safe fallback once it's plausibly stale.
-  static async getRecentAadhaarOtpRef(userId, maxAgeMinutes = 10) {
+  // old cached ref_id isn't a safe fallback once it's plausibly stale. Kept short (not the full
+  // ~10-minute OTP validity window) because repeated resends risk pairing this cached ref_id with
+  // an older OTP than whichever one actually just landed by SMS — see kyc.controller.js's
+  // sendAadhaarOtp.
+  static async getRecentAadhaarOtpRef(userId, maxAgeMinutes = 3) {
     const result = await pool.query(
       `SELECT aadhaar_otp_ref_id AS ref_id, aadhaar_otp_sent_at
        FROM kyc_submissions
