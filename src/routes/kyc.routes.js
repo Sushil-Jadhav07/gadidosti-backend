@@ -21,6 +21,8 @@ const {
   verifyDrivingLicense,
   sendAadhaarOtp,
   verifyAadhaarOtp,
+  startAadhaarDigilocker,
+  getAadhaarDigilockerStatus,
 } = require('../controllers/kyc.controller');
 const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -34,6 +36,7 @@ const {
   verifyDrivingLicenseValidation,
   sendAadhaarOtpValidation,
   verifyAadhaarOtpValidation,
+  startAadhaarDigilockerValidation,
 } = require('../validations/kyc.validation');
 
 // ─── Broker/Driver — submit KYC ──────────────────────────────────────────────
@@ -791,5 +794,48 @@ router.post('/kyc/verify/aadhaar/send-otp', authenticate, authorize('broker', 'd
  *         description: Result of the verification attempt (status 'verified' or 'failed')
  */
 router.post('/kyc/verify/aadhaar/verify-otp', authenticate, authorize('broker', 'driver'), verifyAadhaarOtpValidation, validate, verifyAadhaarOtp);
+
+/**
+ * @swagger
+ * /api/kyc/verify/aadhaar/digilocker/start:
+ *   post:
+ *     tags: [KYC]
+ *     summary: Start DigiLocker-based Aadhaar verification (broker or driver)
+ *     description: Returns a DigiLocker consent URL to redirect the user to (valid ~10 minutes). After finishing, DigiLocker sends them to redirect_url with verification_id appended — pass that to the status endpoint.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [redirect_url]
+ *             properties:
+ *               redirect_url: { type: string, example: "https://app.example.com/onboarding" }
+ *     responses:
+ *       200:
+ *         description: "{ url, verificationId }"
+ */
+router.post('/kyc/verify/aadhaar/digilocker/start', authenticate, authorize('broker', 'driver'), startAadhaarDigilockerValidation, validate, startAadhaarDigilocker);
+
+/**
+ * @swagger
+ * /api/kyc/verify/aadhaar/digilocker/status:
+ *   get:
+ *     tags: [KYC]
+ *     summary: Check the result of a DigiLocker Aadhaar verification (broker or driver)
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: verification_id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: "status is 'verified', 'pending' (user hasn't finished in DigiLocker yet — poll again), or 'failed'"
+ */
+router.get('/kyc/verify/aadhaar/digilocker/status', authenticate, authorize('broker', 'driver'), getAadhaarDigilockerStatus);
 
 module.exports = router;

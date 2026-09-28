@@ -633,7 +633,69 @@ const verifyAadhaarOtp = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/kyc/verify/aadhaar/digilocker/start ─────────────────────────────
+// DigiLocker-based Aadhaar verification: returns a consent URL the client redirects the user to.
+// verification_id embeds this user's own id (32 hex chars, dashes stripped, to fit Cashfree's
+// 50-char cap) — that prefix is the ownership binding checked in the status endpoint below, so
+// nobody can poll (and claim the result of) a DigiLocker session that wasn't started by them.
+const digilockerPrefix = (userId) => `dg_${String(userId).replace(/-/g, '')}_`;
+
+const startAadhaarDigilocker = async (req, res, next) => {
+  try {
+    const { redirect_url } = req.body;
+    const verificationId = `${digilockerPrefix(req.user.id)}${Date.now()}`;
+
+    const { url } = await verificationProvider.createDigilockerLink({ verificationId, redirectUrl: redirect_url });
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'KYC_AADHAAR_DIGILOCKER_STARTED', entity: 'kyc_submissions',
+      entityId: req.user.id, ipAddress: req.ip,
+    });
+
+    logger.info(`Aadhaar DigiLocker link created for ${req.user.id}`);
+    return successResponse(res, 200, 'DigiLocker link created', { url, verificationId });
+  } catch (err) {
+    logger.error(`Aadhaar DigiLocker start failed for ${req.user.id}: ${err.message}`, err);
+    return errorResponse(res, 503, verificationErrorMessage(err));
+  }
+};
+
+// ─── GET /api/kyc/verify/aadhaar/digilocker/status?verification_id= ────────────
+// Called after the user is redirected back. 'pending' means they haven't finished in DigiLocker
+// yet (nothing is stored — the client just polls again); only a final verified/failed outcome is
+// written to verification_results.aadhaar, the same key the OTP flow used, so submitKyc's
+// auto-approve check works unchanged.
+const getAadhaarDigilockerStatus = async (req, res, next) => {
+  try {
+    const { verification_id } = req.query;
+    if (!verification_id) return errorResponse(res, 422, 'verification_id is required');
+    if (!String(verification_id).startsWith(digilockerPrefix(req.user.id))) {
+      return errorResponse(res, 403, 'This DigiLocker verification does not belong to you');
+    }
+
+    const result = await verificationProvider.getDigilockerStatus(verification_id);
+
+    if (result.status !== 'pending') {
+      await KycModel.updateVerificationResult(req.user.id, 'aadhaar', result);
+      await AuditLogModel.log({
+        userId: req.user.id, action: 'KYC_AADHAAR_VERIFICATION_ATTEMPTED', entity: 'kyc_submissions',
+        entityId: req.user.id, meta: { status: result.status, via: 'digilocker' }, ipAddress: req.ip,
+      });
+      logger.info(`Aadhaar (DigiLocker) verification for ${req.user.id}: ${result.status}`);
+    }
+
+    return successResponse(res, 200,
+      result.status === 'verified' ? 'Aadhaar verified' : result.status === 'pending' ? 'Waiting for DigiLocker' : 'Aadhaar verification did not pass',
+      result);
+  } catch (err) {
+    logger.error(`Aadhaar DigiLocker status failed for ${req.user.id}: ${err.message}`, err);
+    return errorResponse(res, 503, verificationErrorMessage(err));
+  }
+};
+
 module.exports = {
+  startAadhaarDigilocker,
+  getAadhaarDigilockerStatus,
   submitKyc,
   uploadKycDocument,
   listMyKycDocuments,

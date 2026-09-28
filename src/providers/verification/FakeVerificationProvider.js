@@ -25,6 +25,19 @@ class FakeVerificationProvider extends VerificationProvider {
     return { refId: `FAKE-REF-${Date.now()}`, status: 'otp_sent' };
   }
 
+  async createDigilockerLink({ verificationId, redirectUrl }) {
+    const sep = redirectUrl.includes('?') ? '&' : '?';
+    return { url: `${redirectUrl}${sep}verification_id=${encodeURIComponent(verificationId)}`, status: 'PENDING' };
+  }
+
+  async getDigilockerStatus(verificationId) {
+    return {
+      status: 'verified',
+      details: { verificationId, name: 'Fake Aadhaar Holder', dob: '1990-01-01', gender: 'M' },
+      raw: { provider: 'fake' },
+    };
+  }
+
   async verifyAadhaarOtp({ refId, otp }) {
     return {
       status: 'verified',

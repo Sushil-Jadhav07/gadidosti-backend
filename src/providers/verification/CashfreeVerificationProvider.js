@@ -116,6 +116,50 @@ class CashfreeVerificationProvider extends VerificationProvider {
     return { refId: body.ref_id, status: body.status || 'otp_sent' };
   }
 
+  // DigiLocker Aadhaar (POST /digilocker, GET /digilocker) — the flow that's enabled on accounts
+  // where Offline Aadhaar OTP isn't. The link is valid ~10 minutes; Cashfree redirects the user to
+  // redirectUrl (appending verification_id) once they finish or abandon the DigiLocker journey.
+  async createDigilockerLink({ verificationId, redirectUrl }) {
+    const { body } = await this.request('/digilocker', {
+      verification_id: verificationId,
+      document_requested: ['AADHAAR'],
+      redirect_url: redirectUrl,
+    });
+    if (!body.url) {
+      throw new Error(body.message || 'Failed to create the DigiLocker link');
+    }
+    return { url: body.url, status: body.status || 'PENDING' };
+  }
+
+  async getDigilockerStatus(verificationId) {
+    const res = await fetch(`${BASE_URL}/digilocker?verification_id=${encodeURIComponent(verificationId)}`, {
+      method: 'GET',
+      headers: this.headers,
+    });
+    const body = await res.json().catch(() => ({}));
+    if (res.status >= 500 || res.status === 401 || res.status === 403) {
+      throw new Error(`Cashfree verification unavailable: ${body.message || res.statusText}`);
+    }
+    const raw = String(body.status || '').toUpperCase();
+    const user = body.user_details || {};
+    if (raw === 'AUTHENTICATED' && user.name) {
+      return {
+        status: 'verified',
+        details: { name: user.name, dob: user.dob || null, gender: user.gender || null, message: null },
+        raw: body,
+      };
+    }
+    // Still waiting on the user to finish in DigiLocker — not a result yet, don't persist it.
+    if (!raw || raw === 'PENDING') {
+      return { status: 'pending', details: { message: null }, raw: body };
+    }
+    return {
+      status: 'failed',
+      details: { name: null, dob: null, gender: null, message: body.message || `DigiLocker verification ${raw.toLowerCase().replace(/_/g, ' ')}` },
+      raw: body,
+    };
+  }
+
   async verifyAadhaarOtp({ refId, otp }) {
     const { body } = await this.request('/offline-aadhaar/verify', { ref_id: refId, otp });
     // Per Cashfree's own documented response codes for this endpoint: 200/SUCCESS with message

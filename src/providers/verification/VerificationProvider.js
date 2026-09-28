@@ -40,6 +40,24 @@ class VerificationProvider {
   async verifyAadhaarOtp(params) {
     throw new Error('VerificationProvider.verifyAadhaarOtp not implemented');
   }
+
+  /**
+   * DigiLocker-based Aadhaar verification — a redirect flow instead of an inline OTP: create a
+   * consent link, send the user there, then poll its status once they're back.
+   * @param {{ verificationId: string, redirectUrl: string }} params
+   * @returns {Promise<{ url: string, status: string }>}
+   */
+  async createDigilockerLink(params) {
+    throw new Error('VerificationProvider.createDigilockerLink not implemented');
+  }
+
+  /**
+   * @param {string} verificationId
+   * @returns {Promise<{ status: 'verified' | 'pending' | 'failed', details: Object, raw: Object }>}
+   */
+  async getDigilockerStatus(verificationId) {
+    throw new Error('VerificationProvider.getDigilockerStatus not implemented');
+  }
 }
 
 module.exports = VerificationProvider;

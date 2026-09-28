@@ -75,6 +75,12 @@ const verifyAadhaarOtpValidation = [
   body('otp').trim().notEmpty().withMessage('otp is required').isLength({ min: 4, max: 8 }).withMessage('otp looks invalid'),
 ];
 
+// Cashfree itself rejects a non-https redirect_url; checking here too gives a clearer error.
+const startAadhaarDigilockerValidation = [
+  body('redirect_url').trim().notEmpty().withMessage('redirect_url is required')
+    .isURL({ protocols: ['https'], require_protocol: true, require_tld: false }).withMessage('redirect_url must be a valid https URL'),
+];
+
 const uploadKycDocumentValidation = [
   body('document_key')
     .trim()
@@ -98,4 +104,5 @@ module.exports = {
   verifyDrivingLicenseValidation,
   sendAadhaarOtpValidation,
   verifyAadhaarOtpValidation,
+  startAadhaarDigilockerValidation,
 };
