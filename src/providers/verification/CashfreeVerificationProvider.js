@@ -27,19 +27,19 @@ class CashfreeVerificationProvider extends VerificationProvider {
     };
   }
 
-  // Shared request helper. 5xx (Cashfree's own outage) is always a real, infra-level error —
-  // thrown with a masked message (kyc.controller.js's verificationErrorMessage), since there's
-  // no useful per-attempt detail to show. 401/403 usually means bad credentials or an
-  // un-whitelisted IP (also thrown+masked) — BUT Cashfree also returns 403 for ordinary
-  // per-attempt business failures on some endpoints (confirmed: the driving-license endpoint
-  // returns 403 for "Please use test data in the test environment", not 200 like PAN/Aadhaar
-  // do) — those carry a specific, safe, useful message and must NOT be masked just because of
-  // the status code. Only mask a 401/403 when there's no specific message to show, or the
-  // message itself names our own infra (an IP address, "client id/secret", "whitelist") rather
-  // than something about this particular verification attempt. Every other status (200 with a
-  // failure flag inside the body, or 400/422 for a malformed/invalid document) is never thrown —
-  // "this PAN doesn't exist" is an expected, common outcome of calling a verification API, not
-  // an exceptional failure.
+  // Shared request helper. A real outage (5xx) or bad credentials / un-whitelisted IP (401/403)
+  // is thrown with a "Cashfree verification unavailable:" prefix, which kyc.controller.js's
+  // verificationErrorMessage masks behind a generic message (these can include our own server's
+  // IP etc. — not for an end-user's screen). BUT Cashfree also signals an ordinary per-attempt
+  // failure through an error status — confirmed: the driving-license endpoint answers a
+  // non-test DL number in sandbox with HTTP 502 and { code: "verification_failed", message:
+  // "Please use test data in the test environment..." }, not a 200 like PAN/Aadhaar. That carries
+  // a specific, safe, useful message and isn't an outage, so it must not be masked just because
+  // of its status code. `code === 'verification_failed'` (with a message that doesn't name our
+  // own infra) is what marks that case; it's returned as a normal body instead of thrown, and
+  // each verify* method turns it into a 'failed' result carrying that message. Every other 2xx/
+  // 4xx is never thrown either — "this PAN doesn't exist" is an expected outcome, not an
+  // exceptional failure.
   async request(path, body) {
     const res = await fetch(`${BASE_URL}${path}`, {
       method: 'POST',
@@ -47,8 +47,9 @@ class CashfreeVerificationProvider extends VerificationProvider {
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    const looksLikeInfraMessage = !data.message || /\bip\b|client.?id|client.?secret|whitelist/i.test(data.message);
-    if (res.status >= 500 || ((res.status === 401 || res.status === 403) && looksLikeInfraMessage)) {
+    const namesInfra = !data.message || /\bip\b|client.?id|client.?secret|whitelist/i.test(data.message);
+    const isPerAttemptFailure = data.code === 'verification_failed' && !namesInfra;
+    if (!isPerAttemptFailure && (res.status >= 500 || ((res.status === 401 || res.status === 403) && namesInfra))) {
       throw new Error(`Cashfree verification unavailable: ${data.message || res.statusText}`);
     }
     return { httpStatus: res.status, body: data };
