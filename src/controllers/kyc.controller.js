@@ -506,10 +506,19 @@ const brokerRejectKyc = async (req, res, next) => {
 // The 4 endpoints below deliberately don't call next(err) on a provider failure — the global
 // error handler masks err.message down to a bare "Internal server error" in production (by
 // design, for errors it can't classify), which left a real, actionable reason (a rate limit, a
-// transient Cashfree outage) looking like an unexplained crash. These are expected, recoverable
-// failures of a third-party call, not bugs, so they get their own clear, safe message — still
-// logged in full server-side via logger.error either way.
+// transient Cashfree outage, a Cashfree account not having a product enabled) looking like an
+// unexplained crash. These are expected, recoverable failures of a third-party call, not bugs.
 const VERIFICATION_UNAVAILABLE_MESSAGE = 'Verification service is temporarily unavailable — please try again in a few minutes.';
+
+// CashfreeVerificationProvider's request() prefixes exactly this way for 401/403/5xx responses
+// (bad credentials, IP not whitelisted, Cashfree's own outage) — infra/account-config failures
+// that can include details (like this server's own IP) not meant for an end-user's screen, so
+// those stay masked behind the generic message above. Everything else thrown by the provider is
+// a normal 200-status response Cashfree gave about THIS specific verification attempt (wrong
+// test data, OTP already sent, a product not enabled on the account, an invalid OTP) — genuinely
+// useful to the person looking at it, so it's shown as-is instead of being masked too.
+const isInfraFailure = (message) => typeof message === 'string' && message.startsWith('Cashfree verification unavailable:');
+const verificationErrorMessage = (err) => (isInfraFailure(err.message) ? VERIFICATION_UNAVAILABLE_MESSAGE : (err.message || VERIFICATION_UNAVAILABLE_MESSAGE));
 
 // ─── POST /api/kyc/verify/pan ──────────────────────────────────────────────────
 const verifyPan = async (req, res, next) => {
@@ -529,7 +538,7 @@ const verifyPan = async (req, res, next) => {
     return successResponse(res, 200, result.status === 'verified' ? 'PAN verified' : 'PAN verification did not pass', result);
   } catch (err) {
     logger.error(`PAN verification failed for ${req.user.id}: ${err.message}`, err);
-    return errorResponse(res, 503, VERIFICATION_UNAVAILABLE_MESSAGE);
+    return errorResponse(res, 503, verificationErrorMessage(err));
   }
 };
 
@@ -551,7 +560,7 @@ const verifyDrivingLicense = async (req, res, next) => {
     return successResponse(res, 200, result.status === 'verified' ? 'Driving license verified' : 'Driving license verification did not pass', result);
   } catch (err) {
     logger.error(`DL verification failed for ${req.user.id}: ${err.message}`, err);
-    return errorResponse(res, 503, VERIFICATION_UNAVAILABLE_MESSAGE);
+    return errorResponse(res, 503, verificationErrorMessage(err));
   }
 };
 
@@ -598,7 +607,7 @@ const sendAadhaarOtp = async (req, res, next) => {
     logger.error(`Aadhaar OTP send failed for ${req.user.id}: ${err.message}`, err);
     return errorResponse(res, 503, err.cashfreeNoRefId
       ? 'An OTP was already sent recently — please wait a few minutes before requesting a new one.'
-      : VERIFICATION_UNAVAILABLE_MESSAGE);
+      : verificationErrorMessage(err));
   }
 };
 
@@ -620,7 +629,7 @@ const verifyAadhaarOtp = async (req, res, next) => {
     return successResponse(res, 200, result.status === 'verified' ? 'Aadhaar verified' : 'Aadhaar verification did not pass', result);
   } catch (err) {
     logger.error(`Aadhaar verification failed for ${req.user.id}: ${err.message}`, err);
-    return errorResponse(res, 503, VERIFICATION_UNAVAILABLE_MESSAGE);
+    return errorResponse(res, 503, verificationErrorMessage(err));
   }
 };
 

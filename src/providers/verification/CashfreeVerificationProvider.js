@@ -88,13 +88,19 @@ class CashfreeVerificationProvider extends VerificationProvider {
   async sendAadhaarOtp(aadhaarNumber) {
     const { body } = await this.request('/offline-aadhaar/otp', { aadhaar_number: aadhaarNumber });
     if (!body.ref_id) {
-      // Cashfree rate-limits repeat requests for the same Aadhaar within a cooldown window (e.g.
-      // "Otp generated for this aadhaar, please try after some time") and, in that case, doesn't
-      // hand back a ref_id at all — even though the OTP it sent earlier is still valid. Flagged
-      // so the caller (kyc.controller.js) can fall back to whatever ref_id it cached from that
-      // earlier successful send, instead of stranding someone who already has the OTP in hand.
-      const err = new Error(body.message || 'Failed to send Aadhaar OTP');
-      err.cashfreeNoRefId = true;
+      const message = body.message || 'Failed to send Aadhaar OTP';
+      const err = new Error(message);
+      // Cashfree rate-limits repeat requests for the same Aadhaar within a cooldown window and,
+      // in THAT specific case, doesn't hand back a ref_id — even though the OTP it sent earlier
+      // is still valid, which is what the cached-ref_id fallback below exists for. Every other
+      // missing-ref_id reason (e.g. "Offline Aadhaar Verification is not enabled for this
+      // account" — a real account-configuration problem, not a transient cooldown) is NOT that,
+      // and must never be mistaken for it — that account-level failure will never resolve itself
+      // by waiting, so showing "an OTP was already sent, try again shortly" would be actively
+      // misleading. Match on the specific cooldown wording, not just "no ref_id at all".
+      if (/already generated|try after some time/i.test(message)) {
+        err.cashfreeNoRefId = true;
+      }
       throw err;
     }
     return { refId: body.ref_id, status: body.status || 'otp_sent' };
