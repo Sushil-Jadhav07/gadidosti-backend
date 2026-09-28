@@ -6,29 +6,39 @@ is adding a synchronous "verify now" step to it, not building KYC from scratch. 
 zero job-acceptance gating exists today, `kyc_status` isn't part of the user model, and there's
 no OTP UI anywhere in the app to reuse for the new Aadhaar step.
 
-## UPDATE — Aadhaar now goes through DigiLocker, not the OTP endpoints
+## UPDATE — verification now goes through DigiLocker (one sign-in for every document)
 
 Cashfree hasn't enabled *Offline Aadhaar* (the OTP flow described under "Four new endpoints"
 below) on this account — `send-otp` fails with "Offline Aadhaar Verification is not enabled for
-this account". **Don't build the Aadhaar OTP screen.** The web app uses DigiLocker instead, which
-*is* enabled. PAN and Driving License below are unchanged. It's a redirect flow:
+this account". **Don't build the Aadhaar OTP screen, and you don't need a screen per document.**
+The web app now does all of it with a single DigiLocker sign-in, which *is* enabled: a driver's
+session covers Aadhaar + PAN + Driving License, a broker's covers Aadhaar + PAN. The per-number
+PAN / Driving License endpoints below remain, but only as the fallback for a document the user
+doesn't have in DigiLocker. It's a redirect flow:
 
-1. `POST /api/kyc/verify/aadhaar/digilocker/start` — body `{ "redirect_url": "https://…" }` (must be
-   https). Returns `{ url, verificationId }`. Open `url` (link is valid ~10 minutes).
+1. `POST /api/kyc/verify/digilocker/start` — body `{ "redirect_url": "https://…" }` (must be
+   https). Returns `{ url, verificationId, documents }`. Open `url` (link is valid ~10 minutes).
 2. The user signs in to DigiLocker with their Aadhaar / Aadhaar-linked mobile and allows access.
    DigiLocker then sends them to `redirect_url` with `verification_id` appended.
-3. `GET /api/kyc/verify/aadhaar/digilocker/status?verification_id=…` returns
-   `data.status`: `"verified"` (with `details.name/dob/gender`), `"pending"` (they haven't finished
-   yet — poll every few seconds, nothing is stored), or `"failed"` (with `details.message`).
+3. `GET /api/kyc/verify/digilocker/status?verification_id=…` returns `data.status`:
+   - `"pending"` — they haven't finished yet; poll every few seconds (nothing is stored).
+   - `"failed"` — session expired or access denied (`data.message`); start again.
+   - `"done"` — `data.documents.{aadhaar,pan,drivingLicense}`, each `status: "verified"` or
+     `"missing"`. A **missing** one isn't in the user's DigiLocker: show the number-entry fallback
+     for just that document (PAN → `/verify/pan`, licence → `/verify/driving-license`); Aadhaar has
+     no fallback, so it goes to manual review.
 
-A `verified`/`failed` result is stored under `verification_results.aadhaar`, exactly where the OTP
-flow put it, so the auto-approve on `POST /api/kyc/driver|broker` works unchanged. A
-`verification_id` only works for the user who started it (another user's id returns 403).
+Each `verified` document is stored under `verification_results` (`aadhaar` / `pan` /
+`drivingLicense`) exactly where the manual checks put theirs, so the auto-approve on
+`POST /api/kyc/driver|broker` works unchanged. `POST /api/kyc/driver|broker` also no longer
+requires `aadhaar_number` / `pan_number` / `license_number` for a document that's already
+verified — a user who verified everything through DigiLocker submits without typing any of them.
+A `verification_id` only works for the user who started it (another user's id returns 403).
 
 For a mobile app, `redirect_url` has to be something the app can catch on return: an https
 universal/app link that opens the app, or open `url` in a WebView and watch for navigation to
-`redirect_url`. Keep whatever the user typed (Aadhaar number etc.) in memory across the trip — the
-web app stashes it in `sessionStorage` because a redirect reloads the page.
+`redirect_url`. Keep whatever the user typed in memory across the trip — the web app stashes it in
+`sessionStorage` because a redirect reloads the page.
 
 ## What changed on the backend
 
