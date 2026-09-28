@@ -6,6 +6,30 @@ is adding a synchronous "verify now" step to it, not building KYC from scratch. 
 zero job-acceptance gating exists today, `kyc_status` isn't part of the user model, and there's
 no OTP UI anywhere in the app to reuse for the new Aadhaar step.
 
+## UPDATE — Aadhaar now goes through DigiLocker, not the OTP endpoints
+
+Cashfree hasn't enabled *Offline Aadhaar* (the OTP flow described under "Four new endpoints"
+below) on this account — `send-otp` fails with "Offline Aadhaar Verification is not enabled for
+this account". **Don't build the Aadhaar OTP screen.** The web app uses DigiLocker instead, which
+*is* enabled. PAN and Driving License below are unchanged. It's a redirect flow:
+
+1. `POST /api/kyc/verify/aadhaar/digilocker/start` — body `{ "redirect_url": "https://…" }` (must be
+   https). Returns `{ url, verificationId }`. Open `url` (link is valid ~10 minutes).
+2. The user signs in to DigiLocker with their Aadhaar / Aadhaar-linked mobile and allows access.
+   DigiLocker then sends them to `redirect_url` with `verification_id` appended.
+3. `GET /api/kyc/verify/aadhaar/digilocker/status?verification_id=…` returns
+   `data.status`: `"verified"` (with `details.name/dob/gender`), `"pending"` (they haven't finished
+   yet — poll every few seconds, nothing is stored), or `"failed"` (with `details.message`).
+
+A `verified`/`failed` result is stored under `verification_results.aadhaar`, exactly where the OTP
+flow put it, so the auto-approve on `POST /api/kyc/driver|broker` works unchanged. A
+`verification_id` only works for the user who started it (another user's id returns 403).
+
+For a mobile app, `redirect_url` has to be something the app can catch on return: an https
+universal/app link that opens the app, or open `url` in a WebView and watch for navigation to
+`redirect_url`. Keep whatever the user typed (Aadhaar number etc.) in memory across the trip — the
+web app stashes it in `sessionStorage` because a redirect reloads the page.
+
 ## What changed on the backend
 
 ### 1. Four new endpoints — PAN, Driving License, and 2-step Aadhaar OTP
