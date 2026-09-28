@@ -27,10 +27,17 @@ class CashfreeVerificationProvider extends VerificationProvider {
     };
   }
 
-  // Shared request helper. 401/403 (bad credentials / IP not whitelisted) and 5xx (Cashfree's
-  // own outage) are real errors — thrown, so the caller surfaces "verification is temporarily
-  // unavailable" rather than a wrong "document invalid" result. Every other status (200 with a
-  // failure flag inside the body, or 400/422 for a malformed/invalid document) is NOT thrown —
+  // Shared request helper. 5xx (Cashfree's own outage) is always a real, infra-level error —
+  // thrown with a masked message (kyc.controller.js's verificationErrorMessage), since there's
+  // no useful per-attempt detail to show. 401/403 usually means bad credentials or an
+  // un-whitelisted IP (also thrown+masked) — BUT Cashfree also returns 403 for ordinary
+  // per-attempt business failures on some endpoints (confirmed: the driving-license endpoint
+  // returns 403 for "Please use test data in the test environment", not 200 like PAN/Aadhaar
+  // do) — those carry a specific, safe, useful message and must NOT be masked just because of
+  // the status code. Only mask a 401/403 when there's no specific message to show, or the
+  // message itself names our own infra (an IP address, "client id/secret", "whitelist") rather
+  // than something about this particular verification attempt. Every other status (200 with a
+  // failure flag inside the body, or 400/422 for a malformed/invalid document) is never thrown —
   // "this PAN doesn't exist" is an expected, common outcome of calling a verification API, not
   // an exceptional failure.
   async request(path, body) {
@@ -40,7 +47,8 @@ class CashfreeVerificationProvider extends VerificationProvider {
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    if (res.status === 401 || res.status === 403 || res.status >= 500) {
+    const looksLikeInfraMessage = !data.message || /\bip\b|client.?id|client.?secret|whitelist/i.test(data.message);
+    if (res.status >= 500 || ((res.status === 401 || res.status === 403) && looksLikeInfraMessage)) {
       throw new Error(`Cashfree verification unavailable: ${data.message || res.statusText}`);
     }
     return { httpStatus: res.status, body: data };
@@ -80,6 +88,7 @@ class CashfreeVerificationProvider extends VerificationProvider {
         dob: body.dob,
         holderName: body.details_of_driving_licence?.name || null,
         status: body.status || null,
+        message: body.message || null,
       },
       raw: body,
     };
