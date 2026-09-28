@@ -23,12 +23,43 @@ const REQUIRED_CHECKS_BY_ROLE = {
   broker: ['pan', 'aadhaar'],
 };
 
+// A document verified through DigiLocker never has its number typed by the user, so the submitted
+// `documents` arrives without it — but the KYC pages (and the admin/broker reviewers) read the
+// numbers from `documents`, so they'd show blank. DigiLocker returns them, and they're already
+// saved under verification_results.<doc>.details.number; copy them across whenever the user
+// didn't type one themselves. A typed value always wins. (Aadhaar comes back masked, which is
+// what gets shown.)
+const NUMBER_FIELD_TO_RESULT_KEY = { pan_number: 'pan', aadhaar_number: 'aadhaar', license_number: 'drivingLicense' };
+
+// DigiLocker dates come as DD-MM-YYYY; the form/validation use YYYY-MM-DD.
+const toIsoDate = (value) => {
+  if (typeof value !== 'string') return null;
+  const dmy = value.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+};
+
+const withVerifiedNumbers = (documents, results, role) => {
+  const filled = { ...documents };
+  for (const [field, key] of Object.entries(NUMBER_FIELD_TO_RESULT_KEY)) {
+    const verified = results?.[key]?.status === 'verified';
+    const number = verified ? results[key].details?.number : null;
+    if (!(typeof filled[field] === 'string' && filled[field].trim()) && number) filled[field] = number;
+  }
+  if (role === 'driver' && !filled.date_of_birth) {
+    const dob = toIsoDate(results?.drivingLicense?.details?.dob) || toIsoDate(results?.pan?.details?.dob) || toIsoDate(results?.aadhaar?.details?.dob);
+    if (dob) filled.date_of_birth = dob;
+  }
+  return filled;
+};
+
 // ─── POST /api/kyc/broker, POST /api/kyc/driver ─────────────────────────────────
 // Shared handler — role-specific required fields are enforced by validation
 // middleware on each route (kyc.validation.js), not here.
 const submitKyc = async (req, res, next) => {
   try {
-    const { documents } = req.body;
+    const existing = await KycModel.findByUserId(req.user.id);
+    const documents = withVerifiedNumbers(req.body.documents, existing?.verification_results, req.user.role);
 
     let submission = await KycModel.upsertSubmission(req.user.id, documents);
 
