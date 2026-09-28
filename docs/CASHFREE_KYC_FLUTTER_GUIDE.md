@@ -1,5 +1,7 @@
 # Cashfree Automated KYC — Flutter (`SSK_Cargo`) Guide
 
+> **Superseded for the verification flow:** see [`DIGILOCKER_KYC_FLUTTER_GUIDE.md`](DIGILOCKER_KYC_FLUTTER_GUIDE.md) — the Aadhaar OTP endpoints described below don't work on our Cashfree account. This file is still the reference for what already exists in `SSK_Cargo/lib`, the UI conventions, and the job-acceptance gate.
+
 For the Flutter app developer. Checked against the actual `SSK_Cargo/lib` code. The good news:
 this app already has a full, working, manually-reviewed KYC wizard for both roles — the new work
 is adding a synchronous "verify now" step to it, not building KYC from scratch. The bad news:
