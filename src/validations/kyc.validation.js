@@ -12,14 +12,29 @@ const ALLOWED_DOCUMENT_KEYS = {
 // Canonical field names — must match exactly across KYC submission, the Profile page,
 // and admin's Driver/Broker views (see broker/KYCStatus.jsx, driver/KYC.jsx, and the
 // admin Drivers.jsx/KYC.jsx reconciliation in driverProfile.model.js).
+const KycModel = require('../models/kyc.model');
+
+// A document number is required ONLY when that document hasn't already been verified (by
+// DigiLocker or a manual number check) — a user who verified everything through DigiLocker never
+// types their PAN/Aadhaar/licence number at all, and shouldn't be made to just to submit.
+const requiredUnlessVerified = (field, label, resultKey) =>
+  body(field).custom(async (value, { req }) => {
+    if (typeof value === 'string' && value.trim()) return true;
+    const submission = await KycModel.findByUserId(req.user.id);
+    if (submission?.verification_results?.[resultKey]?.status === 'verified') return true;
+    throw new Error(`${label} is required`);
+  });
+
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
 const GST_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/i;
 const AADHAAR_REGEX = /^\d{4}-?\d{4}-?\d{4}$/;
 
 const submitBrokerKycValidation = [
-  body('documents.pan_number').trim().notEmpty().withMessage('PAN number is required')
+  requiredUnlessVerified('documents.pan_number', 'PAN number', 'pan'),
+  body('documents.pan_number').optional({ nullable: true, checkFalsy: true }).trim()
     .matches(PAN_REGEX).withMessage('PAN number must be in the format ABCDE1234F'),
-  body('documents.aadhaar_number').trim().notEmpty().withMessage('Aadhaar number is required')
+  requiredUnlessVerified('documents.aadhaar_number', 'Aadhaar number', 'aadhaar'),
+  body('documents.aadhaar_number').optional({ nullable: true, checkFalsy: true }).trim()
     .matches(AADHAAR_REGEX).withMessage('Aadhaar number must be 12 digits'),
   body('documents.gst_number').optional({ nullable: true, checkFalsy: true }).trim()
     .matches(GST_REGEX).withMessage('GST number must be a valid 15-character GSTIN'),
@@ -31,9 +46,11 @@ const submitBrokerKycValidation = [
 ];
 
 const submitDriverKycValidation = [
-  body('documents.license_number').trim().notEmpty().withMessage('Driving license number is required')
+  requiredUnlessVerified('documents.license_number', 'Driving license number', 'drivingLicense'),
+  body('documents.license_number').optional({ nullable: true, checkFalsy: true }).trim()
     .isLength({ min: 5, max: 20 }).withMessage('Driving license number looks invalid'),
-  body('documents.aadhaar_number').trim().notEmpty().withMessage('Aadhaar number is required')
+  requiredUnlessVerified('documents.aadhaar_number', 'Aadhaar number', 'aadhaar'),
+  body('documents.aadhaar_number').optional({ nullable: true, checkFalsy: true }).trim()
     .matches(AADHAAR_REGEX).withMessage('Aadhaar number must be 12 digits'),
   body('documents.vehicle_registration_number').optional({ nullable: true, checkFalsy: true }).trim()
     .isLength({ min: 4, max: 20 }).withMessage('Vehicle registration number looks invalid'),
@@ -76,7 +93,7 @@ const verifyAadhaarOtpValidation = [
 ];
 
 // Cashfree itself rejects a non-https redirect_url; checking here too gives a clearer error.
-const startAadhaarDigilockerValidation = [
+const startDigilockerValidation = [
   body('redirect_url').trim().notEmpty().withMessage('redirect_url is required')
     .isURL({ protocols: ['https'], require_protocol: true, require_tld: false }).withMessage('redirect_url must be a valid https URL'),
 ];
@@ -104,5 +121,5 @@ module.exports = {
   verifyDrivingLicenseValidation,
   sendAadhaarOtpValidation,
   verifyAadhaarOtpValidation,
-  startAadhaarDigilockerValidation,
+  startDigilockerValidation,
 };

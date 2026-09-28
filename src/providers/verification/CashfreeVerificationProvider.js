@@ -116,14 +116,16 @@ class CashfreeVerificationProvider extends VerificationProvider {
     return { refId: body.ref_id, status: body.status || 'otp_sent' };
   }
 
-  // DigiLocker Aadhaar (POST /digilocker, GET /digilocker) — the flow that's enabled on accounts
+  // DigiLocker (POST /digilocker, GET /digilocker, GET /digilocker/document/{type}) — one consent
+  // session can cover Aadhaar + PAN + Driving License. This is the flow that's enabled on accounts
   // where Offline Aadhaar OTP isn't. The link is valid ~10 minutes; Cashfree redirects the user to
   // redirectUrl (appending verification_id) once they finish or abandon the DigiLocker journey.
-  async createDigilockerLink({ verificationId, redirectUrl }) {
+  async createDigilockerLink({ verificationId, redirectUrl, documents = ['AADHAAR'] }) {
     const { body } = await this.request('/digilocker', {
       verification_id: verificationId,
-      document_requested: ['AADHAAR'],
+      document_requested: documents,
       redirect_url: redirectUrl,
+      user_flow: 'signup',
     });
     if (!body.url) {
       throw new Error(body.message || 'Failed to create the DigiLocker link');
@@ -131,32 +133,63 @@ class CashfreeVerificationProvider extends VerificationProvider {
     return { url: body.url, status: body.status || 'PENDING' };
   }
 
-  async getDigilockerStatus(verificationId) {
-    const res = await fetch(`${BASE_URL}/digilocker?verification_id=${encodeURIComponent(verificationId)}`, {
-      method: 'GET',
-      headers: this.headers,
-    });
-    const body = await res.json().catch(() => ({}));
-    if (res.status >= 500 || res.status === 401 || res.status === 403) {
-      throw new Error(`Cashfree verification unavailable: ${body.message || res.statusText}`);
-    }
-    const raw = String(body.status || '').toUpperCase();
-    const user = body.user_details || {};
-    if (raw === 'AUTHENTICATED' && user.name) {
+  // Resolves a DigiLocker session into one result per requested document:
+  //   verified — the document was fetched from DigiLocker after the user authenticated there
+  //              (a government-issued record DigiLocker itself vouches for)
+  //   missing  — the user has no such document in their DigiLocker (or didn't allow it); the caller
+  //              can fall back to verifying that one by number instead
+  // Overall: 'pending' (user still in DigiLocker / Cashfree still processing — poll again),
+  // 'failed' (session expired or consent denied, nothing to store), or 'done'.
+  async getDigilockerStatus(verificationId, documents = ['AADHAAR']) {
+    const call = async (path) => {
+      const res = await fetch(`${BASE_URL}${path}`, { method: 'GET', headers: this.headers });
+      const body = await res.json().catch(() => ({}));
+      if (res.status >= 500 || res.status === 401 || res.status === 403) {
+        throw new Error(`Cashfree verification unavailable: ${body.message || res.statusText}`);
+      }
+      return { httpStatus: res.status, body };
+    };
+
+    const session = await call(`/digilocker?verification_id=${encodeURIComponent(verificationId)}`);
+    const sessionStatus = String(session.body.status || '').toUpperCase();
+    if (!sessionStatus || sessionStatus === 'PENDING') return { status: 'pending', documents: {} };
+    if (sessionStatus !== 'AUTHENTICATED') {
       return {
-        status: 'verified',
-        details: { name: user.name, dob: user.dob || null, gender: user.gender || null, message: null },
-        raw: body,
+        status: 'failed',
+        documents: {},
+        message: sessionStatus === 'CONSENT_DENIED'
+          ? 'Access was not allowed in DigiLocker — start again and allow access when asked.'
+          : 'The DigiLocker session expired — please start again.',
       };
     }
-    // Still waiting on the user to finish in DigiLocker — not a result yet, don't persist it.
-    if (!raw || raw === 'PENDING') {
-      return { status: 'pending', details: { message: null }, raw: body };
+
+    const out = {};
+    for (const type of documents) {
+      const doc = await call(`/digilocker/document/${type}?verification_id=${encodeURIComponent(verificationId)}`);
+      if (doc.httpStatus === 202) return { status: 'pending', documents: {} };
+      if (doc.httpStatus === 200 && doc.body && Object.keys(doc.body).length > 0) {
+        out[type] = { status: 'verified', details: this.summarizeDigilockerDocument(type, doc.body) };
+      } else {
+        out[type] = { status: 'missing', details: { message: doc.body.message || 'Not found in your DigiLocker' } };
+      }
     }
+    return { status: 'done', documents: out };
+  }
+
+  // Deliberately keeps only what a reviewer needs (name, DOB, gender, the document's own number as
+  // returned) — NOT the full document payload, which for Aadhaar carries the address, a photo, etc.
+  // that we have no reason to store. Field names for PAN / licence are matched defensively across
+  // the spellings Cashfree's document payloads use.
+  summarizeDigilockerDocument(type, body) {
+    const pick = (...keys) => keys.map((k) => body[k]).find((v) => typeof v === 'string' && v) || null;
     return {
-      status: 'failed',
-      details: { name: null, dob: null, gender: null, message: body.message || `DigiLocker verification ${raw.toLowerCase().replace(/_/g, ' ')}` },
-      raw: body,
+      name: pick('name', 'holder_name', 'full_name') || body.details_of_driving_licence?.name || null,
+      dob: pick('dob', 'date_of_birth'),
+      gender: pick('gender'),
+      number: type === 'PAN' ? pick('pan', 'pan_number', 'uid')
+        : type === 'DRIVING_LICENSE' ? pick('dl_number', 'license_number', 'uid')
+        : pick('uid', 'aadhaar_number'),
+      message: null,
     };
   }
 

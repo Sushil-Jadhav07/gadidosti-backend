@@ -21,8 +21,8 @@ const {
   verifyDrivingLicense,
   sendAadhaarOtp,
   verifyAadhaarOtp,
-  startAadhaarDigilocker,
-  getAadhaarDigilockerStatus,
+  startDigilocker,
+  getDigilockerStatus,
 } = require('../controllers/kyc.controller');
 const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -36,7 +36,7 @@ const {
   verifyDrivingLicenseValidation,
   sendAadhaarOtpValidation,
   verifyAadhaarOtpValidation,
-  startAadhaarDigilockerValidation,
+  startDigilockerValidation,
 } = require('../validations/kyc.validation');
 
 // ─── Broker/Driver — submit KYC ──────────────────────────────────────────────
@@ -797,11 +797,11 @@ router.post('/kyc/verify/aadhaar/verify-otp', authenticate, authorize('broker', 
 
 /**
  * @swagger
- * /api/kyc/verify/aadhaar/digilocker/start:
+ * /api/kyc/verify/digilocker/start:
  *   post:
  *     tags: [KYC]
- *     summary: Start DigiLocker-based Aadhaar verification (broker or driver)
- *     description: Returns a DigiLocker consent URL to redirect the user to (valid ~10 minutes). After finishing, DigiLocker sends them to redirect_url with verification_id appended — pass that to the status endpoint.
+ *     summary: Start DigiLocker verification for every document this role needs (broker or driver)
+ *     description: One consent session — a driver's covers Aadhaar + PAN + Driving License, a broker's Aadhaar + PAN. Returns a DigiLocker consent URL to redirect the user to (valid ~10 minutes). After finishing, DigiLocker sends them to redirect_url with verification_id appended — pass that to the status endpoint.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -815,16 +815,16 @@ router.post('/kyc/verify/aadhaar/verify-otp', authenticate, authorize('broker', 
  *               redirect_url: { type: string, example: "https://app.example.com/onboarding" }
  *     responses:
  *       200:
- *         description: "{ url, verificationId }"
+ *         description: "{ url, verificationId, documents: ['aadhaar','pan','drivingLicense'] }"
  */
-router.post('/kyc/verify/aadhaar/digilocker/start', authenticate, authorize('broker', 'driver'), startAadhaarDigilockerValidation, validate, startAadhaarDigilocker);
+router.post('/kyc/verify/digilocker/start', authenticate, authorize('broker', 'driver'), startDigilockerValidation, validate, startDigilocker);
 
 /**
  * @swagger
- * /api/kyc/verify/aadhaar/digilocker/status:
+ * /api/kyc/verify/digilocker/status:
  *   get:
  *     tags: [KYC]
- *     summary: Check the result of a DigiLocker Aadhaar verification (broker or driver)
+ *     summary: Resolve a DigiLocker session into per-document results (broker or driver)
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -834,8 +834,8 @@ router.post('/kyc/verify/aadhaar/digilocker/start', authenticate, authorize('bro
  *         schema: { type: string }
  *     responses:
  *       200:
- *         description: "status is 'verified', 'pending' (user hasn't finished in DigiLocker yet — poll again), or 'failed'"
+ *         description: "status is 'pending' (poll again), 'failed' (expired / access denied), or 'done' with documents.{aadhaar,pan,drivingLicense}.status of 'verified' or 'missing' (not in the user's DigiLocker — verify that one by number instead)"
  */
-router.get('/kyc/verify/aadhaar/digilocker/status', authenticate, authorize('broker', 'driver'), getAadhaarDigilockerStatus);
+router.get('/kyc/verify/digilocker/status', authenticate, authorize('broker', 'driver'), getDigilockerStatus);
 
 module.exports = router;

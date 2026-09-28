@@ -633,39 +633,49 @@ const verifyAadhaarOtp = async (req, res, next) => {
   }
 };
 
-// ─── POST /api/kyc/verify/aadhaar/digilocker/start ─────────────────────────────
-// DigiLocker-based Aadhaar verification: returns a consent URL the client redirects the user to.
-// verification_id embeds this user's own id (32 hex chars, dashes stripped, to fit Cashfree's
-// 50-char cap) — that prefix is the ownership binding checked in the status endpoint below, so
-// nobody can poll (and claim the result of) a DigiLocker session that wasn't started by them.
+// ─── POST /api/kyc/verify/digilocker/start ─────────────────────────────────────
+// One DigiLocker consent session covering every document this role needs (a driver: Aadhaar + PAN
+// + Driving License; a broker: Aadhaar + PAN). Returns a consent URL the client redirects the
+// user to. verification_id embeds this user's own id (32 hex chars, dashes stripped, to fit
+// Cashfree's 50-char cap) — that prefix is the ownership binding checked in the status endpoint
+// below, so nobody can poll (and claim the result of) a session that wasn't started by them.
+const DIGILOCKER_DOCS_BY_ROLE = {
+  driver: ['AADHAAR', 'PAN', 'DRIVING_LICENSE'],
+  broker: ['AADHAAR', 'PAN'],
+};
+// DigiLocker document type -> the verification_results key (same keys the manual checks use, so
+// submitKyc's auto-approve is unchanged whichever way each document got verified).
+const DIGILOCKER_RESULT_KEY = { AADHAAR: 'aadhaar', PAN: 'pan', DRIVING_LICENSE: 'drivingLicense' };
 const digilockerPrefix = (userId) => `dg_${String(userId).replace(/-/g, '')}_`;
 
-const startAadhaarDigilocker = async (req, res, next) => {
+const startDigilocker = async (req, res, next) => {
   try {
     const { redirect_url } = req.body;
+    const documents = DIGILOCKER_DOCS_BY_ROLE[req.user.role] || ['AADHAAR'];
     const verificationId = `${digilockerPrefix(req.user.id)}${Date.now()}`;
 
-    const { url } = await verificationProvider.createDigilockerLink({ verificationId, redirectUrl: redirect_url });
+    const { url } = await verificationProvider.createDigilockerLink({ verificationId, redirectUrl: redirect_url, documents });
 
     await AuditLogModel.log({
-      userId: req.user.id, action: 'KYC_AADHAAR_DIGILOCKER_STARTED', entity: 'kyc_submissions',
-      entityId: req.user.id, ipAddress: req.ip,
+      userId: req.user.id, action: 'KYC_DIGILOCKER_STARTED', entity: 'kyc_submissions',
+      entityId: req.user.id, meta: { documents }, ipAddress: req.ip,
     });
 
-    logger.info(`Aadhaar DigiLocker link created for ${req.user.id}`);
-    return successResponse(res, 200, 'DigiLocker link created', { url, verificationId });
+    logger.info(`DigiLocker link created for ${req.user.id} [${documents.join(',')}]`);
+    return successResponse(res, 200, 'DigiLocker link created', { url, verificationId, documents: documents.map((d) => DIGILOCKER_RESULT_KEY[d]) });
   } catch (err) {
-    logger.error(`Aadhaar DigiLocker start failed for ${req.user.id}: ${err.message}`, err);
+    logger.error(`DigiLocker start failed for ${req.user.id}: ${err.message}`, err);
     return errorResponse(res, 503, verificationErrorMessage(err));
   }
 };
 
-// ─── GET /api/kyc/verify/aadhaar/digilocker/status?verification_id= ────────────
-// Called after the user is redirected back. 'pending' means they haven't finished in DigiLocker
-// yet (nothing is stored — the client just polls again); only a final verified/failed outcome is
-// written to verification_results.aadhaar, the same key the OTP flow used, so submitKyc's
-// auto-approve check works unchanged.
-const getAadhaarDigilockerStatus = async (req, res, next) => {
+// ─── GET /api/kyc/verify/digilocker/status?verification_id= ────────────────────
+// Called after the user is redirected back. Overall status: 'pending' (still in DigiLocker /
+// Cashfree still processing — nothing stored, the client just polls again), 'failed' (session
+// expired or access denied — nothing stored), or 'done'. On 'done', each document is 'verified'
+// (stored under its verification_results key) or 'missing' (not in the user's DigiLocker —
+// deliberately NOT stored, so the client can fall back to verifying just that one by number).
+const getDigilockerStatus = async (req, res, next) => {
   try {
     const { verification_id } = req.query;
     if (!verification_id) return errorResponse(res, 422, 'verification_id is required');
@@ -673,29 +683,43 @@ const getAadhaarDigilockerStatus = async (req, res, next) => {
       return errorResponse(res, 403, 'This DigiLocker verification does not belong to you');
     }
 
-    const result = await verificationProvider.getDigilockerStatus(verification_id);
+    const requested = DIGILOCKER_DOCS_BY_ROLE[req.user.role] || ['AADHAAR'];
+    const result = await verificationProvider.getDigilockerStatus(verification_id, requested);
 
-    if (result.status !== 'pending') {
-      await KycModel.updateVerificationResult(req.user.id, 'aadhaar', result);
-      await AuditLogModel.log({
-        userId: req.user.id, action: 'KYC_AADHAAR_VERIFICATION_ATTEMPTED', entity: 'kyc_submissions',
-        entityId: req.user.id, meta: { status: result.status, via: 'digilocker' }, ipAddress: req.ip,
+    if (result.status !== 'done') {
+      return successResponse(res, 200, result.status === 'pending' ? 'Waiting for DigiLocker' : (result.message || 'DigiLocker did not complete'), {
+        status: result.status, message: result.message || null, documents: {},
       });
-      logger.info(`Aadhaar (DigiLocker) verification for ${req.user.id}: ${result.status}`);
     }
 
-    return successResponse(res, 200,
-      result.status === 'verified' ? 'Aadhaar verified' : result.status === 'pending' ? 'Waiting for DigiLocker' : 'Aadhaar verification did not pass',
-      result);
+    const documents = {};
+    for (const type of requested) {
+      const key = DIGILOCKER_RESULT_KEY[type];
+      const doc = result.documents[type] || { status: 'missing', details: { message: 'Not found in your DigiLocker' } };
+      documents[key] = doc;
+      if (doc.status === 'verified') {
+        await KycModel.updateVerificationResult(req.user.id, key, {
+          status: 'verified', details: doc.details, raw: { provider: 'digilocker', verification_id },
+        });
+      }
+    }
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'KYC_DIGILOCKER_COMPLETED', entity: 'kyc_submissions',
+      entityId: req.user.id, meta: Object.fromEntries(Object.entries(documents).map(([k, d]) => [k, d.status])), ipAddress: req.ip,
+    });
+    logger.info(`DigiLocker verification for ${req.user.id}: ${Object.entries(documents).map(([k, d]) => `${k}=${d.status}`).join(' ')}`);
+
+    return successResponse(res, 200, 'DigiLocker verification complete', { status: 'done', message: null, documents });
   } catch (err) {
-    logger.error(`Aadhaar DigiLocker status failed for ${req.user.id}: ${err.message}`, err);
+    logger.error(`DigiLocker status failed for ${req.user.id}: ${err.message}`, err);
     return errorResponse(res, 503, verificationErrorMessage(err));
   }
 };
 
 module.exports = {
-  startAadhaarDigilocker,
-  getAadhaarDigilockerStatus,
+  startDigilocker,
+  getDigilockerStatus,
   submitKyc,
   uploadKycDocument,
   listMyKycDocuments,

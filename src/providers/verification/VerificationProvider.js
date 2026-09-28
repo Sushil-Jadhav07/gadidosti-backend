@@ -42,9 +42,9 @@ class VerificationProvider {
   }
 
   /**
-   * DigiLocker-based Aadhaar verification — a redirect flow instead of an inline OTP: create a
-   * consent link, send the user there, then poll its status once they're back.
-   * @param {{ verificationId: string, redirectUrl: string }} params
+   * DigiLocker — a redirect flow instead of inline entry: create one consent link covering the
+   * documents asked for (AADHAAR / PAN / DRIVING_LICENSE), send the user there, then resolve it.
+   * @param {{ verificationId: string, redirectUrl: string, documents?: string[] }} params
    * @returns {Promise<{ url: string, status: string }>}
    */
   async createDigilockerLink(params) {
@@ -53,9 +53,11 @@ class VerificationProvider {
 
   /**
    * @param {string} verificationId
-   * @returns {Promise<{ status: 'verified' | 'pending' | 'failed', details: Object, raw: Object }>}
+   * @param {string[]} documents - the same list the link was created with
+   * @returns {Promise<{ status: 'pending' | 'failed' | 'done', message?: string,
+   *   documents: Object<string, { status: 'verified' | 'missing', details: Object }> }>}
    */
-  async getDigilockerStatus(verificationId) {
+  async getDigilockerStatus(verificationId, documents) {
     throw new Error('VerificationProvider.getDigilockerStatus not implemented');
   }
 }

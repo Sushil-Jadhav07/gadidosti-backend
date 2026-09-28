@@ -30,12 +30,12 @@ class FakeVerificationProvider extends VerificationProvider {
     return { url: `${redirectUrl}${sep}verification_id=${encodeURIComponent(verificationId)}`, status: 'PENDING' };
   }
 
-  async getDigilockerStatus(verificationId) {
-    return {
-      status: 'verified',
-      details: { verificationId, name: 'Fake Aadhaar Holder', dob: '1990-01-01', gender: 'M' },
-      raw: { provider: 'fake' },
-    };
+  async getDigilockerStatus(verificationId, documents = ['AADHAAR']) {
+    const documentsOut = {};
+    for (const type of documents) {
+      documentsOut[type] = { status: 'verified', details: { name: 'Fake Holder', dob: '1990-01-01', gender: 'M', number: null, message: null } };
+    }
+    return { status: 'done', documents: documentsOut };
   }
 
   async verifyAadhaarOtp({ refId, otp }) {
