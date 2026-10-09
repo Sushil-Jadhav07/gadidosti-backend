@@ -23,10 +23,27 @@ const SELECT_WITH_JOINS = `
 `;
 
 class TripJoinRequestModel {
+  // booking_id is UNIQUE — a part-load booking has at most one row, ever. A client re-requesting
+  // after a decline (same booking, a different or the same candidate truck) must therefore
+  // UPDATE that existing row back to 'pending', not INSERT a second one — a plain INSERT here
+  // hit "duplicate key value violates unique constraint" for exactly that case (confirmed via a
+  // real repro, not just a code-review guess). ON CONFLICT DO UPDATE handles both the
+  // first-request and re-request cases in one query; the controller's own pre-check
+  // (createTripJoinRequest's `existing.status !== 'declined'` guard) already guarantees this
+  // only ever fires when the existing row — if any — is safe to overwrite.
   static async create({ bookingId, targetTripId, truckId, driverId, brokerId, amount }) {
     const result = await pool.query(
       `INSERT INTO trip_join_requests (booking_id, target_trip_id, truck_id, driver_id, broker_id, amount)
        VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (booking_id) DO UPDATE SET
+         target_trip_id = EXCLUDED.target_trip_id,
+         truck_id = EXCLUDED.truck_id,
+         driver_id = EXCLUDED.driver_id,
+         broker_id = EXCLUDED.broker_id,
+         amount = EXCLUDED.amount,
+         status = 'pending',
+         driver_timeout_at = NULL,
+         updated_at = NOW()
        RETURNING *`,
       [bookingId, targetTripId, truckId, driverId, brokerId, amount || null]
     );
