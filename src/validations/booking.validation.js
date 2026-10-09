@@ -1,5 +1,5 @@
 const { body } = require('express-validator');
-const { TRUCK_TYPE_VALUES, LEGACY_TRUCK_CATEGORIES } = require('../constants/truckTypes');
+const { TRUCK_TYPE_VALUES, LEGACY_TRUCK_CATEGORIES, TRUCK_BODY_TYPE_VALUES } = require('../constants/truckTypes');
 
 const TRANSPORT_TYPES = ['intra', 'inter'];
 // 'part' (part-load — a booking mode, not a truck size) is still selectable on top of every
@@ -65,6 +65,13 @@ const createBookingValidation = [
   body('search_radius_km').optional({ nullable: true, checkFalsy: true })
     .isFloat({ min: 0.5, max: 200 }).withMessage('search_radius_km must be between 0.5 and 200'),
   body('broker_id').optional({ nullable: true, checkFalsy: true }).isUUID().withMessage('broker_id must be a valid UUID'),
+
+  // Open vs closed truck body — an optional filter on top of truck_category; only meaningful for
+  // search_mode "truck" (Find Truck matches against it, see booking.controller.js's
+  // broadcastBooking), but accepted regardless of search_mode so the client can set it before
+  // search_mode is chosen.
+  body('truck_body_type').optional({ nullable: true, checkFalsy: true })
+    .isIn(TRUCK_BODY_TYPE_VALUES).withMessage(`truck_body_type must be one of: ${TRUCK_BODY_TYPE_VALUES.join(', ')}`),
 
   // Book Later — is_scheduled requires scheduled_date to actually mean something (the deferred
   // broadcast time is computed from it).

@@ -16,14 +16,26 @@ const TRUCK_TYPES = [
   { value: '17ft', label: '17ft Truck', capacity: '4.5 Ton' },
   { value: '19ft', label: '19ft Truck', capacity: '6 Ton' },
   { value: '22ft', label: '22ft Truck', capacity: '7 Ton' },
+  { value: '32ft_sxl', label: '32ft SXL', capacity: '9 Ton' },
+  { value: '32ft_mxl', label: '32ft MXL', capacity: '18 Ton' },
 ];
 
 const TRUCK_TYPE_VALUES = TRUCK_TYPES.map((t) => t.value);
 
 // Existing trucks/bookings keep whatever pre-retaxonomy category they already have — nothing
 // force-migrates them (see db/51vehicle_pricing.sql) — so validation everywhere still needs to
-// accept these three alongside the new 8, or an ordinary update to an old, not-yet-recategorized
-// truck would start failing for a field the request didn't even mean to change.
+// accept these three alongside the new 8 (now 10), or an ordinary update to an old, not-yet-
+// recategorized truck would start failing for a field the request didn't even mean to change.
 const LEGACY_TRUCK_CATEGORIES = ['small', 'medium', 'large'];
 
-module.exports = { TRUCK_TYPES, TRUCK_TYPE_VALUES, LEGACY_TRUCK_CATEGORIES };
+// A truck's body structure — independent of its size category. Optional (null = not specified,
+// mainly for trucks registered before this field existed) everywhere it's used: truck
+// registration (trucks.body_type), and as a search filter on top of the size category
+// (GET /api/vehicles/trucks/nearby, the "Find Truck" broadcast match, bookings.truck_body_type).
+const TRUCK_BODY_TYPES = [
+  { value: 'open', label: 'Open Truck' },
+  { value: 'closed', label: 'Closed Truck' },
+];
+const TRUCK_BODY_TYPE_VALUES = TRUCK_BODY_TYPES.map((t) => t.value);
+
+module.exports = { TRUCK_TYPES, TRUCK_TYPE_VALUES, LEGACY_TRUCK_CATEGORIES, TRUCK_BODY_TYPES, TRUCK_BODY_TYPE_VALUES };

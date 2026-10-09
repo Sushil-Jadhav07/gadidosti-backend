@@ -1293,6 +1293,30 @@ const runMigrations = async (client) => {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS page_permissions JSONB NOT NULL DEFAULT '[]'::jsonb;
     `);
 
+    // ── 32FT SXL/MXL + OPEN/CLOSED TRUCK BODY TYPE (mirrors db/59truck_32ft_and_body_type.sql) ──
+    // Two more truck sizes (see constants/truckTypes.js) added the same additive way as the
+    // earlier retaxonomy above. body_type is a new, independent attribute — not a size — set
+    // when a truck is registered and usable as a search filter on top of the size category
+    // (GET /api/vehicles/trucks/nearby, the "Find Truck" broadcast). Plain TEXT + CHECK rather
+    // than another enum (matches the monthly_hiring_enquiries pattern elsewhere in this file) —
+    // nullable, since existing trucks/bookings were never asked for one.
+    await client.query(`
+      ALTER TYPE truck_category ADD VALUE IF NOT EXISTS '32ft_sxl';
+      ALTER TYPE truck_category ADD VALUE IF NOT EXISTS '32ft_mxl';
+    `);
+    await client.query(`
+      ALTER TABLE trucks ADD COLUMN IF NOT EXISTS body_type TEXT;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS truck_body_type TEXT;
+    `);
+    await client.query(`
+      DO $$ BEGIN
+          ALTER TABLE trucks ADD CONSTRAINT trucks_body_type_chk CHECK (body_type IN ('open', 'closed'));
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+      DO $$ BEGIN
+          ALTER TABLE bookings ADD CONSTRAINT bookings_truck_body_type_chk CHECK (truck_body_type IN ('open', 'closed'));
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

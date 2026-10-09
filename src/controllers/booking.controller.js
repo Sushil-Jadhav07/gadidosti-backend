@@ -67,6 +67,7 @@ const projectBooking = (row, timeline, role) => {
     unloadingLocations: row.unloading_locations || [],
     truckType: row.truck_type,
     truckCategory: row.truck_category,
+    truckBodyType: row.truck_body_type,
     weight: row.weight,
     weightUnit: row.weight_unit,
     quantity: row.quantity,
@@ -928,6 +929,7 @@ const broadcastBooking = async (booking) => {
       lng: booking.pickup_lng,
       radiusKm,
       category: booking.truck_category,
+      bodyType: booking.truck_body_type,
     });
     // Logs exactly who the query found at this exact moment (name + driver id + distance) —
     // a driver's eligibility (KYC, online status, live location freshness) can genuinely change
@@ -1043,6 +1045,7 @@ const rebroadcastFindTruck = async (booking) => {
     lng: booking.pickup_lng,
     radiusKm,
     category: booking.truck_category,
+    bodyType: booking.truck_body_type,
   });
   const candidates = allNearby.filter((c) => !liveDriverIds.has(c.driver_id));
   // See the matching log in broadcastBooking above for why this is logged at the moment of the
@@ -1186,7 +1189,7 @@ const createBooking = async (req, res, next) => {
   try {
     const {
       pickup_location, pickup_lat, pickup_lng, drop_location, drop_lat, drop_lng, drop_state,
-      truck_type, truck_category, weight, weight_unit, quantity, material,
+      truck_type, truck_category, truck_body_type, weight, weight_unit, quantity, material,
       transport_type = 'intra', city, scheduled_date, distance, duration_min, duration_in_traffic_min,
       amount: providedAmount, payment_status, notes,
       add_loading_location, add_unloading_location,
@@ -1250,6 +1253,7 @@ const createBooking = async (req, res, next) => {
       city: transport_type === 'intra' ? city : null,
       truckType: truck_type,
       truckCategory: truck_category,
+      truckBodyType: truck_body_type,
       weight,
       weightUnit: weight_unit,
       quantity,

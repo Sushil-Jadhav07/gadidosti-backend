@@ -30,6 +30,8 @@ const DEFAULT_VEHICLE_PRICING = {
   '17ft':        { minimumFare: 2700, ratesByBand: [160, 100, 128, 36, 21, 21, 21, 21] },
   '19ft':        { minimumFare: 3800, ratesByBand: [210, 122, 146, 40, 23, 23, 23, 23] },
   '22ft':        { minimumFare: 4400, ratesByBand: [250, 142, 161, 43, 25, 25, 25, 25] },
+  '32ft_sxl':    { minimumFare: 5500, ratesByBand: [290, 165, 185, 48, 28, 28, 28, 28] },
+  '32ft_mxl':    { minimumFare: 7000, ratesByBand: [340, 195, 215, 55, 32, 32, 32, 32] },
 };
 
 // Flat per-km rates for a handful of far/harder-to-reach regions — override the distance-band
@@ -37,9 +39,9 @@ const DEFAULT_VEHICLE_PRICING = {
 // since a plain distance-based rate would undercharge routes that are this far out regardless of
 // exact km (tolls/permits/return-load scarcity). Priced above even the longest distance band.
 const DEFAULT_REGION_RATES = {
-  southEast:    { '3_wheeler': 17, tata_ace: 18, pickup_8ft: 20, pickup_10ft: 22, '14ft': 25, '17ft': 26, '19ft': 28, '22ft': 30 },
-  guwahatiSide: { '3_wheeler': 20, tata_ace: 21, pickup_8ft: 23, pickup_10ft: 24, '14ft': 27, '17ft': 29, '19ft': 31, '22ft': 33 },
-  kerala:       { '3_wheeler': 22, tata_ace: 25, pickup_8ft: 26, pickup_10ft: 26, '14ft': 29, '17ft': 31, '19ft': 33, '22ft': 35 },
+  southEast:    { '3_wheeler': 17, tata_ace: 18, pickup_8ft: 20, pickup_10ft: 22, '14ft': 25, '17ft': 26, '19ft': 28, '22ft': 30, '32ft_sxl': 33, '32ft_mxl': 37 },
+  guwahatiSide: { '3_wheeler': 20, tata_ace: 21, pickup_8ft: 23, pickup_10ft: 24, '14ft': 27, '17ft': 29, '19ft': 31, '22ft': 33, '32ft_sxl': 36, '32ft_mxl': 40 },
+  kerala:       { '3_wheeler': 22, tata_ace: 25, pickup_8ft: 26, pickup_10ft: 26, '14ft': 29, '17ft': 31, '19ft': 33, '22ft': 35, '32ft_sxl': 38, '32ft_mxl': 42 },
 };
 
 // Which Indian states count as each named zone — a judgment call (not given explicitly), kept
@@ -66,7 +68,7 @@ const LEGACY_CATEGORY_TO_VEHICLE_TYPE = { small: 'pickup_8ft', medium: '14ft', l
 const VEHICLE_TYPE_TO_LEGACY_BUCKET = {
   '3_wheeler': 'small', tata_ace: 'small', pickup_8ft: 'small',
   pickup_10ft: 'medium', '14ft': 'medium',
-  '17ft': 'large', '19ft': 'large', '22ft': 'large',
+  '17ft': 'large', '19ft': 'large', '22ft': 'large', '32ft_sxl': 'large', '32ft_mxl': 'large',
 };
 
 const resolveVehicleTypeKey = (truckCategory) => {

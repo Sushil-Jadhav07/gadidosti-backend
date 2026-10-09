@@ -1,5 +1,5 @@
 const { body, query } = require('express-validator');
-const { TRUCK_TYPE_VALUES, LEGACY_TRUCK_CATEGORIES } = require('../constants/truckTypes');
+const { TRUCK_TYPE_VALUES, LEGACY_TRUCK_CATEGORIES, TRUCK_BODY_TYPE_VALUES } = require('../constants/truckTypes');
 
 // The 8 new specific types, plus the old small/medium/large (existing trucks aren't force-
 // migrated — see db/51vehicle_pricing.sql) and 'part' (kept for backward compat, even though no
@@ -23,6 +23,8 @@ const createTruckValidation = [
   body('make').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 60 }),
   body('year').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1990, max: CURRENT_YEAR + 1 }).withMessage(`Year must be between 1990 and ${CURRENT_YEAR + 1}`),
   body('insurance_expiry').optional({ nullable: true, checkFalsy: true }).isISO8601().withMessage('Insurance expiry must be a valid date'),
+  body('body_type').optional({ nullable: true, checkFalsy: true }).trim()
+    .isIn(TRUCK_BODY_TYPE_VALUES).withMessage(`body_type must be one of: ${TRUCK_BODY_TYPE_VALUES.join(', ')}`),
   brokerIdValidation,
 ];
 
@@ -34,6 +36,8 @@ const updateTruckValidation = [
   body('make').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 60 }),
   body('year').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1990, max: CURRENT_YEAR + 1 }).withMessage(`Year must be between 1990 and ${CURRENT_YEAR + 1}`),
   body('insurance_expiry').optional({ nullable: true, checkFalsy: true }).isISO8601().withMessage('Insurance expiry must be a valid date'),
+  body('body_type').optional({ nullable: true, checkFalsy: true }).trim()
+    .isIn(TRUCK_BODY_TYPE_VALUES).withMessage(`body_type must be one of: ${TRUCK_BODY_TYPE_VALUES.join(', ')}`),
   body('status').optional({ nullable: true, checkFalsy: true }).isIn(['available', 'on_trip', 'maintenance']).withMessage('Invalid status'),
 ];
 
@@ -72,6 +76,8 @@ const nearbyTrucksValidation = [
   query('truck_category').optional({ nullable: true, checkFalsy: true })
     .isIn(TRUCK_CATEGORIES).withMessage(`truck_category must be one of: ${TRUCK_CATEGORIES.join(', ')}`),
   query('capacity').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 60 }),
+  query('body_type').optional({ nullable: true, checkFalsy: true })
+    .isIn(TRUCK_BODY_TYPE_VALUES).withMessage(`body_type must be one of: ${TRUCK_BODY_TYPE_VALUES.join(', ')}`),
   query('radius_km').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('radius_km must be a positive number'),
 ];
 

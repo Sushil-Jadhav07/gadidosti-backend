@@ -24,6 +24,7 @@ const projectTruck = (row) => ({
   type: row.type,
   category: row.category,
   capacity: row.capacity,
+  bodyType: row.body_type,
   make: row.make,
   year: row.year,
   insuranceExpiry: row.insurance_expiry,
@@ -62,6 +63,7 @@ const projectActiveDriver = (row) => ({
     type: row.truck_type,
     category: row.truck_category,
     capacity: row.truck_capacity,
+    bodyType: row.truck_body_type,
     make: row.truck_make,
     year: row.truck_year,
     insuranceExpiry: row.truck_insurance_expiry,
@@ -114,7 +116,7 @@ const resolveBrokerId = async (req) => {
 // POST /api/vehicles/trucks
 const createTruck = async (req, res, next) => {
   try {
-    const { driver_id, registration, type, category, capacity, make, year, insurance_expiry } = req.body;
+    const { driver_id, registration, type, category, capacity, make, year, insurance_expiry, body_type } = req.body;
 
     const { brokerId, error } = await resolveBrokerId(req);
     if (error) return errorResponse(res, error === 'Broker not found' ? 404 : 422, error);
@@ -132,6 +134,7 @@ const createTruck = async (req, res, next) => {
       make,
       year,
       insuranceExpiry: insurance_expiry,
+      bodyType: body_type,
     });
 
     await AuditLogModel.log({
@@ -156,6 +159,7 @@ const projectNearbyTruck = (row) => ({
   type: row.type,
   category: row.category,
   capacity: row.capacity,
+  bodyType: row.body_type,
   make: row.make,
   year: row.year,
   status: row.status,
@@ -176,13 +180,14 @@ const projectNearbyTruck = (row) => ({
 // few seconds while the user is on this step and animate trucks between positions.
 const listNearbyTrucks = async (req, res, next) => {
   try {
-    const { pickup_lat, pickup_lng, truck_category, capacity, radius_km, page = 1, limit = 20 } = req.query;
+    const { pickup_lat, pickup_lng, truck_category, capacity, body_type, radius_km, page = 1, limit = 20 } = req.query;
 
     const result = await TruckModel.findNearby({
       lat: parseFloat(pickup_lat),
       lng: parseFloat(pickup_lng),
       category: truck_category,
       capacity,
+      bodyType: body_type,
       radiusKm: radius_km !== undefined ? parseFloat(radius_km) : undefined,
       page: parseInt(page),
       limit: Math.min(parseInt(limit), 100),
@@ -233,9 +238,9 @@ const updateTruck = async (req, res, next) => {
     if (!truck) return errorResponse(res, 404, 'Truck not found');
     if (req.user.role === 'broker' && truck.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your truck');
 
-    const { driver_id, type, category, capacity, make, year, insurance_expiry, status } = req.body;
+    const { driver_id, type, category, capacity, make, year, insurance_expiry, status, body_type } = req.body;
     const updated = await TruckModel.update(req.params.id, {
-      driverId: driver_id, type, category, capacity, make, year, insuranceExpiry: insurance_expiry, status,
+      driverId: driver_id, type, category, capacity, make, year, insuranceExpiry: insurance_expiry, status, bodyType: body_type,
     });
 
     await AuditLogModel.log({

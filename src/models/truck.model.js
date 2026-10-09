@@ -32,12 +32,12 @@ class TruckModel {
   // was last set to — silently invisible to Find Truck if that one didn't match, regardless of
   // KYC/online/location, with nothing in the UI to explain why. assignDriver already keeps both
   // sides in sync for a *reassignment*; this now does the same at creation time.
-  static async create({ brokerId, driverId, registration, type, category, capacity, make, year, insuranceExpiry }) {
+  static async create({ brokerId, driverId, registration, type, category, capacity, make, year, insuranceExpiry, bodyType }) {
     if (!driverId) {
       const result = await pool.query(
-        `INSERT INTO trucks (broker_id, driver_id, registration, type, category, capacity, make, year, insurance_expiry)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-        [brokerId, null, registration, type || null, category || null, capacity || null, make || null, year || null, insuranceExpiry || null]
+        `INSERT INTO trucks (broker_id, driver_id, registration, type, category, capacity, make, year, insurance_expiry, body_type)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [brokerId, null, registration, type || null, category || null, capacity || null, make || null, year || null, insuranceExpiry || null, bodyType || null]
       );
       return result.rows[0];
     }
@@ -46,9 +46,9 @@ class TruckModel {
     try {
       await client.query('BEGIN');
       const result = await client.query(
-        `INSERT INTO trucks (broker_id, driver_id, registration, type, category, capacity, make, year, insurance_expiry)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-        [brokerId, driverId, registration, type || null, category || null, capacity || null, make || null, year || null, insuranceExpiry || null]
+        `INSERT INTO trucks (broker_id, driver_id, registration, type, category, capacity, make, year, insurance_expiry, body_type)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [brokerId, driverId, registration, type || null, category || null, capacity || null, make || null, year || null, insuranceExpiry || null, bodyType || null]
       );
       const truck = result.rows[0];
       // Same two steps assignDriver uses for a reassignment — this driver can't stay linked to
@@ -114,7 +114,7 @@ class TruckModel {
     };
   }
 
-  static async update(id, { driverId, type, category, capacity, make, year, insuranceExpiry, status }) {
+  static async update(id, { driverId, type, category, capacity, make, year, insuranceExpiry, status, bodyType }) {
     const result = await pool.query(
       `UPDATE trucks SET
          driver_id = COALESCE($1, driver_id),
@@ -125,10 +125,11 @@ class TruckModel {
          year = COALESCE($6, year),
          insurance_expiry = COALESCE($7, insurance_expiry),
          status = COALESCE($8, status),
+         body_type = COALESCE($9, body_type),
          updated_at = NOW()
-       WHERE id = $9
+       WHERE id = $10
        RETURNING *`,
-      [driverId, type, category, capacity, make, year, insuranceExpiry, status, id]
+      [driverId, type, category, capacity, make, year, insuranceExpiry, status, bodyType, id]
     );
     return result.rows[0] || null;
   }
@@ -164,9 +165,18 @@ class TruckModel {
   // driverProfile.model.js's findAll, which deliberately keeps location-unknown drivers in the
   // results (sorted last) since a broker still needs to see their whole fleet regardless of GPS
   // freshness.
-  static async findNearby({ lat, lng, category, capacity, radiusKm, page = 1, limit = 20 } = {}) {
+  static async findNearby({ lat, lng, category, capacity, bodyType, radiusKm, page = 1, limit = 20 } = {}) {
     const offset = (page - 1) * limit;
+    // The two always-true casts give Postgres explicit type context for $1/$2 (lat/lng) in the
+    // COUNT query below — without them, whenever this call has no radiusKm (the only other place
+    // $1/$2 get used, via distanceExpr) AND at least one of category/capacity/bodyType IS given
+    // (so the WHERE text ends up referencing a higher-numbered placeholder like $3), Postgres
+    // can't infer $1/$2's type from a query that never otherwise mentions them and 500s with
+    // "could not determine data type of parameter $1". The main rows query below is unaffected
+    // (distanceExpr always gives $1/$2 context there), but shares this same `where` string.
     const conditions = [
+      `$1::double precision IS NOT NULL`,
+      `$2::double precision IS NOT NULL`,
       `t.status = 'available'`,
       `t.driver_id IS NOT NULL`,
       `t.driver_id = dp.user_id`,
@@ -186,6 +196,11 @@ class TruckModel {
     if (capacity) {
       conditions.push(`LOWER(t.capacity) = LOWER($${idx++})`);
       params.push(capacity);
+    }
+
+    if (bodyType) {
+      conditions.push(`t.body_type = $${idx++}`);
+      params.push(bodyType);
     }
 
     // Haversine great-circle distance in km; clamp the acos() argument to [-1, 1] to guard
@@ -213,7 +228,7 @@ class TruckModel {
     const total = parseInt(countResult.rows[0].count);
 
     const rows = await pool.query(
-      `SELECT t.id, t.registration, t.type, t.category, t.capacity, t.make, t.year, t.status,
+      `SELECT t.id, t.registration, t.type, t.category, t.capacity, t.make, t.year, t.status, t.body_type,
               dp.current_lat, dp.current_lng, dp.current_heading, dp.last_location_at,
               (${distanceExpr}) AS distance_km
        FROM trucks t
@@ -239,7 +254,7 @@ class TruckModel {
   // truck map), this is for the "Find Truck" broadcast mode: every match gets notified at once,
   // first to accept wins (driver_requests' existing sibling-decline handles the rest). Same
   // eligibility conditions and haversine formula as findNearby, deliberately kept in sync.
-  static async findNearbyForBroadcast({ lat, lng, radiusKm, category } = {}) {
+  static async findNearbyForBroadcast({ lat, lng, radiusKm, category, bodyType } = {}) {
     const conditions = [
       `t.status = 'available'`,
       `t.driver_id IS NOT NULL`,
@@ -255,6 +270,11 @@ class TruckModel {
     if (category) {
       conditions.push(`t.category = $${idx++}`);
       params.push(category);
+    }
+
+    if (bodyType) {
+      conditions.push(`t.body_type = $${idx++}`);
+      params.push(bodyType);
     }
 
     const distanceExpr = `

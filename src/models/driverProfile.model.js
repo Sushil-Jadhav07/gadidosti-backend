@@ -131,7 +131,8 @@ class DriverProfileModel {
               broker.name AS broker_name,
               t.id AS truck_id, t.registration AS truck_registration, t.type AS truck_type,
               t.category AS truck_category, t.capacity AS truck_capacity, t.make AS truck_make,
-              t.year AS truck_year, t.insurance_expiry AS truck_insurance_expiry, t.status AS truck_status
+              t.year AS truck_year, t.insurance_expiry AS truck_insurance_expiry, t.status AS truck_status,
+              t.body_type AS truck_body_type
        FROM driver_profiles dp
        JOIN users u ON u.id = dp.user_id
        LEFT JOIN users broker ON broker.id = dp.broker_id

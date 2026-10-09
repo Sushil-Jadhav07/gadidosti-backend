@@ -66,7 +66,7 @@ class BookingModel {
 
   static async create({
     clientId, brokerId, driverId, truckId, pickupLocation, pickupLat, pickupLng,
-    dropLocation, dropLat, dropLng, truckType, truckCategory, weight, weightUnit,
+    dropLocation, dropLat, dropLng, truckType, truckCategory, truckBodyType, weight, weightUnit,
     quantity, material, transportType, scheduledDate, amount, currentStep,
     pricingBreakdown, distance, platformFee, paymentStatus, notes, city,
     loadingLocations, unloadingLocations,
@@ -76,16 +76,16 @@ class BookingModel {
     const result = await pool.query(
       `INSERT INTO bookings (
          booking_number, client_id, broker_id, driver_id, truck_id, pickup_location, pickup_lat, pickup_lng,
-         drop_location, drop_lat, drop_lng, truck_type, truck_category, weight, weight_unit,
+         drop_location, drop_lat, drop_lng, truck_type, truck_category, truck_body_type, weight, weight_unit,
          quantity, material, transport_type, scheduled_date, amount, current_step,
          pricing_breakdown, distance, platform_fee, payment_status, notes, city,
          loading_locations, unloading_locations,
          is_scheduled, broadcast_at, search_mode, search_radius_km, selected_broker_id, is_express
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35)
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
        RETURNING *`,
       [
         bookingNumber, clientId, brokerId || null, driverId || null, truckId || null, pickupLocation || null, pickupLat || null, pickupLng || null,
-        dropLocation || null, dropLat || null, dropLng || null, truckType || null, truckCategory || null, weight || null, weightUnit || 'tons',
+        dropLocation || null, dropLat || null, dropLng || null, truckType || null, truckCategory || null, truckBodyType || null, weight || null, weightUnit || 'tons',
         quantity || null, material || null, transportType, scheduledDate || null, amount != null ? amount : null, currentStep || 0,
         pricingBreakdown ? JSON.stringify(pricingBreakdown) : null, distance != null ? distance : null, platformFee != null ? platformFee : null,
         paymentStatus || 'pending', notes || null, city || null,
