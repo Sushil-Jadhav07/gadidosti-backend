@@ -332,6 +332,10 @@ class PricingModel {
         platformFee,
         total: round2(adjustedTruckCost + platformFee),
         distance: dist,
+        // Pre-existing gap: this branch never set this, which crashed quoteBooking (every
+        // caller unconditionally does `breakdown.estimatedDeliveryDays * ...` to build
+        // estimatedDeliveryDate) — 500'd with "Invalid time value" for every 'part' quote.
+        estimatedDeliveryDays: getEstimatedDeliveryDays(dist, config.deliveryDateEstimate),
       };
     }
 
