@@ -378,11 +378,19 @@ const listTrips = async (req, res, next) => {
 // ─── GET /api/trips/active ────────────────────────────────────────────────────
 const getActiveTrip = async (req, res, next) => {
   try {
-    const trip = await TripModel.findActiveByDriver(req.user.id);
-    if (!trip) return successResponse(res, 200, 'No active trip', { trip: null });
+    // trips (plural) is the real shape now — a driver can have more than one simultaneously
+    // active trip (part-load: a joined booking sharing the same truck/driver, see
+    // TruckModel.findOnTripForPartLoad / trip_join_requests). trip (singular, the first one) is
+    // kept alongside it so existing callers that only ever read `data.trip` keep working
+    // unmodified; new/updated screens should read `data.trips` instead.
+    const trips = await TripModel.findActiveTripsByDriver(req.user.id);
+    if (!trips.length) return successResponse(res, 200, 'No active trip', { trip: null, trips: [] });
 
-    const timeline = await TripModel.getTimeline(trip.id);
-    return successResponse(res, 200, 'Active trip fetched', { trip: await projectTrip(trip, timeline) });
+    const projected = await Promise.all(trips.map(async (trip) => {
+      const timeline = await TripModel.getTimeline(trip.id);
+      return projectTrip(trip, timeline);
+    }));
+    return successResponse(res, 200, 'Active trip fetched', { trip: projected[0], trips: projected });
   } catch (err) {
     next(err);
   }

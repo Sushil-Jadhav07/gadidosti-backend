@@ -121,6 +121,22 @@ class TripJoinRequestModel {
     );
     return result.rows[0] || null;
   }
+
+  // Second-stage sweep target — mirrors driver_requests' own version. The broker's turn
+  // (driver_timeout_at set, still 'pending') for longer than timeoutMinutes since the driver
+  // timed out.
+  static async findOverdueForBrokerResponse(timeoutMinutes) {
+    const result = await pool.query(
+      `SELECT tjr.id, tjr.booking_id, tjr.broker_id, tjr.driver_id, b.booking_number, b.client_id
+       FROM trip_join_requests tjr
+       JOIN bookings b ON b.id = tjr.booking_id
+       WHERE tjr.status = 'pending'
+         AND tjr.driver_timeout_at IS NOT NULL
+         AND tjr.driver_timeout_at <= NOW() - ($1 || ' minutes')::INTERVAL`,
+      [timeoutMinutes]
+    );
+    return result.rows;
+  }
 }
 
 module.exports = TripJoinRequestModel;
