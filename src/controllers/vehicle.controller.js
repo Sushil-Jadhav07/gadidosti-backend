@@ -3,6 +3,8 @@ const bcrypt = require('bcryptjs');
 const TruckModel = require('../models/truck.model');
 const DriverProfileModel = require('../models/driverProfile.model');
 const TripModel = require('../models/trip.model');
+const PricingModel = require('../models/pricing.model');
+const { haversineKm, AVERAGE_SPEED_KMPH } = require('../utils/geo');
 const UserModel = require('../models/user.model');
 const RefreshTokenModel = require('../models/refreshToken.model');
 const AuditLogModel = require('../models/auditLog.model');
@@ -25,6 +27,7 @@ const projectTruck = (row) => ({
   category: row.category,
   capacity: row.capacity,
   bodyType: row.body_type,
+  capacityTons: row.capacity_tons != null ? Number(row.capacity_tons) : null,
   make: row.make,
   year: row.year,
   insuranceExpiry: row.insurance_expiry,
@@ -116,7 +119,7 @@ const resolveBrokerId = async (req) => {
 // POST /api/vehicles/trucks
 const createTruck = async (req, res, next) => {
   try {
-    const { driver_id, registration, type, category, capacity, make, year, insurance_expiry, body_type } = req.body;
+    const { driver_id, registration, type, category, capacity, make, year, insurance_expiry, body_type, capacity_tons } = req.body;
 
     const { brokerId, error } = await resolveBrokerId(req);
     if (error) return errorResponse(res, error === 'Broker not found' ? 404 : 422, error);
@@ -135,6 +138,7 @@ const createTruck = async (req, res, next) => {
       year,
       insuranceExpiry: insurance_expiry,
       bodyType: body_type,
+      capacityTons: capacity_tons,
     });
 
     await AuditLogModel.log({
@@ -199,6 +203,71 @@ const listNearbyTrucks = async (req, res, next) => {
   }
 };
 
+const projectPartLoadCandidate = (row, estimate) => ({
+  truckId: row.truck_id,
+  registration: row.registration,
+  category: row.category,
+  bodyType: row.body_type,
+  driverId: row.driver_id,
+  driverName: row.driver_name,
+  capacityTons: row.capacity_tons != null ? Number(row.capacity_tons) : null,
+  spareTons: row.spare_tons != null ? Number(row.spare_tons) : null,
+  distanceKm: row.distance_km != null ? Number(row.distance_km) : null,
+  // Straight-line ETA to the pickup point, same AVERAGE_SPEED_KMPH assumption used elsewhere in
+  // this codebase for estimates that don't go through a real routing engine.
+  etaMinutes: row.distance_km != null ? Math.round((Number(row.distance_km) / AVERAGE_SPEED_KMPH) * 60) : null,
+  currentLat: row.current_lat != null ? Number(row.current_lat) : null,
+  currentLng: row.current_lng != null ? Number(row.current_lng) : null,
+  currentTripId: row.current_trip_id,
+  estimatedPrice: estimate,
+});
+
+// GET /api/vehicles/trucks/nearby-on-trip — part-load matching: on-trip trucks with spare
+// capacity, within radius of the NEW booking's pickup, roughly heading the right way (see
+// TruckModel.findOnTripForPartLoad). Distinct from GET /vehicles/trucks/nearby, which only ever
+// matches status='available' trucks and has no capacity/route awareness at all.
+const listOnTripForPartLoad = async (req, res, next) => {
+  try {
+    const { pickup_lat, pickup_lng, drop_lat, drop_lng, weight_tons, radius_km } = req.query;
+    const pickupLat = parseFloat(pickup_lat);
+    const pickupLng = parseFloat(pickup_lng);
+    const dropLat = parseFloat(drop_lat);
+    const dropLng = parseFloat(drop_lng);
+    const weightTons = parseFloat(weight_tons);
+
+    const candidates = await TruckModel.findOnTripForPartLoad({
+      pickupLat, pickupLng, dropLat, dropLng, weightTons,
+      radiusKm: radius_km !== undefined ? parseFloat(radius_km) : undefined,
+    });
+
+    // Estimated price per candidate — same PricingModel.estimate 'part' branch as a normal
+    // part-load quote, but capacityUsedPct is computed here from the NEW booking's weight
+    // against THIS specific candidate truck's real capacity_tons, instead of a client-typed
+    // guess (see pricing.model.js's part branch — the formula itself is unchanged).
+    const distance = haversineKm(pickupLat, pickupLng, dropLat, dropLng);
+    const trucks = await Promise.all(candidates.map(async (row) => {
+      let estimate = null;
+      try {
+        estimate = await PricingModel.estimate({
+          truckCategory: 'part',
+          transportType: 'inter',
+          distance,
+          capacityUsedPct: row.capacity_tons ? (weightTons / Number(row.capacity_tons)) * 100 : undefined,
+          pickupLat, pickupLng,
+        });
+      } catch {
+        // Pricing config missing is a real but separate failure — don't let it hide otherwise-
+        // valid matching results, the client can still see/pick a truck and retry the quote.
+      }
+      return projectPartLoadCandidate(row, estimate);
+    }));
+
+    return successResponse(res, 200, 'On-trip trucks fetched', { trucks });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // GET /api/vehicles/trucks
 const listTrucks = async (req, res, next) => {
   try {
@@ -238,9 +307,9 @@ const updateTruck = async (req, res, next) => {
     if (!truck) return errorResponse(res, 404, 'Truck not found');
     if (req.user.role === 'broker' && truck.broker_id !== req.user.id) return errorResponse(res, 403, 'Not your truck');
 
-    const { driver_id, type, category, capacity, make, year, insurance_expiry, status, body_type } = req.body;
+    const { driver_id, type, category, capacity, make, year, insurance_expiry, status, body_type, capacity_tons } = req.body;
     const updated = await TruckModel.update(req.params.id, {
-      driverId: driver_id, type, category, capacity, make, year, insuranceExpiry: insurance_expiry, status, bodyType: body_type,
+      driverId: driver_id, type, category, capacity, make, year, insuranceExpiry: insurance_expiry, status, bodyType: body_type, capacityTons: capacity_tons,
     });
 
     await AuditLogModel.log({
@@ -868,7 +937,7 @@ const deleteMyQrCode = async (req, res, next) => {
 };
 
 module.exports = {
-  createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
+  createTruck, listTrucks, listNearbyTrucks, listOnTripForPartLoad, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
   forceLogoutDriver, myAssignedTruck, updateMyStatus, updateDriverLocation, getMyUpiId, updateMyUpiId,
   getMyQrCode, uploadMyQrCode, deleteMyQrCode,

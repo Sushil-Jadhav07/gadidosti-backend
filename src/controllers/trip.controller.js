@@ -586,8 +586,12 @@ const updateTripStatus = async (req, res, next) => {
 
       // Free up the driver/truck now that the trip is over — previously left stuck at
       // 'on_trip' forever, since this was the only status-changing path that never reset them.
-      if (trip.driver_id) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
-      if (trip.truck_id) await TruckModel.update(trip.truck_id, { status: 'available' });
+      // But not if the driver has ANOTHER trip still active (part-load: a second booking sharing
+      // this same truck/driver, see TruckModel.findOnTripForPartLoad) — reverting to 'available'
+      // here would wrongly re-offer a truck that's still mid-delivery for someone else.
+      const driverStillBusy = trip.driver_id && await TripModel.hasOtherActiveTrips(trip.driver_id, trip.id);
+      if (trip.driver_id && !driverStillBusy) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
+      if (trip.truck_id && !driverStillBusy) await TruckModel.update(trip.truck_id, { status: 'available' });
 
       if (trip.driver_id) {
         await NotificationModel.create({
@@ -611,9 +615,11 @@ const updateTripStatus = async (req, res, next) => {
         });
       }
     } else if (status === 'cancelled') {
-      // Same fix as completion — a cancelled trip must also release the driver/truck.
-      if (trip.driver_id) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
-      if (trip.truck_id) await TruckModel.update(trip.truck_id, { status: 'available' });
+      // Same fix as completion — a cancelled trip must also release the driver/truck, unless
+      // another of the driver's trips is still active (see the completion branch above).
+      const driverStillBusy = trip.driver_id && await TripModel.hasOtherActiveTrips(trip.driver_id, trip.id);
+      if (trip.driver_id && !driverStillBusy) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
+      if (trip.truck_id && !driverStillBusy) await TruckModel.update(trip.truck_id, { status: 'available' });
     }
 
     if (trip.broker_id && BROKER_STATUS_MESSAGES[status]) {
@@ -742,8 +748,12 @@ const declineTrip = async (req, res, next) => {
       return errorResponse(res, 409, 'This trip has already started and can no longer be declined. Report an incident instead.');
     }
 
-    if (trip.driver_id) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
-    if (trip.truck_id) await TruckModel.update(trip.truck_id, { status: 'available' });
+    // Not if the driver has another trip still active (part-load: this could be the joined
+    // booking's own trip being declined while the original trip is still in progress) — see the
+    // same guard in updateTripStatus above.
+    const driverStillBusy = trip.driver_id && await TripModel.hasOtherActiveTrips(trip.driver_id, trip.id);
+    if (trip.driver_id && !driverStillBusy) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
+    if (trip.truck_id && !driverStillBusy) await TruckModel.update(trip.truck_id, { status: 'available' });
 
     await BookingModel.update(trip.booking_id, {
       status: 'confirmed',

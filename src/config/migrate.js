@@ -1317,6 +1317,57 @@ const runMigrations = async (client) => {
       EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     `);
 
+    // ── PART-LOAD / SHARED-TRUCK BOOKINGS (mirrors db/60trip_join_requests.sql) ──
+    // Real load-sharing: a second client's smaller booking can now join a truck that's ALREADY
+    // on_trip for a first client, instead of 'part' truck_category bookings matching nobody (no
+    // truck is ever registered under that category, and findNearby/findNearbyForBroadcast only
+    // ever matched status='available' trucks). trips.booking_id stays strictly 1:1/UNIQUE — a
+    // joined booking gets its OWN, independent trips row (own POD/OTP/payment/stops, zero changes
+    // needed to existing trip-lifecycle code) that just happens to share the same truck_id/
+    // driver_id as the first trip's booking. capacity_tons is nullable with no backfill — a truck
+    // is simply never a part-load match candidate until its broker/admin sets a real number
+    // (the existing free-text `capacity` column, e.g. "18 Ton", isn't reliably parseable).
+    await client.query(`
+      ALTER TABLE trucks ADD COLUMN IF NOT EXISTS capacity_tons NUMERIC(6,2);
+    `);
+    await client.query(`
+      DO $$ BEGIN
+        CREATE TYPE trip_join_request_status AS ENUM ('pending', 'accepted', 'declined');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS trip_join_requests (
+        id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        booking_id      UUID NOT NULL UNIQUE REFERENCES bookings(id) ON DELETE CASCADE,
+        target_trip_id  UUID NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+        truck_id        UUID NOT NULL REFERENCES trucks(id) ON DELETE CASCADE,
+        driver_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        broker_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        amount          NUMERIC(12,2),
+        status          trip_join_request_status NOT NULL DEFAULT 'pending',
+        driver_timeout_at TIMESTAMPTZ,
+        created_at      TIMESTAMPTZ DEFAULT NOW(),
+        updated_at      TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_trip_join_requests_target_trip ON trip_join_requests(target_trip_id);
+      CREATE INDEX IF NOT EXISTS idx_trip_join_requests_driver ON trip_join_requests(driver_id);
+    `);
+    await client.query(`
+      DROP TRIGGER IF EXISTS update_trip_join_requests_updated_at ON trip_join_requests;
+      CREATE TRIGGER update_trip_join_requests_updated_at
+        BEFORE UPDATE ON trip_join_requests
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `);
+    // A part-load booking that's going to request a specific on-trip truck via
+    // POST /api/trip-join-requests shouldn't ALSO get the normal broadcastBooking() fan-out
+    // (truck broadcast matches nothing for category 'part' anyway; the legacy "every eligible
+    // broker" branch would just be noise for a booking the client is targeting directly) — this
+    // new search_mode value makes broadcastBooking() a deliberate no-op for it instead.
+    await client.query(`
+      ALTER TABLE bookings DROP CONSTRAINT IF EXISTS bookings_search_mode_check;
+      ALTER TABLE bookings ADD CONSTRAINT bookings_search_mode_check CHECK (search_mode IN ('broker', 'truck', 'part_load'));
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

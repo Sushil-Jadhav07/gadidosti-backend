@@ -206,10 +206,13 @@ const assignDriver = async (req, res, next) => {
     // negotiation, so the driver doesn't get a window here.
     const previousDriverId = booking.driver_id;
     const previousTruckId = booking.truck_id;
-    if (previousDriverId && previousDriverId !== driverId) {
+    // The previous driver/truck could still have ANOTHER active trip (part-load) besides this
+    // one being reassigned away from them — same guard as trip.controller.js's updateTripStatus.
+    const previousDriverStillBusy = previousDriverId && await TripModel.hasOtherActiveTrips(previousDriverId, existingTrip?.id);
+    if (previousDriverId && previousDriverId !== driverId && !previousDriverStillBusy) {
       await DriverProfileModel.update(previousDriverId, { status: 'available' });
     }
-    if (previousTruckId && previousTruckId !== truckId) {
+    if (previousTruckId && previousTruckId !== truckId && !previousDriverStillBusy) {
       await TruckModel.update(previousTruckId, { status: 'available' });
     }
 

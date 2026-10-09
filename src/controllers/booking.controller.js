@@ -446,8 +446,11 @@ const cancelBooking = async (req, res, next) => {
     if (trip) {
       await TripModel.updateStatus(trip.id, 'cancelled');
       await TripModel.addTimelineStep(trip.id, { step: 'cancelled', position: 99 });
-      if (trip.driver_id) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
-      if (trip.truck_id) await TruckModel.update(trip.truck_id, { status: 'available' });
+      // Not if the driver has another trip still active (part-load) — see the same guard in
+      // trip.controller.js's updateTripStatus.
+      const driverStillBusy = trip.driver_id && await TripModel.hasOtherActiveTrips(trip.driver_id, trip.id);
+      if (trip.driver_id && !driverStillBusy) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
+      if (trip.truck_id && !driverStillBusy) await TruckModel.update(trip.truck_id, { status: 'available' });
       // The notification below lands in the driver's/broker's notification list, but their
       // currently-open trip screen (MyTrip.jsx / JobDetail.jsx) has no reason to know anything
       // changed until they navigate away and back — this is what PATCH /api/trips/:id/status
@@ -463,8 +466,11 @@ const cancelBooking = async (req, res, next) => {
         }
       }
     } else if (booking.driver_id || booking.truck_id) {
-      if (booking.driver_id) await DriverProfileModel.update(booking.driver_id, { status: 'available' });
-      if (booking.truck_id) await TruckModel.update(booking.truck_id, { status: 'available' });
+      // No trip row exists for THIS booking yet, but the driver/truck could still have a
+      // DIFFERENT active trip (part-load) — same guard as above, just with no trip.id to exclude.
+      const driverStillBusy = booking.driver_id && await TripModel.hasOtherActiveTrips(booking.driver_id, null);
+      if (booking.driver_id && !driverStillBusy) await DriverProfileModel.update(booking.driver_id, { status: 'available' });
+      if (booking.truck_id && !driverStillBusy) await TruckModel.update(booking.truck_id, { status: 'available' });
     }
 
     const driverId = trip?.driver_id || booking.driver_id;
@@ -915,6 +921,13 @@ const quoteBooking = async (req, res, next) => {
 // arrives). Takes the full booking row (as returned by BookingModel.create/findById), not the
 // raw request body, so it works identically from either caller.
 const broadcastBooking = async (booking) => {
+  // Part-load: the client is going to separately target one specific on-trip truck via
+  // POST /api/trip-join-requests (see vehicle.controller.js's listOnTripForPartLoad for how they
+  // find it) — nothing to fan out here. A 'truck' broadcast would match nothing anyway (no truck
+  // is ever registered under category 'part'), and the legacy all-brokers branch would just be
+  // noise for a booking the client isn't asking brokers to pick up.
+  if (booking.search_mode === 'part_load') return;
+
   const pickupText = booking.pickup_location || 'an unspecified pickup point';
   const dropText = booking.drop_location || 'an unspecified drop point';
 

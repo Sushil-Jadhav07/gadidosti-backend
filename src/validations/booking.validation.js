@@ -60,8 +60,12 @@ const createBookingValidation = [
   // Mutually-exclusive "Find Truck" (broadcast to nearby drivers) vs "Search for Broker"
   // (pick one broker) — both optional; omitting search_mode entirely keeps the legacy
   // broadcast-to-all-eligible-brokers behavior (see booking.controller.js's broadcastBooking).
+  // 'part_load' — the booking is going to separately request a specific on-trip truck via
+  // POST /api/trip-join-requests; broadcastBooking() deliberately no-ops for it (see
+  // booking.controller.js) instead of fanning out to brokers/drivers for a booking the client is
+  // targeting directly.
   body('search_mode').optional({ nullable: true, checkFalsy: true })
-    .isIn(['truck', 'broker']).withMessage('search_mode must be one of: truck, broker'),
+    .isIn(['truck', 'broker', 'part_load']).withMessage('search_mode must be one of: truck, broker, part_load'),
   body('search_radius_km').optional({ nullable: true, checkFalsy: true })
     .isFloat({ min: 0.5, max: 200 }).withMessage('search_radius_km must be between 0.5 and 200'),
   body('broker_id').optional({ nullable: true, checkFalsy: true }).isUUID().withMessage('broker_id must be a valid UUID'),

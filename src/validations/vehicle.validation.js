@@ -25,6 +25,11 @@ const createTruckValidation = [
   body('insurance_expiry').optional({ nullable: true, checkFalsy: true }).isISO8601().withMessage('Insurance expiry must be a valid date'),
   body('body_type').optional({ nullable: true, checkFalsy: true }).trim()
     .isIn(TRUCK_BODY_TYPE_VALUES).withMessage(`body_type must be one of: ${TRUCK_BODY_TYPE_VALUES.join(', ')}`),
+  // Machine-usable capacity, in tons — separate from the free-text `capacity` display field
+  // (e.g. "18 Ton"). Optional; a truck with none set is simply never a part-load match candidate
+  // (see TruckModel.findOnTripForPartLoad).
+  body('capacity_tons').optional({ nullable: true, checkFalsy: true })
+    .isFloat({ min: 0.01, max: 100 }).withMessage('capacity_tons must be a positive number'),
   brokerIdValidation,
 ];
 
@@ -38,6 +43,8 @@ const updateTruckValidation = [
   body('insurance_expiry').optional({ nullable: true, checkFalsy: true }).isISO8601().withMessage('Insurance expiry must be a valid date'),
   body('body_type').optional({ nullable: true, checkFalsy: true }).trim()
     .isIn(TRUCK_BODY_TYPE_VALUES).withMessage(`body_type must be one of: ${TRUCK_BODY_TYPE_VALUES.join(', ')}`),
+  body('capacity_tons').optional({ nullable: true, checkFalsy: true })
+    .isFloat({ min: 0.01, max: 100 }).withMessage('capacity_tons must be a positive number'),
   body('status').optional({ nullable: true, checkFalsy: true }).isIn(['available', 'on_trip', 'maintenance']).withMessage('Invalid status'),
 ];
 
@@ -81,7 +88,21 @@ const nearbyTrucksValidation = [
   query('radius_km').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('radius_km must be a positive number'),
 ];
 
+// GET /vehicles/trucks/nearby-on-trip — part-load matching (TruckModel.findOnTripForPartLoad).
+// Unlike nearbyTrucksValidation above, drop_lat/drop_lng and weight_tons are required: without a
+// drop point there's no route to check compatibility against, and without a weight there's no
+// capacity check to run — both are core to what makes this different from a normal nearby search.
+const nearbyOnTripValidation = [
+  query('pickup_lat').isFloat({ min: -90, max: 90 }).withMessage('pickup_lat must be a valid latitude'),
+  query('pickup_lng').isFloat({ min: -180, max: 180 }).withMessage('pickup_lng must be a valid longitude'),
+  query('drop_lat').isFloat({ min: -90, max: 90 }).withMessage('drop_lat must be a valid latitude'),
+  query('drop_lng').isFloat({ min: -180, max: 180 }).withMessage('drop_lng must be a valid longitude'),
+  query('weight_tons').isFloat({ min: 0.01 }).withMessage('weight_tons must be a positive number'),
+  query('radius_km').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('radius_km must be a positive number'),
+];
+
 module.exports = {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
   registerDriverValidation, updateDriverLocationValidation, assignDriverValidation, nearbyTrucksValidation,
+  nearbyOnTripValidation,
 };

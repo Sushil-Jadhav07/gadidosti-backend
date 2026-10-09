@@ -71,13 +71,40 @@ class TripModel {
   // 'delivered' here used to mean a driver who closed the app mid-completion (before POD/
   // payment) would come back to "no active trip" and have no way to finish it.
   static async findActiveByDriver(driverId) {
+    const trips = await this.findActiveTripsByDriver(driverId);
+    return trips[0] || null;
+  }
+
+  // List form of the above — a driver can now have more than one simultaneously-active trip
+  // (part-load: a second booking sharing the same truck/driver via trip_join_requests, see
+  // TruckModel.findOnTripForPartLoad), so anything that needs to know ALL of a driver's current
+  // trips (not just "the" one) — e.g. deciding whether it's safe to flip a truck/driver back to
+  // 'available' — must use this, not the singular wrapper above.
+  static async findActiveTripsByDriver(driverId) {
     const result = await pool.query(
       `${SELECT_WITH_JOINS} WHERE tr.driver_id = $1
        AND tr.status NOT IN ('completed', 'cancelled')
-       ORDER BY tr.created_at DESC LIMIT 1`,
+       ORDER BY tr.created_at DESC`,
       [driverId]
     );
-    return result.rows[0] || null;
+    return result.rows;
+  }
+
+  // Whether this driver has an active trip OTHER than the one being closed out right now — the
+  // guard every "revert driver/truck to available" call site needs before actually reverting
+  // (part-load: a truck/driver freeing up from one booking may still be mid-delivery for
+  // another). A plain SELECT 1 EXISTS, not a full findActiveTripsByDriver, since callers only
+  // need the boolean.
+  static async hasOtherActiveTrips(driverId, excludeTripId) {
+    // excludeTripId is optional (null when there's no "this trip" to exclude, e.g. a booking
+    // cancelled before any trip row existed for it) — `$2::uuid IS NULL OR id != $2` rather than
+    // a bare `id != $2`, since the latter is NULL (never true) for every row when $2 itself is
+    // NULL, which would wrongly report "no other active trips" even when some exist.
+    const result = await pool.query(
+      `SELECT 1 FROM trips WHERE driver_id = $1 AND ($2::uuid IS NULL OR id != $2) AND status NOT IN ('completed', 'cancelled') LIMIT 1`,
+      [driverId, excludeTripId || null]
+    );
+    return result.rowCount > 0;
   }
 
   // The driver's next assigned-but-not-yet-started trip (status still 'confirmed').

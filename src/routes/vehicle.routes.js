@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const {
-  createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
+  createTruck, listTrucks, listNearbyTrucks, listOnTripForPartLoad, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
   forceLogoutDriver, myAssignedTruck, updateMyStatus, updateDriverLocation, getMyUpiId, updateMyUpiId,
   getMyQrCode, uploadMyQrCode, deleteMyQrCode,
@@ -14,6 +14,7 @@ const upload = require('../middleware/upload.middleware');
 const {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
   registerDriverValidation, updateDriverLocationValidation, assignDriverValidation, nearbyTrucksValidation,
+  nearbyOnTripValidation,
 } = require('../validations/vehicle.validation');
 
 // ─── TRUCKS ───────────────────────────────────────────────────────────────────
@@ -134,6 +135,55 @@ router.get('/vehicles/trucks', authenticate, authorize('broker', 'admin', 'staff
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/vehicles/trucks/nearby', authenticate, nearbyTrucksValidation, validate, listNearbyTrucks);
+
+/**
+ * @swagger
+ * /api/vehicles/trucks/nearby-on-trip:
+ *   get:
+ *     tags: [Vehicles]
+ *     summary: On-trip trucks with spare capacity for a part-load join request (any authenticated role)
+ *     description: |
+ *       Part-load matching — unlike /vehicles/trucks/nearby (status=available only, no capacity/route awareness), this finds trucks that are ALREADY on_trip for a first booking, have enough spare capacity_tons for this new booking's weight_tons, and are roughly heading the right way (bearing + detour-budget heuristic against the truck's current trip's remaining stops — no routing engine). A truck already carrying 2 bookings (the v1 cap) is excluded. Each result includes an estimated price computed from this specific truck's real capacity, not a client-typed guess.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: pickup_lat
+ *         required: true
+ *         schema: { type: number, example: 19.076 }
+ *       - in: query
+ *         name: pickup_lng
+ *         required: true
+ *         schema: { type: number, example: 72.8777 }
+ *       - in: query
+ *         name: drop_lat
+ *         required: true
+ *         schema: { type: number, example: 18.52 }
+ *       - in: query
+ *         name: drop_lng
+ *         required: true
+ *         schema: { type: number, example: 73.8567 }
+ *       - in: query
+ *         name: weight_tons
+ *         required: true
+ *         schema: { type: number, example: 2.5 }
+ *       - in: query
+ *         name: radius_km
+ *         description: Defaults to 50km if omitted.
+ *         schema: { type: number }
+ *     responses:
+ *       200:
+ *         description: On-trip trucks fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       422:
+ *         description: Missing/invalid pickup, drop, or weight_tons
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/vehicles/trucks/nearby-on-trip', authenticate, nearbyOnTripValidation, validate, listOnTripForPartLoad);
 
 /**
  * @swagger
