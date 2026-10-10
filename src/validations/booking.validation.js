@@ -66,6 +66,13 @@ const createBookingValidation = [
   // targeting directly.
   body('search_mode').optional({ nullable: true, checkFalsy: true })
     .isIn(['truck', 'broker', 'part_load']).withMessage('search_mode must be one of: truck, broker, part_load'),
+  // A part-load booking is useless without a real weight — GET /vehicles/trucks/nearby-on-trip
+  // requires weight_tons to run its capacity check at all, so a booking created without one (the
+  // weight input left at its default and somehow not carried through, or any other client bug)
+  // would otherwise sit there with no way to ever search for a truck. Caught here instead, with
+  // a clear message, rather than failing silently later at search time.
+  body('weight').if(body('search_mode').equals('part_load'))
+    .isFloat({ min: 0.01 }).withMessage('weight is required for a Part Truck booking'),
   body('search_radius_km').optional({ nullable: true, checkFalsy: true })
     .isFloat({ min: 0.5, max: 200 }).withMessage('search_radius_km must be between 0.5 and 200'),
   body('broker_id').optional({ nullable: true, checkFalsy: true }).isUUID().withMessage('broker_id must be a valid UUID'),
