@@ -4,7 +4,6 @@ const TruckModel = require('../models/truck.model');
 const DriverProfileModel = require('../models/driverProfile.model');
 const TripModel = require('../models/trip.model');
 const PricingModel = require('../models/pricing.model');
-const { haversineKm, AVERAGE_SPEED_KMPH } = require('../utils/geo');
 const UserModel = require('../models/user.model');
 const RefreshTokenModel = require('../models/refreshToken.model');
 const AuditLogModel = require('../models/auditLog.model');
@@ -28,6 +27,11 @@ const projectTruck = (row) => ({
   capacity: row.capacity,
   bodyType: row.body_type,
   capacityTons: row.capacity_tons != null ? Number(row.capacity_tons) : null,
+  // Full Truck / Part Truck toggle (see TruckModel.findPartTruckCandidates) — partTruckMode is
+  // the driver's own opt-in to sharing spare capacity; acceptingLoads only matters while that's
+  // true, a separate pause on NEW requests that doesn't affect anything already assigned.
+  partTruckMode: !!row.part_truck_mode,
+  acceptingLoads: row.accepting_loads !== false,
   make: row.make,
   year: row.year,
   insuranceExpiry: row.insurance_expiry,
@@ -198,71 +202,6 @@ const listNearbyTrucks = async (req, res, next) => {
     });
 
     return successResponse(res, 200, 'Nearby trucks fetched', { ...result, trucks: result.trucks.map(projectNearbyTruck) });
-  } catch (err) {
-    next(err);
-  }
-};
-
-const projectPartLoadCandidate = (row, estimate) => ({
-  truckId: row.truck_id,
-  registration: row.registration,
-  category: row.category,
-  bodyType: row.body_type,
-  driverId: row.driver_id,
-  driverName: row.driver_name,
-  capacityTons: row.capacity_tons != null ? Number(row.capacity_tons) : null,
-  spareTons: row.spare_tons != null ? Number(row.spare_tons) : null,
-  distanceKm: row.distance_km != null ? Number(row.distance_km) : null,
-  // Straight-line ETA to the pickup point, same AVERAGE_SPEED_KMPH assumption used elsewhere in
-  // this codebase for estimates that don't go through a real routing engine.
-  etaMinutes: row.distance_km != null ? Math.round((Number(row.distance_km) / AVERAGE_SPEED_KMPH) * 60) : null,
-  currentLat: row.current_lat != null ? Number(row.current_lat) : null,
-  currentLng: row.current_lng != null ? Number(row.current_lng) : null,
-  currentTripId: row.current_trip_id,
-  estimatedPrice: estimate,
-});
-
-// GET /api/vehicles/trucks/nearby-on-trip — part-load matching: on-trip trucks with spare
-// capacity, within radius of the NEW booking's pickup, roughly heading the right way (see
-// TruckModel.findOnTripForPartLoad). Distinct from GET /vehicles/trucks/nearby, which only ever
-// matches status='available' trucks and has no capacity/route awareness at all.
-const listOnTripForPartLoad = async (req, res, next) => {
-  try {
-    const { pickup_lat, pickup_lng, drop_lat, drop_lng, weight_tons, radius_km } = req.query;
-    const pickupLat = parseFloat(pickup_lat);
-    const pickupLng = parseFloat(pickup_lng);
-    const dropLat = parseFloat(drop_lat);
-    const dropLng = parseFloat(drop_lng);
-    const weightTons = parseFloat(weight_tons);
-
-    const candidates = await TruckModel.findOnTripForPartLoad({
-      pickupLat, pickupLng, dropLat, dropLng, weightTons,
-      radiusKm: radius_km !== undefined ? parseFloat(radius_km) : undefined,
-    });
-
-    // Estimated price per candidate — same PricingModel.estimate 'part' branch as a normal
-    // part-load quote, but capacityUsedPct is computed here from the NEW booking's weight
-    // against THIS specific candidate truck's real capacity_tons, instead of a client-typed
-    // guess (see pricing.model.js's part branch — the formula itself is unchanged).
-    const distance = haversineKm(pickupLat, pickupLng, dropLat, dropLng);
-    const trucks = await Promise.all(candidates.map(async (row) => {
-      let estimate = null;
-      try {
-        estimate = await PricingModel.estimate({
-          truckCategory: 'part',
-          transportType: 'inter',
-          distance,
-          capacityUsedPct: row.capacity_tons ? (weightTons / Number(row.capacity_tons)) * 100 : undefined,
-          pickupLat, pickupLng,
-        });
-      } catch {
-        // Pricing config missing is a real but separate failure — don't let it hide otherwise-
-        // valid matching results, the client can still see/pick a truck and retry the quote.
-      }
-      return projectPartLoadCandidate(row, estimate);
-    }));
-
-    return successResponse(res, 200, 'On-trip trucks fetched', { trucks });
   } catch (err) {
     next(err);
   }
@@ -796,6 +735,66 @@ const updateMyStatus = async (req, res, next) => {
   }
 };
 
+// PATCH /api/vehicles/drivers/me/truck-mode
+// The driver's own Full Truck / Part Truck toggle (see TruckModel.findPartTruckCandidates for
+// what turning it on actually does). Can be flipped either way at any time, including mid-trip —
+// turning it ON while already on_trip is exactly the "share my spare capacity" case; turning it
+// OFF never touches a part-load booking already assigned, it only stops NEW ones from matching.
+const updateMyTruckMode = async (req, res, next) => {
+  try {
+    const { part_truck_mode } = req.body;
+    if (typeof part_truck_mode !== 'boolean') {
+      return errorResponse(res, 422, 'part_truck_mode must be true or false');
+    }
+    const driver = await DriverProfileModel.findById(req.user.id);
+    if (!driver) return errorResponse(res, 404, 'Driver profile not found');
+    if (!driver.truck_id) return errorResponse(res, 409, 'No truck assigned to toggle');
+
+    const updated = await TruckModel.setPartTruckMode(driver.truck_id, part_truck_mode);
+    if (!updated) return errorResponse(res, 404, 'Truck not found');
+
+    return successResponse(
+      res, 200,
+      part_truck_mode ? 'Part Truck mode is on' : 'Switched to Full Truck',
+      {
+        truck: projectTruck(await TruckModel.findById(updated.id)),
+        // A truck can still toggle on without this set — it'll just only ever match while idle
+        // (status='available'), never while already on_trip, until a broker/admin sets it.
+        capacityTonsSet: updated.capacity_tons != null,
+      }
+    );
+  } catch (err) {
+    next(err);
+  }
+};
+
+// PATCH /api/vehicles/drivers/me/accepting-loads
+// Separate from the mode toggle above — only meaningful while part_truck_mode is true. Lets a
+// driver pause new part-load requests (e.g. physically full right now) without fully exiting
+// Part Truck mode, and without affecting a booking already assigned to them.
+const updateMyAcceptingLoads = async (req, res, next) => {
+  try {
+    const { accepting_loads } = req.body;
+    if (typeof accepting_loads !== 'boolean') {
+      return errorResponse(res, 422, 'accepting_loads must be true or false');
+    }
+    const driver = await DriverProfileModel.findById(req.user.id);
+    if (!driver) return errorResponse(res, 404, 'Driver profile not found');
+    if (!driver.truck_id) return errorResponse(res, 409, 'No truck assigned to toggle');
+
+    const updated = await TruckModel.setAcceptingLoads(driver.truck_id, accepting_loads);
+    if (!updated) return errorResponse(res, 404, 'Truck not found');
+
+    return successResponse(
+      res, 200,
+      accepting_loads ? 'Accepting new loads' : 'Paused — no new loads until you turn this back on',
+      { truck: projectTruck(await TruckModel.findById(updated.id)) }
+    );
+  } catch (err) {
+    next(err);
+  }
+};
+
 // PATCH /api/vehicles/drivers/me/location
 // Pinged periodically by the driver's own app while online, even before a trip starts.
 const updateDriverLocation = async (req, res, next) => {
@@ -937,8 +936,8 @@ const deleteMyQrCode = async (req, res, next) => {
 };
 
 module.exports = {
-  createTruck, listTrucks, listNearbyTrucks, listOnTripForPartLoad, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
+  createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
-  forceLogoutDriver, myAssignedTruck, updateMyStatus, updateDriverLocation, getMyUpiId, updateMyUpiId,
+  forceLogoutDriver, myAssignedTruck, updateMyStatus, updateMyTruckMode, updateMyAcceptingLoads, updateDriverLocation, getMyUpiId, updateMyUpiId,
   getMyQrCode, uploadMyQrCode, deleteMyQrCode,
 };

@@ -76,10 +76,10 @@ class TripModel {
   }
 
   // List form of the above — a driver can now have more than one simultaneously-active trip
-  // (part-load: a second booking sharing the same truck/driver via trip_join_requests, see
-  // TruckModel.findOnTripForPartLoad), so anything that needs to know ALL of a driver's current
-  // trips (not just "the" one) — e.g. deciding whether it's safe to flip a truck/driver back to
-  // 'available' — must use this, not the singular wrapper above.
+  // (part-load: a second booking sharing the same truck/driver after a Part Truck match, see
+  // TruckModel.findPartTruckCandidates), so anything that needs to know ALL of a driver's
+  // current trips (not just "the" one) — e.g. deciding whether it's safe to flip a truck/driver
+  // back to 'available' — must use this, not the singular wrapper above.
   static async findActiveTripsByDriver(driverId) {
     const result = await pool.query(
       `${SELECT_WITH_JOINS} WHERE tr.driver_id = $1

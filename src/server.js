@@ -7,7 +7,6 @@ const { runMigrations } = require('./config/migrate');
 const { initSocket } = require('./realtime/socket');
 const { startDriverAssignmentTimeoutSweep } = require('./cron/driverAssignmentTimeoutSweep');
 const { startDriverRequestTimeoutSweep } = require('./cron/driverRequestTimeoutSweep');
-const { startTripJoinRequestTimeoutSweep } = require('./cron/tripJoinRequestTimeoutSweep');
 const { startStaleDriverLocationSweep } = require('./cron/staleDriverLocationSweep');
 const { startScheduledBookingBroadcastSweep } = require('./cron/scheduledBookingBroadcastSweep');
 
@@ -47,7 +46,6 @@ const startServer = async () => {
   initSocket(server);
   startDriverAssignmentTimeoutSweep();
   startDriverRequestTimeoutSweep();
-  startTripJoinRequestTimeoutSweep();
   startStaleDriverLocationSweep();
   startScheduledBookingBroadcastSweep();
 

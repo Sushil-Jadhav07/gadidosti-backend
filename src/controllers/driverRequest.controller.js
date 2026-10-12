@@ -49,6 +49,10 @@ const projectDriverRequest = (row) => ({
   truckReg: row.truck_reg,
   truckType: row.truck_type,
   truckCategory: row.truck_category,
+  // True for a request that came from a Part Truck broadcast (TruckModel.findPartTruckCandidates)
+  // rather than a normal Find Truck one — same negotiation flow either way, this just lets the
+  // UI flag it (e.g. "this is a SECOND load on top of your current trip" is worth calling out).
+  isPartLoad: row.booking_search_mode === 'part_load',
   pickup: row.pickup,
   drop: row.drop_location,
   weight: row.weight ? `${row.weight} ${row.weight_unit || ''}`.trim() : null,
@@ -158,6 +162,31 @@ const notifyDeclinedJobRequests = async (declinedRows, bookingNumber) => {
 // Returns null if the booking moved on some other way in the meantime (caller must undo the
 // accept it just made).
 const finalizeDriverRequest = async (driverRequest, amount) => {
+  // A second concurrent booking on a truck that's already on_trip is only ever legitimate
+  // through Part Truck mode with real spare capacity still available — re-checked here, right
+  // at accept time, not just when the client originally searched (TruckModel.
+  // findPartTruckCandidates), since that candidate pool can go stale: another part-load request
+  // on the same truck could win the race in between, or (the general case this also closes) a
+  // perfectly ordinary driver_requests row could be sitting pending on a truck that's since been
+  // taken by an unrelated booking entirely. Without this, finalizeDriverRequest below would
+  // unconditionally re-set status='on_trip' (a no-op, already true) and create a second trip
+  // with no capacity check at all — returning null here instead reuses the exact "booking moved
+  // on some other way" 409 both callers already handle.
+  const truck = await TruckModel.findById(driverRequest.truck_id);
+  if (truck?.status === 'on_trip') {
+    const weightTons = TruckModel.normalizeWeightToTons(driverRequest.weight, driverRequest.weight_unit);
+    const [usedTons, activeCount] = await Promise.all([
+      TruckModel.getActiveCargoWeight(driverRequest.truck_id),
+      TruckModel.getActiveBookingCount(driverRequest.truck_id),
+    ]);
+    const hasCapacity = truck.part_truck_mode
+      && truck.accepting_loads
+      && truck.capacity_tons != null
+      && activeCount < 2
+      && (Number(truck.capacity_tons) - usedTons) >= weightTons;
+    if (!hasCapacity) return null;
+  }
+
   const fromStatus = driverRequest.job_request_id ? 'confirmed' : 'pending';
   const booking = await BookingModel.advanceStatusIfCurrent(driverRequest.booking_id, fromStatus, {
     status: 'assigned',

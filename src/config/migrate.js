@@ -1368,6 +1368,20 @@ const runMigrations = async (client) => {
       ALTER TABLE bookings ADD CONSTRAINT bookings_search_mode_check CHECK (search_mode IN ('broker', 'truck', 'part_load'));
     `);
 
+    // ── FULL TRUCK / PART TRUCK DRIVER TOGGLE (mirrors db/61part_truck_mode.sql) ──
+    // Replaces the trip_join_requests design above: a driver now flips their own truck into
+    // "Part Truck" mode (willing to share spare capacity, whether idle or already on a trip) or
+    // back to "Full Truck" (exclusive). A part_load booking goes through the same broadcast +
+    // negotiation pipeline (driver_requests) a normal Find Truck booking already uses, just
+    // filtered to drivers currently toggled into Part Truck mode — see
+    // TruckModel.findPartTruckCandidates. accepting_loads is a second switch, only meaningful
+    // while part_truck_mode is true, letting a driver pause new part-load requests without
+    // exiting Part Truck mode or affecting a booking already assigned to them.
+    await client.query(`
+      ALTER TABLE trucks ADD COLUMN IF NOT EXISTS part_truck_mode BOOLEAN NOT NULL DEFAULT false;
+      ALTER TABLE trucks ADD COLUMN IF NOT EXISTS accepting_loads BOOLEAN NOT NULL DEFAULT true;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

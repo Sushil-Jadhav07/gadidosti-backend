@@ -309,8 +309,9 @@ class TruckModel {
   static ACTIVE_CARGO_BOOKING_STATUSES = ['assigned', 'en_route_pickup', 'picked_up', 'in_transit'];
 
   // JS-side equivalent of the SQL CASE expression above — used wherever a single booking's
-  // weight needs converting to tons outside of a SQL aggregate (e.g. tripJoinRequest.controller.js
-  // re-validating a match before creating/accepting a request).
+  // weight needs converting to tons outside of a SQL aggregate (e.g. broadcastBooking computing
+  // weightTons for findPartTruckCandidates, or finalizeDriverRequest's accept-time capacity
+  // re-check in driverRequest.controller.js).
   static normalizeWeightToTons(weight, weightUnit) {
     const w = Number(weight) || 0;
     const unit = String(weightUnit || '').toLowerCase();
@@ -335,18 +336,33 @@ class TruckModel {
     return Number(result.rows[0].used_tons);
   }
 
-  // Part-load matching: on-trip trucks with real spare capacity, within radius of the NEW
-  // booking's pickup, roughly heading the right way. Deliberately excludes any truck already
-  // carrying 2 active bookings (the v1 cap — see trip_join_requests) by requiring exactly one
-  // qualifying booking per truck; this also makes "the truck's current trip" unambiguous for the
-  // bearing heuristic below, since a candidate here can only ever have one. No routing engine —
-  // SQL does the radius+capacity prefilter, then a cheap in-process bearing/detour pass narrows
-  // to "roughly on the way" (see bearingDeg/angleDiffDeg in utils/geo.js).
-  static async findOnTripForPartLoad({ pickupLat, pickupLng, dropLat, dropLng, weightTons, radiusKm = 50 }) {
-    const { bearingDeg, angleDiffDeg, haversineKm } = require('../utils/geo');
-    const BEARING_THRESHOLD_DEG = 45;
-    const DETOUR_BUDGET_KM = 15;
+  // How many bookings are currently still physically on this truck — the other half of the v1
+  // part-load cap (2 bookings per truck, see findPartTruckCandidates), checked again here at
+  // ACCEPT time in driverRequest.controller.js's finalizeDriverRequest since the candidate pool
+  // the client searched against can go stale between search and a driver/broker actually
+  // accepting (another part-load request on the same truck could win the race in between).
+  static async getActiveBookingCount(truckId) {
+    const result = await pool.query(
+      `SELECT COUNT(*) AS active_count FROM bookings WHERE truck_id = $1 AND status = ANY($2::booking_status[])`,
+      [truckId, this.ACTIVE_CARGO_BOOKING_STATUSES]
+    );
+    return Number(result.rows[0].active_count);
+  }
 
+  // Part-load matching: every truck currently willing to share spare capacity with a second
+  // booking — a driver opts into this explicitly (part_truck_mode) and can pause new requests
+  // without fully opting out (accepting_loads); see the driver self-service toggle endpoints in
+  // vehicle.controller.js. Returns the same {truck_id, driver_id, broker_id, distance_km} shape
+  // as findNearbyForBroadcast so it plugs straight into booking.controller.js's existing
+  // driver_requests fan-out — a Part Truck booking is matched and negotiated exactly like a
+  // normal Find Truck one, just against this narrower, toggle-filtered candidate pool.
+  //
+  // Two very different kinds of eligible truck, unioned together:
+  //   - idle (status='available'), same eligibility a normal Find Truck match already requires —
+  //     a driver can toggle Part Truck mode on before ever taking a trip.
+  //   - already on_trip, with real spare capacity for this booking's weight and not already at
+  //     the 2-booking cap — the actual "share my spare capacity mid-trip" case.
+  static async findPartTruckCandidates({ lat, lng, radiusKm, weightTons }) {
     const distanceExpr = `
       6371 * acos(LEAST(1, GREATEST(-1,
         cos(radians($1)) * cos(radians(dp.current_lat)) * cos(radians(dp.current_lng) - radians($2))
@@ -367,58 +383,53 @@ class TruckModel {
          WHERE truck_id IS NOT NULL AND status = ANY($5::booking_status[])
          GROUP BY truck_id
        )
-       SELECT t.id AS truck_id, t.registration, t.category, t.body_type, t.capacity_tons,
-              t.driver_id, t.broker_id, driver.name AS driver_name,
-              dp.current_lat, dp.current_lng,
-              (t.capacity_tons - ac.used_tons) AS spare_tons,
-              tr.id AS current_trip_id, tr.stops AS current_trip_stops,
-              (${distanceExpr}) AS distance_km
+       SELECT t.id AS truck_id, t.driver_id, t.broker_id, (${distanceExpr}) AS distance_km
        FROM trucks t
        JOIN driver_profiles dp ON dp.truck_id = t.id
        JOIN users driver ON driver.id = dp.user_id
-       JOIN active_cargo ac ON ac.truck_id = t.id AND ac.active_count = 1
-       JOIN bookings cb ON cb.truck_id = t.id AND cb.status = ANY($5::booking_status[])
-       JOIN trips tr ON tr.booking_id = cb.id AND tr.status IN ('en_route_pickup', 'picked_up', 'in_transit')
-       WHERE t.status = 'on_trip'
+       LEFT JOIN active_cargo ac ON ac.truck_id = t.id
+       WHERE t.part_truck_mode = true
+         AND t.accepting_loads = true
          AND t.driver_id = dp.user_id
-         AND t.capacity_tons IS NOT NULL
          AND dp.current_lat IS NOT NULL AND dp.current_lng IS NOT NULL
          AND driver.kyc_status = 'verified'
-         AND (t.capacity_tons - ac.used_tons) >= $3
          AND (${distanceExpr}) <= $4
+         AND (
+           t.status = 'available'
+           OR (
+             t.status = 'on_trip'
+             AND t.capacity_tons IS NOT NULL
+             AND COALESCE(ac.active_count, 0) < 2
+             AND (t.capacity_tons - COALESCE(ac.used_tons, 0)) >= $3
+           )
+         )
        ORDER BY distance_km ASC`,
-      [pickupLat, pickupLng, weightTons, radiusKm, this.ACTIVE_CARGO_BOOKING_STATUSES]
+      [lat, lng, weightTons, radiusKm, this.ACTIVE_CARGO_BOOKING_STATUSES]
     );
+    return rows.rows;
+  }
 
-    // In-process route-compatibility pass — a candidate truck's remaining destination is the
-    // last not-yet-done stop on its current trip (falling back to the current position itself if
-    // every stop is somehow already done, which just makes every bearing check trivially fail
-    // closed rather than throw).
-    //
-    // Deliberately does NOT bearing-check the NEW booking's pickup point against the truck's own
-    // route — found via real testing that it's actively wrong to: the SQL radius prefilter above
-    // already guarantees the pickup is close (within radiusKm) to the truck's current position,
-    // and bearing between two nearby points is numerically unstable (a pickup just 3-4km away can
-    // sit at a wildly different compass bearing than the truck's eventual drop, purely from small
-    // coordinate noise, even though "3km away" obviously qualifies as on the way). Only the NEW
-    // booking's DROP point — which is typically much farther away, where bearing is a stable
-    // signal — is checked against the truck's own remaining direction.
-    return rows.rows.filter((row) => {
-      const stops = Array.isArray(row.current_trip_stops) ? row.current_trip_stops : [];
-      const remaining = [...stops].reverse().find((s) => s.status !== 'done') || stops[stops.length - 1];
-      if (!remaining || remaining.lat == null || remaining.lng == null) return false;
+  // Driver self-service toggle — PATCH /api/vehicles/drivers/me/truck-mode. Flipping OFF never
+  // touches a part-load booking already assigned to this truck (that trip runs to completion
+  // regardless); it only stops this truck from being matched to NEW ones, see
+  // findPartTruckCandidates above.
+  static async setPartTruckMode(truckId, enabled) {
+    const result = await pool.query(
+      `UPDATE trucks SET part_truck_mode = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+      [enabled, truckId]
+    );
+    return result.rows[0] || null;
+  }
 
-      const cLat = Number(row.current_lat);
-      const cLng = Number(row.current_lng);
-      const bearingToOwnDrop = bearingDeg(cLat, cLng, Number(remaining.lat), Number(remaining.lng));
-      const bearingToNewDrop = bearingDeg(cLat, cLng, dropLat, dropLng);
-
-      if (angleDiffDeg(bearingToOwnDrop, bearingToNewDrop) > BEARING_THRESHOLD_DEG) return false;
-
-      const ownDropDistance = haversineKm(cLat, cLng, Number(remaining.lat), Number(remaining.lng));
-      const newDropDistance = haversineKm(cLat, cLng, dropLat, dropLng);
-      return newDropDistance <= ownDropDistance + DETOUR_BUDGET_KM;
-    });
+  // Driver self-service pause — PATCH /api/vehicles/drivers/me/accepting-loads. Only meaningful
+  // while part_truck_mode is true; lets a driver pause new part-load requests (e.g. physically
+  // full right now) without fully exiting Part Truck mode.
+  static async setAcceptingLoads(truckId, enabled) {
+    const result = await pool.query(
+      `UPDATE trucks SET accepting_loads = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+      [enabled, truckId]
+    );
+    return result.rows[0] || null;
   }
 
   // Hard delete — safe only when no booking references this truck (enforced in controller).

@@ -2,9 +2,9 @@ const express = require('express');
 const router = express.Router();
 
 const {
-  createTruck, listTrucks, listNearbyTrucks, listOnTripForPartLoad, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
+  createTruck, listTrucks, listNearbyTrucks, getTruck, updateTruck, assignDriverToTruck, deleteTruck,
   lookupDriverByPhone, createDriver, registerDriver, listDrivers, listActiveDrivers, getDriver, updateDriver, deleteDriver,
-  forceLogoutDriver, myAssignedTruck, updateMyStatus, updateDriverLocation, getMyUpiId, updateMyUpiId,
+  forceLogoutDriver, myAssignedTruck, updateMyStatus, updateMyTruckMode, updateMyAcceptingLoads, updateDriverLocation, getMyUpiId, updateMyUpiId,
   getMyQrCode, uploadMyQrCode, deleteMyQrCode,
 } = require('../controllers/vehicle.controller');
 const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
@@ -14,7 +14,7 @@ const upload = require('../middleware/upload.middleware');
 const {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
   registerDriverValidation, updateDriverLocationValidation, assignDriverValidation, nearbyTrucksValidation,
-  nearbyOnTripValidation,
+  truckModeValidation, acceptingLoadsValidation,
 } = require('../validations/vehicle.validation');
 
 // ─── TRUCKS ───────────────────────────────────────────────────────────────────
@@ -135,55 +135,6 @@ router.get('/vehicles/trucks', authenticate, authorize('broker', 'admin', 'staff
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.get('/vehicles/trucks/nearby', authenticate, nearbyTrucksValidation, validate, listNearbyTrucks);
-
-/**
- * @swagger
- * /api/vehicles/trucks/nearby-on-trip:
- *   get:
- *     tags: [Vehicles]
- *     summary: On-trip trucks with spare capacity for a part-load join request (any authenticated role)
- *     description: |
- *       Part-load matching — unlike /vehicles/trucks/nearby (status=available only, no capacity/route awareness), this finds trucks that are ALREADY on_trip for a first booking, have enough spare capacity_tons for this new booking's weight_tons, and are roughly heading the right way (bearing + detour-budget heuristic against the truck's current trip's remaining stops — no routing engine). A truck already carrying 2 bookings (the v1 cap) is excluded. Each result includes an estimated price computed from this specific truck's real capacity, not a client-typed guess.
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: query
- *         name: pickup_lat
- *         required: true
- *         schema: { type: number, example: 19.076 }
- *       - in: query
- *         name: pickup_lng
- *         required: true
- *         schema: { type: number, example: 72.8777 }
- *       - in: query
- *         name: drop_lat
- *         required: true
- *         schema: { type: number, example: 18.52 }
- *       - in: query
- *         name: drop_lng
- *         required: true
- *         schema: { type: number, example: 73.8567 }
- *       - in: query
- *         name: weight_tons
- *         required: true
- *         schema: { type: number, example: 2.5 }
- *       - in: query
- *         name: radius_km
- *         description: Defaults to 50km if omitted.
- *         schema: { type: number }
- *     responses:
- *       200:
- *         description: On-trip trucks fetched
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/SuccessResponse' }
- *       422:
- *         description: Missing/invalid pickup, drop, or weight_tons
- *         content:
- *           application/json:
- *             schema: { $ref: '#/components/schemas/ErrorResponse' }
- */
-router.get('/vehicles/trucks/nearby-on-trip', authenticate, nearbyOnTripValidation, validate, listOnTripForPartLoad);
 
 /**
  * @swagger
@@ -610,6 +561,81 @@ router.patch('/vehicles/drivers/me/location', authenticate, authorize('driver'),
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/vehicles/drivers/me/status', authenticate, authorize('driver'), updateMyStatus);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/me/truck-mode:
+ *   patch:
+ *     tags: [Vehicles]
+ *     summary: Toggle my own truck between Full Truck and Part Truck mode
+ *     description: |
+ *       Driver-only. Flips trucks.part_truck_mode for the driver's own assigned truck. A truck in Part Truck mode becomes eligible to be matched to a second, smaller booking that shares its spare capacity (see TruckModel.findPartTruckCandidates) — a Part Truck booking is broadcast and negotiated the same way a normal Find Truck one is, just filtered to drivers currently toggled on here. Can be flipped either way at any time, including mid-trip: turning it ON while already on_trip is the real "share my spare capacity" case. Turning it OFF never affects a part-load booking already assigned — that trip still runs to completion, it just stops matching NEW ones.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [part_truck_mode]
+ *             properties:
+ *               part_truck_mode: { type: boolean }
+ *     responses:
+ *       200:
+ *         description: Mode updated
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       409:
+ *         description: No truck assigned to toggle
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Invalid part_truck_mode value
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/vehicles/drivers/me/truck-mode', authenticate, authorize('driver'), truckModeValidation, validate, updateMyTruckMode);
+
+/**
+ * @swagger
+ * /api/vehicles/drivers/me/accepting-loads:
+ *   patch:
+ *     tags: [Vehicles]
+ *     summary: Pause or resume new Part Truck load requests
+ *     description: Driver-only. Only meaningful while part_truck_mode is on — lets a driver stop the truck from being matched to any NEW part-load request (e.g. physically full right now) without fully exiting Part Truck mode, and without affecting a booking already assigned.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [accepting_loads]
+ *             properties:
+ *               accepting_loads: { type: boolean }
+ *     responses:
+ *       200:
+ *         description: Updated
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       409:
+ *         description: No truck assigned to toggle
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Invalid accepting_loads value
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/vehicles/drivers/me/accepting-loads', authenticate, authorize('driver'), acceptingLoadsValidation, validate, updateMyAcceptingLoads);
 
 /**
  * @swagger

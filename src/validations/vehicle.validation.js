@@ -26,8 +26,9 @@ const createTruckValidation = [
   body('body_type').optional({ nullable: true, checkFalsy: true }).trim()
     .isIn(TRUCK_BODY_TYPE_VALUES).withMessage(`body_type must be one of: ${TRUCK_BODY_TYPE_VALUES.join(', ')}`),
   // Machine-usable capacity, in tons — separate from the free-text `capacity` display field
-  // (e.g. "18 Ton"). Optional; a truck with none set is simply never a part-load match candidate
-  // (see TruckModel.findOnTripForPartLoad).
+  // (e.g. "18 Ton"). Optional; a truck with none set can still toggle Part Truck mode on, it
+  // just never matches a new part-load request while already on_trip (see
+  // TruckModel.findPartTruckCandidates), only while idle.
   body('capacity_tons').optional({ nullable: true, checkFalsy: true })
     .isFloat({ min: 0.01, max: 100 }).withMessage('capacity_tons must be a positive number'),
   brokerIdValidation,
@@ -88,21 +89,16 @@ const nearbyTrucksValidation = [
   query('radius_km').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('radius_km must be a positive number'),
 ];
 
-// GET /vehicles/trucks/nearby-on-trip — part-load matching (TruckModel.findOnTripForPartLoad).
-// Unlike nearbyTrucksValidation above, drop_lat/drop_lng and weight_tons are required: without a
-// drop point there's no route to check compatibility against, and without a weight there's no
-// capacity check to run — both are core to what makes this different from a normal nearby search.
-const nearbyOnTripValidation = [
-  query('pickup_lat').isFloat({ min: -90, max: 90 }).withMessage('pickup_lat must be a valid latitude'),
-  query('pickup_lng').isFloat({ min: -180, max: 180 }).withMessage('pickup_lng must be a valid longitude'),
-  query('drop_lat').isFloat({ min: -90, max: 90 }).withMessage('drop_lat must be a valid latitude'),
-  query('drop_lng').isFloat({ min: -180, max: 180 }).withMessage('drop_lng must be a valid longitude'),
-  query('weight_tons').isFloat({ min: 0.01 }).withMessage('weight_tons must be a positive number'),
-  query('radius_km').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('radius_km must be a positive number'),
+const truckModeValidation = [
+  body('part_truck_mode').isBoolean().withMessage('part_truck_mode must be true or false'),
+];
+
+const acceptingLoadsValidation = [
+  body('accepting_loads').isBoolean().withMessage('accepting_loads must be true or false'),
 ];
 
 module.exports = {
   createTruckValidation, updateTruckValidation, createDriverValidation, updateDriverValidation,
   registerDriverValidation, updateDriverLocationValidation, assignDriverValidation, nearbyTrucksValidation,
-  nearbyOnTripValidation,
+  truckModeValidation, acceptingLoadsValidation,
 };

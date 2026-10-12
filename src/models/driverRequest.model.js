@@ -3,7 +3,7 @@ const pool = require('../config/db');
 const SELECT_WITH_JOINS = `
   SELECT dr.*,
          b.client_id, b.booking_number, b.pickup_location AS pickup, b.drop_location AS drop_location,
-         b.weight, b.weight_unit,
+         b.weight, b.weight_unit, b.search_mode AS booking_search_mode,
          t.registration AS truck_reg, t.type AS truck_type, t.category AS truck_category,
          client.name AS client_name, client.phone AS client_phone,
          driver.name AS driver_name, driver.phone AS driver_phone,
@@ -46,7 +46,7 @@ class DriverRequestModel {
   }
 
   // Every driver who already has a still-live (not 'declined') row for this booking — used by
-  // the "Search Again" re-broadcast (booking.controller.js's rebroadcastFindTruck) to avoid
+  // the "Search Again" re-broadcast (booking.controller.js's rebroadcastDriverFanOut) to avoid
   // creating a second active row for a driver who's still mid-negotiation on the first one.
   // Declined drivers are deliberately NOT in this set — re-broadcasting is exactly how they get
   // a fresh chance, since nothing else ever gives them one.

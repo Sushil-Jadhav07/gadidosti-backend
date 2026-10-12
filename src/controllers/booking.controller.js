@@ -915,19 +915,51 @@ const quoteBooking = async (req, res, next) => {
   }
 };
 
+// Shared by both "Find Truck" and "Part Truck" below — each already queried its own candidate
+// pool (TruckModel.findNearbyForBroadcast vs findPartTruckCandidates), this just creates one
+// driver_requests row + notification + socket push per candidate, first to respond wins either
+// way. allSettled, not all — one candidate's row/notification failing (a bad broker_id FK, a
+// transient DB blip) used to reject the whole Promise.all, which would throw all the way up
+// through createBooking and fail the ENTIRE booking-creation request for the client even though
+// the booking row itself already existed — and worse, any candidate before the failing one in
+// iteration order could still have silently succeeded with no log of it. Each candidate is now
+// fully independent and its own failure (if any) is explicit below.
+const fanOutToDrivers = async (booking, candidates, radiusKm, pickupText, dropText) => {
+  const results = await Promise.allSettled(candidates.map(async (c) => {
+    const driverRequest = await DriverRequestModel.create({
+      bookingId: booking.id,
+      truckId: c.truck_id,
+      driverId: c.driver_id,
+      brokerId: c.broker_id,
+      amount: booking.amount,
+    });
+    await NotificationModel.create({
+      userId: c.driver_id,
+      title: booking.search_mode === 'part_load' ? 'New Part Truck Request' : 'New Booking Request',
+      message: `A client wants a truck for ${pickupText} -> ${dropText} at ₹${booking.amount ?? 'TBD'}. First to accept gets the job.`,
+      type: 'booking',
+      meta: { booking_id: booking.id, driver_request_id: driverRequest.id },
+    });
+    // Socket push (not just the push-notification above, which depends on the driver having
+    // granted notification permission) — see FcmBridge.jsx's popup, which listens for this
+    // exact event instead of relying solely on a foreground push.
+    const fresh = await DriverRequestModel.findById(driverRequest.id);
+    emitDriverRequestCreated(c.driver_id, fresh);
+  }));
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      logger.error(`Booking ${booking.id}: failed to notify driver ${candidates[i].driver_id} — ${r.reason?.message || r.reason}`);
+    }
+  });
+  logger.info(`Booking ${booking.id} broadcast to ${results.filter((r) => r.status === 'fulfilled').length}/${candidates.length} nearby drivers (radius ${radiusKm}km)`);
+};
+
 // Fans out a just-created (or just-due, for a scheduled booking) booking to the right
 // audience, branching on its search_mode — called once, either synchronously from createBooking
 // (immediate bookings) or from scheduledBookingBroadcastSweep.js (Book Later, once broadcast_at
 // arrives). Takes the full booking row (as returned by BookingModel.create/findById), not the
 // raw request body, so it works identically from either caller.
 const broadcastBooking = async (booking) => {
-  // Part-load: the client is going to separately target one specific on-trip truck via
-  // POST /api/trip-join-requests (see vehicle.controller.js's listOnTripForPartLoad for how they
-  // find it) — nothing to fan out here. A 'truck' broadcast would match nothing anyway (no truck
-  // is ever registered under category 'part'), and the legacy all-brokers branch would just be
-  // noise for a booking the client isn't asking brokers to pick up.
-  if (booking.search_mode === 'part_load') return;
-
   const pickupText = booking.pickup_location || 'an unspecified pickup point';
   const dropText = booking.drop_location || 'an unspecified drop point';
 
@@ -950,40 +982,29 @@ const broadcastBooking = async (booking) => {
     // different results than what the broadcast itself saw. This is the only way to know what
     // it actually saw, not what it looked like shortly before or after.
     logger.info(`Booking ${booking.id} (${booking.booking_number}) broadcasting: found ${candidates.length} candidate(s) within ${radiusKm}km of [${booking.pickup_lat}, ${booking.pickup_lng}]${booking.truck_category ? ` for category '${booking.truck_category}'` : ''} — ${candidates.map((c) => `driver=${c.driver_id} truck=${c.truck_id} dist=${Number(c.distance_km).toFixed(2)}km`).join('; ') || 'none'}`);
+    await fanOutToDrivers(booking, candidates, radiusKm, pickupText, dropText);
+    return;
+  }
 
-    // allSettled, not all — one candidate's row/notification failing (a bad broker_id FK, a
-    // transient DB blip) used to reject the whole Promise.all, which would throw all the way up
-    // through createBooking and fail the ENTIRE booking-creation request for the client even
-    // though the booking row itself already existed — and worse, any candidate before the
-    // failing one in iteration order could still have silently succeeded with no log of it. Each
-    // candidate is now fully independent and its own failure (if any) is explicit below.
-    const results = await Promise.allSettled(candidates.map(async (c) => {
-      const driverRequest = await DriverRequestModel.create({
-        bookingId: booking.id,
-        truckId: c.truck_id,
-        driverId: c.driver_id,
-        brokerId: c.broker_id,
-        amount: booking.amount,
-      });
-      await NotificationModel.create({
-        userId: c.driver_id,
-        title: 'New Booking Request',
-        message: `A client wants a truck for ${pickupText} -> ${dropText} at ₹${booking.amount ?? 'TBD'}. First to accept gets the job.`,
-        type: 'booking',
-        meta: { booking_id: booking.id, driver_request_id: driverRequest.id },
-      });
-      // Socket push (not just the push-notification above, which depends on the driver having
-      // granted notification permission) — see FcmBridge.jsx's popup, which listens for this
-      // exact event instead of relying solely on a foreground push.
-      const fresh = await DriverRequestModel.findById(driverRequest.id);
-      emitDriverRequestCreated(c.driver_id, fresh);
-    }));
-    results.forEach((r, i) => {
-      if (r.status === 'rejected') {
-        logger.error(`Booking ${booking.id}: failed to notify driver ${candidates[i].driver_id} — ${r.reason?.message || r.reason}`);
-      }
+  // "Part Truck": same broadcast-and-negotiate mechanism as "Find Truck" above (driver_requests,
+  // first to respond wins, full counter-offer negotiation) — just matched against a different,
+  // narrower candidate pool: drivers who've explicitly toggled their own truck into Part Truck
+  // mode (TruckModel.findPartTruckCandidates), whether idle or already on_trip with real spare
+  // capacity for this booking's weight. Replaces the old design where the client searched for
+  // and targeted one specific on-trip truck directly (trip_join_requests) — that put all the
+  // matching decision on the client; this puts the willingness decision on the driver instead,
+  // and the actual match/accept on the exact same negotiation flow every other booking uses.
+  if (booking.search_mode === 'part_load') {
+    const radiusKm = booking.search_radius_km || DEFAULT_BROADCAST_RADIUS_KM;
+    const weightTons = TruckModel.normalizeWeightToTons(booking.weight, booking.weight_unit);
+    const candidates = await TruckModel.findPartTruckCandidates({
+      lat: booking.pickup_lat,
+      lng: booking.pickup_lng,
+      radiusKm,
+      weightTons,
     });
-    logger.info(`Booking ${booking.id} broadcast to ${results.filter((r) => r.status === 'fulfilled').length}/${candidates.length} nearby drivers (radius ${radiusKm}km)`);
+    logger.info(`Booking ${booking.id} (${booking.booking_number}) part-truck broadcasting: found ${candidates.length} candidate(s) within ${radiusKm}km of [${booking.pickup_lat}, ${booking.pickup_lng}] for ${weightTons}t — ${candidates.map((c) => `driver=${c.driver_id} truck=${c.truck_id} dist=${Number(c.distance_km).toFixed(2)}km`).join('; ') || 'none'}`);
+    await fanOutToDrivers(booking, candidates, radiusKm, pickupText, dropText);
     return;
   }
 
@@ -1039,27 +1060,34 @@ const broadcastBooking = async (booking) => {
   }));
 };
 
-// Re-runs the "Find Truck" fan-out for a booking that's already been broadcast once — the
-// client's "Search Again" action (PATCH /api/bookings/:id/rebroadcast below). A driver who
-// declined the first round is a completely legitimate candidate again here: eligibility is
-// based on their CURRENT truck/driver status (available, in range), not on driver_requests
-// history, and nothing else ever gives a declined driver another chance at this booking — this
-// is deliberately how they get one. Only excludes drivers who already have a still-live
-// (non-declined) row, so someone mid-negotiation on the first round doesn't get a second,
-// redundant one racing it.
-const rebroadcastFindTruck = async (booking) => {
+// Re-runs the "Find Truck"/"Part Truck" fan-out for a booking that's already been broadcast
+// once — the client's "Search Again" action (PATCH /api/bookings/:id/rebroadcast below). A
+// driver who declined the first round is a completely legitimate candidate again here:
+// eligibility is based on their CURRENT truck/driver state (available or on-trip-with-capacity,
+// in range, toggled the right way), not on driver_requests history, and nothing else ever gives
+// a declined driver another chance at this booking — this is deliberately how they get one.
+// Only excludes drivers who already have a still-live (non-declined) row, so someone
+// mid-negotiation on the first round doesn't get a second, redundant one racing it.
+const rebroadcastDriverFanOut = async (booking) => {
   const pickupText = booking.pickup_location || 'an unspecified pickup point';
   const dropText = booking.drop_location || 'an unspecified drop point';
   const radiusKm = booking.search_radius_km || DEFAULT_BROADCAST_RADIUS_KM;
 
   const liveDriverIds = new Set(await DriverRequestModel.findLiveDriverIdsForBooking(booking.id));
-  const allNearby = await TruckModel.findNearbyForBroadcast({
-    lat: booking.pickup_lat,
-    lng: booking.pickup_lng,
-    radiusKm,
-    category: booking.truck_category,
-    bodyType: booking.truck_body_type,
-  });
+  const allNearby = booking.search_mode === 'part_load'
+    ? await TruckModel.findPartTruckCandidates({
+        lat: booking.pickup_lat,
+        lng: booking.pickup_lng,
+        radiusKm,
+        weightTons: TruckModel.normalizeWeightToTons(booking.weight, booking.weight_unit),
+      })
+    : await TruckModel.findNearbyForBroadcast({
+        lat: booking.pickup_lat,
+        lng: booking.pickup_lng,
+        radiusKm,
+        category: booking.truck_category,
+        bodyType: booking.truck_body_type,
+      });
   const candidates = allNearby.filter((c) => !liveDriverIds.has(c.driver_id));
   // See the matching log in broadcastBooking above for why this is logged at the moment of the
   // query rather than reconstructed later — also notes which nearby drivers were skipped for
@@ -1076,7 +1104,7 @@ const rebroadcastFindTruck = async (booking) => {
     });
     await NotificationModel.create({
       userId: c.driver_id,
-      title: 'New Booking Request',
+      title: booking.search_mode === 'part_load' ? 'New Part Truck Request' : 'New Booking Request',
       message: `A client wants a truck for ${pickupText} -> ${dropText} at ₹${booking.amount ?? 'TBD'}. First to accept gets the job.`,
       type: 'booking',
       meta: { booking_id: booking.id, driver_request_id: driverRequest.id },
@@ -1096,23 +1124,24 @@ const rebroadcastFindTruck = async (booking) => {
 };
 
 // ─── PATCH /api/bookings/{id}/rebroadcast ──────────────────────────────────────
-// Client's "Search Again" action on the Find Truck waiting screen — only valid while the
-// booking is still `search_mode: 'truck'` and still 'pending' (no driver has accepted yet;
-// once one has, the booking moves on and there's nothing left to search for).
+// Client's "Search Again" action on the Find Truck / Part Truck waiting screen — only valid
+// while the booking is still broadcasting ('truck' or 'part_load' search_mode) and still
+// 'pending' (no driver has accepted yet; once one has, the booking moves on and there's nothing
+// left to search for).
 const rebroadcastBooking = async (req, res, next) => {
   try {
     const { id } = req.params;
     const booking = await BookingModel.findById(id);
     if (!booking) return errorResponse(res, 404, 'Booking not found');
     if (booking.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
-    if (booking.search_mode !== 'truck') {
+    if (!['truck', 'part_load'].includes(booking.search_mode)) {
       return errorResponse(res, 409, 'This booking was not searching for a truck');
     }
     if (booking.status !== 'pending') {
       return errorResponse(res, 409, `This booking can no longer search for a truck (status: ${booking.status})`);
     }
 
-    const notifiedCount = await rebroadcastFindTruck(booking);
+    const notifiedCount = await rebroadcastDriverFanOut(booking);
     return successResponse(res, 200, 'Nearby drivers notified again', { notifiedCount });
   } catch (err) {
     next(err);

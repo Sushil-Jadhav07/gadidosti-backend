@@ -379,10 +379,10 @@ const listTrips = async (req, res, next) => {
 const getActiveTrip = async (req, res, next) => {
   try {
     // trips (plural) is the real shape now — a driver can have more than one simultaneously
-    // active trip (part-load: a joined booking sharing the same truck/driver, see
-    // TruckModel.findOnTripForPartLoad / trip_join_requests). trip (singular, the first one) is
-    // kept alongside it so existing callers that only ever read `data.trip` keep working
-    // unmodified; new/updated screens should read `data.trips` instead.
+    // active trip (part-load: a second booking sharing the same truck/driver after a Part Truck
+    // match, see TruckModel.findPartTruckCandidates). trip (singular, the first one) is kept
+    // alongside it so existing callers that only ever read `data.trip` keep working unmodified;
+    // new/updated screens should read `data.trips` instead.
     const trips = await TripModel.findActiveTripsByDriver(req.user.id);
     if (!trips.length) return successResponse(res, 200, 'No active trip', { trip: null, trips: [] });
 
@@ -595,8 +595,9 @@ const updateTripStatus = async (req, res, next) => {
       // Free up the driver/truck now that the trip is over — previously left stuck at
       // 'on_trip' forever, since this was the only status-changing path that never reset them.
       // But not if the driver has ANOTHER trip still active (part-load: a second booking sharing
-      // this same truck/driver, see TruckModel.findOnTripForPartLoad) — reverting to 'available'
-      // here would wrongly re-offer a truck that's still mid-delivery for someone else.
+      // this same truck/driver, see TruckModel.findPartTruckCandidates) — reverting to
+      // 'available' here would wrongly re-offer a truck that's still mid-delivery for someone
+      // else.
       const driverStillBusy = trip.driver_id && await TripModel.hasOtherActiveTrips(trip.driver_id, trip.id);
       if (trip.driver_id && !driverStillBusy) await DriverProfileModel.update(trip.driver_id, { status: 'available' });
       if (trip.truck_id && !driverStillBusy) await TruckModel.update(trip.truck_id, { status: 'available' });

@@ -60,17 +60,16 @@ const createBookingValidation = [
   // Mutually-exclusive "Find Truck" (broadcast to nearby drivers) vs "Search for Broker"
   // (pick one broker) — both optional; omitting search_mode entirely keeps the legacy
   // broadcast-to-all-eligible-brokers behavior (see booking.controller.js's broadcastBooking).
-  // 'part_load' — the booking is going to separately request a specific on-trip truck via
-  // POST /api/trip-join-requests; broadcastBooking() deliberately no-ops for it (see
-  // booking.controller.js) instead of fanning out to brokers/drivers for a booking the client is
-  // targeting directly.
+  // 'part_load' — "Part Truck": broadcastBooking() fans this out exactly like 'truck' does, just
+  // matched against a narrower pool (drivers who've toggled their own truck into Part Truck
+  // mode — see TruckModel.findPartTruckCandidates) instead of every available truck.
   body('search_mode').optional({ nullable: true, checkFalsy: true })
     .isIn(['truck', 'broker', 'part_load']).withMessage('search_mode must be one of: truck, broker, part_load'),
-  // A part-load booking is useless without a real weight — GET /vehicles/trucks/nearby-on-trip
-  // requires weight_tons to run its capacity check at all, so a booking created without one (the
-  // weight input left at its default and somehow not carried through, or any other client bug)
-  // would otherwise sit there with no way to ever search for a truck. Caught here instead, with
-  // a clear message, rather than failing silently later at search time.
+  // A part-load booking is useless without a real weight — broadcastBooking's
+  // TruckModel.findPartTruckCandidates needs a real weightTons to run its capacity check at all,
+  // so a booking created without one (the weight input left at its default and somehow not
+  // carried through, or any other client bug) would otherwise broadcast to nobody with no way to
+  // ever find a truck. Caught here instead, with a clear message, rather than failing silently.
   body('weight').if(body('search_mode').equals('part_load'))
     .isFloat({ min: 0.01 }).withMessage('weight is required for a Part Truck booking'),
   body('search_radius_km').optional({ nullable: true, checkFalsy: true })
