@@ -1382,6 +1382,15 @@ const runMigrations = async (client) => {
       ALTER TABLE trucks ADD COLUMN IF NOT EXISTS accepting_loads BOOLEAN NOT NULL DEFAULT true;
     `);
 
+    // ── PART TRUCK SIZE FILTER (mirrors db/62part_truck_size_filter.sql) ──
+    // A Part Truck booking can optionally narrow its match to one truck size instead of any size
+    // — purely a matching filter (TruckModel.findPartTruckCandidates' optional category param),
+    // independent of truck_category (which stays 'part' — the signal that this booking IS a Part
+    // Truck one at all, used by pricing/validation). NULL means "any size".
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS part_truck_size_category VARCHAR(50);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

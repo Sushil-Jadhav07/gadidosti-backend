@@ -71,6 +71,7 @@ class BookingModel {
     pricingBreakdown, distance, platformFee, paymentStatus, notes, city,
     loadingLocations, unloadingLocations,
     isScheduled, broadcastAt, searchMode, searchRadiusKm, selectedBrokerId, isExpress,
+    partTruckSizeCategory,
   }) {
     const bookingNumber = await this.generateBookingNumber();
     const result = await pool.query(
@@ -80,8 +81,9 @@ class BookingModel {
          quantity, material, transport_type, scheduled_date, amount, current_step,
          pricing_breakdown, distance, platform_fee, payment_status, notes, city,
          loading_locations, unloading_locations,
-         is_scheduled, broadcast_at, search_mode, search_radius_km, selected_broker_id, is_express
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36)
+         is_scheduled, broadcast_at, search_mode, search_radius_km, selected_broker_id, is_express,
+         part_truck_size_category
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37)
        RETURNING *`,
       [
         bookingNumber, clientId, brokerId || null, driverId || null, truckId || null, pickupLocation || null, pickupLat || null, pickupLng || null,
@@ -91,6 +93,7 @@ class BookingModel {
         paymentStatus || 'pending', notes || null, city || null,
         JSON.stringify(loadingLocations || []), JSON.stringify(unloadingLocations || []),
         !!isScheduled, broadcastAt || null, searchMode || null, searchRadiusKm != null ? searchRadiusKm : null, selectedBrokerId || null, !!isExpress,
+        partTruckSizeCategory || null,
       ]
     );
     return result.rows[0];

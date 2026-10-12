@@ -362,13 +362,23 @@ class TruckModel {
   //     a driver can toggle Part Truck mode on before ever taking a trip.
   //   - already on_trip, with real spare capacity for this booking's weight and not already at
   //     the 2-booking cap — the actual "share my spare capacity mid-trip" case.
-  static async findPartTruckCandidates({ lat, lng, radiusKm, weightTons }) {
+  // category: optional — narrows the match to one truck size (e.g. only 32ft SXL trucks
+  // currently in Part Truck mode) instead of any size. Independent of a booking's own
+  // truck_category, which stays 'part' regardless (see bookings.part_truck_size_category).
+  static async findPartTruckCandidates({ lat, lng, radiusKm, weightTons, category }) {
     const distanceExpr = `
       6371 * acos(LEAST(1, GREATEST(-1,
         cos(radians($1)) * cos(radians(dp.current_lat)) * cos(radians(dp.current_lng) - radians($2))
         + sin(radians($1)) * sin(radians(dp.current_lat))
       )))
     `;
+
+    const params = [lat, lng, weightTons, radiusKm, this.ACTIVE_CARGO_BOOKING_STATUSES];
+    let categoryClause = '';
+    if (category) {
+      params.push(category);
+      categoryClause = `AND t.category = $${params.length}`;
+    }
 
     const rows = await pool.query(
       `WITH active_cargo AS (
@@ -394,6 +404,7 @@ class TruckModel {
          AND dp.current_lat IS NOT NULL AND dp.current_lng IS NOT NULL
          AND driver.kyc_status = 'verified'
          AND (${distanceExpr}) <= $4
+         ${categoryClause}
          AND (
            t.status = 'available'
            OR (
@@ -404,7 +415,7 @@ class TruckModel {
            )
          )
        ORDER BY distance_km ASC`,
-      [lat, lng, weightTons, radiusKm, this.ACTIVE_CARGO_BOOKING_STATUSES]
+      params
     );
     return rows.rows;
   }

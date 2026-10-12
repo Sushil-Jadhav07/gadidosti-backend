@@ -146,6 +146,10 @@ const projectBooking = (row, timeline, role) => {
     searchMode: row.search_mode || null,
     searchRadiusKm: row.search_radius_km != null ? Number(row.search_radius_km) : null,
     selectedBrokerId: row.selected_broker_id || null,
+    // Part Truck only — the optional "only match this size" filter (TruckModel.
+    // findPartTruckCandidates' category param), independent of truck_category which stays
+    // 'part' regardless. Null means "any size".
+    partTruckSizeCategory: row.part_truck_size_category || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1002,8 +1006,9 @@ const broadcastBooking = async (booking) => {
       lng: booking.pickup_lng,
       radiusKm,
       weightTons,
+      category: booking.part_truck_size_category,
     });
-    logger.info(`Booking ${booking.id} (${booking.booking_number}) part-truck broadcasting: found ${candidates.length} candidate(s) within ${radiusKm}km of [${booking.pickup_lat}, ${booking.pickup_lng}] for ${weightTons}t — ${candidates.map((c) => `driver=${c.driver_id} truck=${c.truck_id} dist=${Number(c.distance_km).toFixed(2)}km`).join('; ') || 'none'}`);
+    logger.info(`Booking ${booking.id} (${booking.booking_number}) part-truck broadcasting: found ${candidates.length} candidate(s) within ${radiusKm}km of [${booking.pickup_lat}, ${booking.pickup_lng}] for ${weightTons}t${booking.part_truck_size_category ? ` (size filter: ${booking.part_truck_size_category})` : ''} — ${candidates.map((c) => `driver=${c.driver_id} truck=${c.truck_id} dist=${Number(c.distance_km).toFixed(2)}km`).join('; ') || 'none'}`);
     await fanOutToDrivers(booking, candidates, radiusKm, pickupText, dropText);
     return;
   }
@@ -1080,6 +1085,7 @@ const rebroadcastDriverFanOut = async (booking) => {
         lng: booking.pickup_lng,
         radiusKm,
         weightTons: TruckModel.normalizeWeightToTons(booking.weight, booking.weight_unit),
+        category: booking.part_truck_size_category,
       })
     : await TruckModel.findNearbyForBroadcast({
         lat: booking.pickup_lat,
@@ -1236,6 +1242,7 @@ const createBooking = async (req, res, next) => {
       amount: providedAmount, payment_status, notes,
       add_loading_location, add_unloading_location,
       search_mode, search_radius_km, broker_id, is_scheduled, is_express,
+      part_truck_size_category,
     } = req.body;
 
     // Nothing here is required (see booking.validation.js) — pickup_location/drop_location
@@ -1316,6 +1323,7 @@ const createBooking = async (req, res, next) => {
       searchRadiusKm: search_radius_km,
       selectedBrokerId: search_mode === 'broker' ? broker_id : null,
       isExpress: transport_type === 'intra' ? !!is_express : false,
+      partTruckSizeCategory: search_mode === 'part_load' ? part_truck_size_category : null,
     });
 
     await BookingModel.addTimelineStep(booking.id, { step: 'pending', position: 0 });

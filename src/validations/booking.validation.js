@@ -72,6 +72,11 @@ const createBookingValidation = [
   // ever find a truck. Caught here instead, with a clear message, rather than failing silently.
   body('weight').if(body('search_mode').equals('part_load'))
     .isFloat({ min: 0.01 }).withMessage('weight is required for a Part Truck booking'),
+  // Optional narrowing on top of a Part Truck booking — "only match drivers whose truck is this
+  // size" instead of any size. Purely a matching filter (TruckModel.findPartTruckCandidates'
+  // category param); it never changes truck_category itself, which stays 'part' regardless.
+  body('part_truck_size_category').optional({ nullable: true, checkFalsy: true })
+    .isIn([...TRUCK_TYPE_VALUES, ...LEGACY_TRUCK_CATEGORIES]).withMessage(`part_truck_size_category must be one of: ${[...TRUCK_TYPE_VALUES, ...LEGACY_TRUCK_CATEGORIES].join(', ')}`),
   body('search_radius_km').optional({ nullable: true, checkFalsy: true })
     .isFloat({ min: 0.5, max: 200 }).withMessage('search_radius_km must be between 0.5 and 200'),
   body('broker_id').optional({ nullable: true, checkFalsy: true }).isUUID().withMessage('broker_id must be a valid UUID'),
