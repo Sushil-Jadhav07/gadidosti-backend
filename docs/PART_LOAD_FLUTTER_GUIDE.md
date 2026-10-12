@@ -64,12 +64,21 @@ is `{ success, message, data }`.
   "pickup_location": "...", "pickup_lat": 19.07, "pickup_lng": 72.87,
   "drop_location": "...", "drop_lat": 18.52, "drop_lng": 73.85,
   "weight": 3, "weight_unit": "tons",
-  "distance": 150
+  "distance": 150,
+  "part_truck_size_category": "32ft_sxl"
 }
 ```
 `weight` is **required** for `search_mode: "part_load"` (422 without it) — the backend needs a
 real number to run its capacity check. The backend broadcasts immediately on creation, same as a
 normal Find Truck booking — there is no separate search step the client triggers afterward.
+
+`part_truck_size_category` is **optional** — narrows the broadcast to drivers whose truck is that
+one size (any value `GET /api/config/vehicle-types` returns, e.g. `"14ft"`, `"32ft_sxl"`), instead
+of any size. It never changes `truck_category` above, which always stays `"part"` regardless —
+this is purely a matching filter. Suggested UI (matches the web client): show the normal
+truck-type size grid on the Search step even in Part Truck mode, but tapping a card sets this
+field rather than switching the booking out of Part Truck mode; tapping the same card again
+clears it back to "any size."
 
 ### 2/3/4. Wait for a driver, negotiate, confirm — the existing `driver_requests` flow
 
@@ -88,6 +97,12 @@ normal Find Truck booking**:
 - A `driver_requests` row returned from any of these now also carries `isPartLoad: true/false` —
   use it only for a small badge ("Part Truck" / shared-load indicator) on the offer card, nothing
   functional depends on it client-side.
+- Two more fields, only ever non-null when `isPartLoad` is true: `truckCapacityTons` (that
+  candidate truck's total `capacity_tons`) and `truckSpareTons` (capacity left over if this
+  booking is NOT counted — i.e. the room available to it, not what's left after accepting it).
+  Show these alongside the booking's own `weight` as a small "Your Load / Truck Capacity / Spare"
+  breakdown on each offer card (matches the web client) — purely informational, the backend has
+  already confirmed every card shown actually fits at the moment it was matched.
 
 If nothing matches within range, `PATCH /api/bookings/:id/rebroadcast` ("Search Again") works for
 `search_mode: "part_load"` bookings too, same as it does for `"truck"` ones.
