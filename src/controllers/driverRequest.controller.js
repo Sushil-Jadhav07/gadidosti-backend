@@ -53,6 +53,12 @@ const projectDriverRequest = (row) => ({
   // rather than a normal Find Truck one — same negotiation flow either way, this just lets the
   // UI flag it (e.g. "this is a SECOND load on top of your current trip" is worth calling out).
   isPartLoad: row.booking_search_mode === 'part_load',
+  // Capacity context for the client's offer card — only meaningful (and only ever non-null) for
+  // a Part Truck request, since capacity_tons is specifically a part-load concept. spareTons
+  // excludes this request's own booking (still unaccepted, so not yet "used"), i.e. the room
+  // left over if the client picks this truck.
+  truckCapacityTons: row.truck_capacity_tons != null ? Number(row.truck_capacity_tons) : null,
+  truckSpareTons: row.truck_spare_tons != null ? Number(row.truck_spare_tons) : null,
   pickup: row.pickup,
   drop: row.drop_location,
   weight: row.weight ? `${row.weight} ${row.weight_unit || ''}`.trim() : null,

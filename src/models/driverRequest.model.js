@@ -1,10 +1,28 @@
 const pool = require('../config/db');
 
+// truck_spare_tons: how much of the truck's capacity_tons is still free right now, NOT counting
+// this pending request's own booking (its weight only becomes "used" once accepted, same as
+// TruckModel.getActiveCargoWeight's own status filter — kept in sync by hand since this is a
+// correlated subquery inline in a shared SELECT, not a call to that method). Shown to the client
+// on a Part Truck offer card (see DriverOfferCard.jsx) so they can see at a glance whether this
+// truck actually has comfortable room, not just that it technically fits.
 const SELECT_WITH_JOINS = `
   SELECT dr.*,
          b.client_id, b.booking_number, b.pickup_location AS pickup, b.drop_location AS drop_location,
          b.weight, b.weight_unit, b.search_mode AS booking_search_mode,
          t.registration AS truck_reg, t.type AS truck_type, t.category AS truck_category,
+         t.capacity_tons AS truck_capacity_tons,
+         (t.capacity_tons - COALESCE((
+            SELECT SUM(
+              CASE
+                WHEN b2.weight_unit ILIKE 'kg%' THEN COALESCE(b2.weight, 0) / 1000.0
+                WHEN b2.weight_unit ILIKE 'quintal%' THEN COALESCE(b2.weight, 0) / 10.0
+                ELSE COALESCE(b2.weight, 0)
+              END
+            )
+            FROM bookings b2
+            WHERE b2.truck_id = t.id AND b2.status IN ('assigned', 'en_route_pickup', 'picked_up', 'in_transit')
+         ), 0)) AS truck_spare_tons,
          client.name AS client_name, client.phone AS client_phone,
          driver.name AS driver_name, driver.phone AS driver_phone,
          broker.name AS broker_name, broker.phone AS broker_phone,
