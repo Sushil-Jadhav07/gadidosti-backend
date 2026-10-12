@@ -336,19 +336,6 @@ class TruckModel {
     return Number(result.rows[0].used_tons);
   }
 
-  // How many bookings are currently still physically on this truck — the other half of the v1
-  // part-load cap (2 bookings per truck, see findPartTruckCandidates), checked again here at
-  // ACCEPT time in driverRequest.controller.js's finalizeDriverRequest since the candidate pool
-  // the client searched against can go stale between search and a driver/broker actually
-  // accepting (another part-load request on the same truck could win the race in between).
-  static async getActiveBookingCount(truckId) {
-    const result = await pool.query(
-      `SELECT COUNT(*) AS active_count FROM bookings WHERE truck_id = $1 AND status = ANY($2::booking_status[])`,
-      [truckId, this.ACTIVE_CARGO_BOOKING_STATUSES]
-    );
-    return Number(result.rows[0].active_count);
-  }
-
   // Part-load matching: every truck currently willing to share spare capacity with a second
   // booking — a driver opts into this explicitly (part_truck_mode) and can pause new requests
   // without fully opting out (accepting_loads); see the driver self-service toggle endpoints in
@@ -360,8 +347,10 @@ class TruckModel {
   // Two very different kinds of eligible truck, unioned together:
   //   - idle (status='available'), same eligibility a normal Find Truck match already requires —
   //     a driver can toggle Part Truck mode on before ever taking a trip.
-  //   - already on_trip, with real spare capacity for this booking's weight and not already at
-  //     the 2-booking cap — the actual "share my spare capacity mid-trip" case.
+  //   - already on_trip, with real spare capacity left for this booking's weight — no cap on
+  //     how many bookings a truck can carry at once beyond what capacity_tons actually allows; a
+  //     driver who wants to stop taking more (regardless of remaining capacity) uses the
+  //     accepting_loads pause instead (see the driver dashboard's "Truck is Full" toggle).
   // category: optional — narrows the match to one truck size (e.g. only 32ft SXL trucks
   // currently in Part Truck mode) instead of any size. Independent of a booking's own
   // truck_category, which stays 'part' regardless (see bookings.part_truck_size_category).
@@ -382,7 +371,7 @@ class TruckModel {
 
     const rows = await pool.query(
       `WITH active_cargo AS (
-         SELECT truck_id, COUNT(*) AS active_count, SUM(
+         SELECT truck_id, SUM(
            CASE
              WHEN weight_unit ILIKE 'kg%' THEN COALESCE(weight, 0) / 1000.0
              WHEN weight_unit ILIKE 'quintal%' THEN COALESCE(weight, 0) / 10.0
@@ -410,7 +399,6 @@ class TruckModel {
            OR (
              t.status = 'on_trip'
              AND t.capacity_tons IS NOT NULL
-             AND COALESCE(ac.active_count, 0) < 2
              AND (t.capacity_tons - COALESCE(ac.used_tons, 0)) >= $3
            )
          )

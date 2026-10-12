@@ -175,14 +175,13 @@ const finalizeDriverRequest = async (driverRequest, amount) => {
   const truck = await TruckModel.findById(driverRequest.truck_id);
   if (truck?.status === 'on_trip') {
     const weightTons = TruckModel.normalizeWeightToTons(driverRequest.weight, driverRequest.weight_unit);
-    const [usedTons, activeCount] = await Promise.all([
-      TruckModel.getActiveCargoWeight(driverRequest.truck_id),
-      TruckModel.getActiveBookingCount(driverRequest.truck_id),
-    ]);
+    const usedTons = await TruckModel.getActiveCargoWeight(driverRequest.truck_id);
+    // No cap on how many bookings a truck can carry at once beyond what capacity_tons actually
+    // allows — see TruckModel.findPartTruckCandidates for the matching-time version of this
+    // same check (kept in sync by hand, both intentionally weight-only now).
     const hasCapacity = truck.part_truck_mode
       && truck.accepting_loads
       && truck.capacity_tons != null
-      && activeCount < 2
       && (Number(truck.capacity_tons) - usedTons) >= weightTons;
     if (!hasCapacity) return null;
   }

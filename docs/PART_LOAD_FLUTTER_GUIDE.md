@@ -128,33 +128,39 @@ sets one (see below).
 { "accepting_loads": true }
 ```
 A **second**, separate switch — only meaningful while `part_truck_mode` is on. Lets the driver
-pause new Part Truck requests (e.g. physically full right now) without fully exiting Part Truck
-mode, and without affecting a booking already assigned. Suggested UI: a small pill next to the
-main toggle, shown only while Part Truck mode is on ("Accepting Loads" / "Paused").
+pause new Part Truck requests without fully exiting Part Truck mode, and without affecting a
+booking already assigned. This is the driver's real "stop loading" control, since matching itself
+has no hard count cap (see above) — a driver physically out of room taps this, not the mode
+toggle. Suggested UI (matches the web driver app): a prominent full-width button, shown only
+while Part Truck mode is on — "Mark Truck as Full" (sets `accepting_loads: false`) when currently
+accepting, flipping to "Truck is Full — Tap to Accept More Loads" (sets it back to `true`) once
+paused.
 
 Both fields come back on the truck object from `GET /api/vehicles/drivers/me/truck` and anywhere
 else a truck projection is returned: `partTruckMode: boolean`, `acceptingLoads: boolean`.
 
-## A driver can now have two active trips at once
+## A driver can now have several active trips at once
 
 Once a Part Truck request is accepted, the driver's original trip and the new one run
 **independently** — separate pickup OTPs, separate POD photos, separate payment collection,
 separate statuses. Both existing behind the scenes, nothing conceptually new about either trip
 individually; what's new is that a driver can have **more than one** of them active at the same
-time (capped at 2 total bookings per truck).
+time. There's no hard cap on count — a truck keeps matching new Part Truck requests for as long
+as it has real spare `capacity_tons` left (or until the driver pauses it with "Truck is Full",
+see below), so a driver stacking several small loads on one trip is expected, not a bug.
 
 ### `GET /api/trips/active` returns a list
 
 Response shape has an array alongside the existing single object:
 ```json
-{ "trip": { "...": "the first one, for old clients" }, "trips": [ { "...": "trip 1" }, { "...": "trip 2" } ] }
+{ "trip": { "...": "the first one, for old clients" }, "trips": [ { "...": "trip 1" }, { "...": "trip 2" }, { "...": "trip 3" } ] }
 ```
 `trip` is kept exactly as it always was (not a breaking change for any existing code), but a
-driver with two active trips will have `trips.length === 2`. Build the driver's "current trip"
-screen to read `trips` and, when there's more than one, show a simple picker (a couple of tabs is
-enough — capped at 2) that switches which trip's detail view is showing. The detail view itself —
-status button, map, POD flow, stops checklist — needs no changes; it already operates on whichever
-single trip object it's given.
+driver with several active trips will have `trips.length` match that count. Build the driver's
+"current trip" screen to read `trips` and, when there's more than one, show a picker (a
+horizontally-scrollable tab row, not a fixed 2-up layout — the count is unbounded) that switches
+which trip's detail view is showing. The detail view itself — status button, map, POD flow, stops
+checklist — needs no changes; it already operates on whichever single trip object it's given.
 
 `GET /api/trips/upcoming` is unaffected (still singular — "the next not-yet-started trip",
 unrelated to this).
@@ -168,8 +174,8 @@ unrelated to this).
   purely off the toggle — `capacity_tons` isn't checked for that branch.
 - Spare capacity = `capacity_tons` minus the sum of weight on every booking currently assigned to
   that truck with status `assigned`/`en_route_pickup`/`picked_up`/`in_transit` (not `delivered` —
-  that cargo's already off), and a truck already carrying 2 active bookings is never matched
-  regardless of remaining capacity.
+  that cargo's already off). No separate cap on booking count — a truck keeps matching as long as
+  there's real spare capacity, until the driver pauses it (see below).
 - No route-direction/bearing heuristic anymore — matching is purely radius + capacity + the
   driver's own toggle. The driver (or broker) decides for themselves, from what the request shows
   them, whether a pickup/drop is actually convenient — same judgment call they already make on an
