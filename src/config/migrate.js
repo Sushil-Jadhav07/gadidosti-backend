@@ -1467,6 +1467,16 @@ const runMigrations = async (client) => {
         FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
     `);
 
+    // ── ACCOUNT DELETION REQUEST → REAL ACCOUNT LINK (mirrors db/64account_deletion_user_link.sql) ──
+    // A logged-in client/driver/broker requesting deletion from inside the app links straight to
+    // their real account, so an admin can actually action it (soft-delete via the existing
+    // UserModel.delete) instead of manually matching free-text name/email/phone first. NULL still
+    // means "no linked account" for a request submitted the old, anonymous/logged-out way.
+    await client.query(`
+      ALTER TABLE account_deletion_requests
+        ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

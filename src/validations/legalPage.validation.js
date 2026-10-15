@@ -41,10 +41,24 @@ const updateAccountDeletionRequestValidation = [
   body('admin_notes').optional({ nullable: true }).isString().isLength({ max: 2000 }).withMessage('admin_notes must be 2000 characters or fewer'),
 ];
 
+// POST /api/account-deletion-requests/me — authenticated. No audience/name/email/phone here —
+// all of that comes from req.user (see submitMyAccountDeletionRequest), not user input.
+const myAccountDeletionRequestValidation = [
+  body('reason').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 2000 }).withMessage('reason must be 2000 characters or fewer'),
+];
+
+// POST /api/account-deletion-requests/:id/delete-account — admin only. admin_notes is the only
+// optional body field; the rest of the action is driven entirely by the :id param.
+const deleteAccountFromRequestValidation = [
+  body('admin_notes').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 2000 }).withMessage('admin_notes must be 2000 characters or fewer'),
+];
+
 module.exports = {
   audienceParamValidation,
   pageKeyParamValidation,
   updateLegalPageValidation,
   accountDeletionRequestValidation,
   updateAccountDeletionRequestValidation,
+  myAccountDeletionRequestValidation,
+  deleteAccountFromRequestValidation,
 };

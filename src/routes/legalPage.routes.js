@@ -7,8 +7,10 @@ const {
   listLegalPages,
   updateLegalPage,
   submitAccountDeletionRequest,
+  submitMyAccountDeletionRequest,
   listAccountDeletionRequests,
   updateAccountDeletionRequest,
+  deleteAccountFromRequest,
 } = require('../controllers/legalPage.controller');
 const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -17,6 +19,8 @@ const {
   updateLegalPageValidation,
   accountDeletionRequestValidation,
   updateAccountDeletionRequestValidation,
+  myAccountDeletionRequestValidation,
+  deleteAccountFromRequestValidation,
 } = require('../validations/legalPage.validation');
 
 // Keyed by IP + whichever identifier the requester gave (email/phone) — same reasoning as
@@ -108,6 +112,56 @@ router.post(
   accountDeletionRequestValidation,
   validate,
   submitAccountDeletionRequest
+);
+
+// ─── AUTHENTICATED (any logged-in role) ────────────────────────────────────────
+
+// Keyed by user id, not IP+identifier — the requester is already a known, authenticated
+// account, so there's no "which identifier" ambiguity the public form's limiter has to guess at.
+const myDeletionRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?.id || req.ip,
+  message: { success: false, message: 'Too many requests — please try again later or contact support directly.' },
+});
+
+/**
+ * @swagger
+ * /api/account-deletion-requests/me:
+ *   post:
+ *     tags: [Legal]
+ *     summary: Request deletion of my own account (any logged-in role)
+ *     description: Logs a request linked to the authenticated account (name/email/phone/audience all come from the verified account, not the request body) for an admin to review. Does not delete anything itself.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               reason: { type: string }
+ *     responses:
+ *       201:
+ *         description: Request received
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       429:
+ *         description: Too many requests from this account
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post(
+  '/account-deletion-requests/me',
+  authenticate,
+  myDeletionRequestLimiter,
+  myAccountDeletionRequestValidation,
+  validate,
+  submitMyAccountDeletionRequest
 );
 
 // ─── ADMIN ──────────────────────────────────────────────────────────────────────
@@ -223,5 +277,50 @@ router.get('/account-deletion-requests', authenticate, authorize('admin', 'staff
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/account-deletion-requests/:id', authenticate, authorize('admin', 'staff'), requireAdminPage('legal_pages'), updateAccountDeletionRequestValidation, validate, updateAccountDeletionRequest);
+
+/**
+ * @swagger
+ * /api/account-deletion-requests/{id}/delete-account:
+ *   post:
+ *     tags: [Legal]
+ *     summary: Delete the account linked to this request (admin only)
+ *     description: Soft-deletes the linked account (same UserModel.delete/status='inactive' semantics as Users' own "Delete User" button) and marks the request completed, in one call. 422s if the request has no linked account (an old, anonymous submission) — find and delete the matching account from Users instead in that case.
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               admin_notes: { type: string }
+ *     responses:
+ *       200:
+ *         description: Account deleted
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       400:
+ *         description: Cannot delete your own account
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       403:
+ *         description: Cannot delete an admin account
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       404:
+ *         description: Request or linked account not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       422:
+ *         description: Request has no linked account
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/account-deletion-requests/:id/delete-account', authenticate, authorize('admin', 'staff'), requireAdminPage('legal_pages'), deleteAccountFromRequestValidation, validate, deleteAccountFromRequest);
 
 module.exports = router;
