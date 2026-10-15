@@ -5,6 +5,7 @@
 const ADMIN_PAGE_KEYS = [
   'dashboard', 'bookings', 'drivers', 'trucks', 'tracking', 'chats', 'monthly_hiring',
   'users', 'brokers', 'pricing', 'invoices', 'incidents', 'disputes', 'kyc', 'analytics', 'settings',
+  'legal_pages',
 ];
 
 module.exports = { ADMIN_PAGE_KEYS };

@@ -31,6 +31,7 @@ const trackingRoutes = require('./routes/tracking.routes');
 const invoiceRoutes = require('./routes/invoice.routes');
 const clientPreferencesRoutes = require('./routes/clientPreferences.routes');
 const webhookRoutes = require('./routes/webhook.routes');
+const legalPageRoutes = require('./routes/legalPage.routes');
 const errorHandler  = require('./middleware/errorHandler.middleware');
 const logger        = require('./utils/logger');
 const allowedOrigins = require('./config/corsOrigins');
@@ -166,6 +167,7 @@ app.use('/api', trackingRoutes);
 app.use('/api', invoiceRoutes);
 app.use('/api', clientPreferencesRoutes);
 app.use('/api', webhookRoutes);
+app.use('/api', legalPageRoutes);
 
 // 404 handler
 app.use((req, res) => {
