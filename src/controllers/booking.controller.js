@@ -518,6 +518,28 @@ const cancelBooking = async (req, res, next) => {
   }
 };
 
+// Shared geofence check — both ends must fall inside the admin's pincode whitelist, once one is
+// configured (an empty/all-inactive whitelist means "not configured yet", fail-open, so a fresh
+// deploy doesn't instantly block every booking before an admin populates it). Used by both
+// validateLocation (Step 1's "Next Step", so the client finds out immediately instead of at
+// final Confirm) and createBooking (the real lock — validateLocation is just earlier UX, not a
+// substitute for it, since nothing stops a client calling POST /bookings directly).
+const checkGeofence = async (pickupPincode, dropPincode) => {
+  if (!(await GeofenceModel.isAnyConfigured())) return null;
+  if (!pickupPincode || !dropPincode) {
+    return { status: 422, code: 'PINCODE_REQUIRED', message: 'A precise pickup and drop location (with a resolvable pincode) is required.' };
+  }
+  const [pickupAllowed, dropAllowed] = await Promise.all([
+    GeofenceModel.isAllowed(pickupPincode),
+    GeofenceModel.isAllowed(dropPincode),
+  ]);
+  if (pickupAllowed && dropAllowed) return null;
+  const message = !pickupAllowed && !dropAllowed
+    ? 'We do not currently service either the pickup or drop pincode.'
+    : !pickupAllowed ? 'We do not currently service the pickup pincode.' : 'We do not currently service the drop pincode.';
+  return { status: 422, code: 'PINCODE_NOT_SERVICEABLE', message };
+};
+
 // Shared eligibility check for anything that's about to take the client's money — the direct
 // /pay endpoint (fake/manual mode), and both ends of the real-gateway flow below (order
 // creation AND verification both re-check this, since time passes between the two and another
@@ -906,7 +928,14 @@ const deleteBooking = async (req, res, next) => {
 // (createBookingValidation, shared verbatim) but writes nothing. If this 200s, the same
 // payload's location fields are guaranteed to pass validation on the real POST /api/bookings
 // call later, since both routes run the identical validation chain.
+// ─── POST /api/bookings/validate-location ────────────────────────────────────
+// Step 1's "Next Step" button — lets a client find out their pickup/drop isn't serviceable
+// immediately, rather than filling out the whole wizard and only hitting the geofence block at
+// final Confirm (createBooking re-checks the same thing — this is earlier UX, not a substitute).
 const validateLocation = async (req, res) => {
+  const { pickup_pincode, drop_pincode } = req.body;
+  const geofenceError = await checkGeofence(pickup_pincode, drop_pincode);
+  if (geofenceError) return errorResponse(res, geofenceError.status, geofenceError.message, { code: geofenceError.code });
   return successResponse(res, 200, 'Location is valid', { valid: true });
 };
 
@@ -1284,24 +1313,8 @@ const createBooking = async (req, res, next) => {
       return errorResponse(res, 403, 'Verification is required before you can create a booking.', { code: 'KYC_VERIFICATION_REQUIRED' });
     }
 
-    // Both ends must fall inside the admin's pincode whitelist, once one is configured — an
-    // empty/all-inactive whitelist means "not configured yet" (fail-open), so a fresh deploy
-    // doesn't instantly block every booking before an admin populates it.
-    if (await GeofenceModel.isAnyConfigured()) {
-      if (!pickup_pincode || !drop_pincode) {
-        return errorResponse(res, 422, 'A precise pickup and drop location (with a resolvable pincode) is required.', { code: 'PINCODE_REQUIRED' });
-      }
-      const [pickupAllowed, dropAllowed] = await Promise.all([
-        GeofenceModel.isAllowed(pickup_pincode),
-        GeofenceModel.isAllowed(drop_pincode),
-      ]);
-      if (!pickupAllowed || !dropAllowed) {
-        const message = !pickupAllowed && !dropAllowed
-          ? 'We do not currently service either the pickup or drop pincode.'
-          : !pickupAllowed ? 'We do not currently service the pickup pincode.' : 'We do not currently service the drop pincode.';
-        return errorResponse(res, 422, message, { code: 'PINCODE_NOT_SERVICEABLE' });
-      }
-    }
+    const geofenceError = await checkGeofence(pickup_pincode, drop_pincode);
+    if (geofenceError) return errorResponse(res, geofenceError.status, geofenceError.message, { code: geofenceError.code });
 
     // Nothing here is required (see booking.validation.js) — pickup_location/drop_location
     // can be missing, so every place that builds human-readable text from them needs a
