@@ -1,4 +1,6 @@
 const BookingModel = require('../models/booking.model');
+const GeofenceModel = require('../models/geofence.model');
+const WalletModel = require('../models/wallet.model');
 const AnalyticsModel = require('../models/analytics.model');
 const PricingModel = require('../models/pricing.model');
 const JobRequestModel = require('../models/jobRequest.model');
@@ -634,6 +636,35 @@ const payBooking = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/bookings/:id/pay/wallet ─────────────────────────────────────────
+// Pays from the client's wallet balance — an internal debit, no gateway round-trip needed since
+// the money already sits in their account. Same eligibility rule as payBooking/createPaymentOrder
+// (checkPayable), same finalizePayment effect once the debit succeeds.
+const payFromWallet = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { pay_type = 'full' } = req.body;
+    if (!['full', 'advance'].includes(pay_type)) {
+      return errorResponse(res, 422, "pay_type must be 'full' or 'advance'");
+    }
+
+    const booking = await BookingModel.findById(id);
+    const ineligible = checkPayable(booking, req.user.id, pay_type);
+    if (ineligible) return errorResponse(res, ineligible.status, ineligible.message);
+
+    const amount = await computeAmountPaid(booking, pay_type);
+    const debit = await WalletModel.debit(req.user.id, amount, { type: 'booking_payment', referenceBookingId: id });
+    if (debit.insufficientFunds) {
+      return errorResponse(res, 402, 'Insufficient wallet balance');
+    }
+
+    const result = await finalizePayment({ id, booking, pay_type, payment_mode: 'wallet', user: { ...req.user, ip: req.ip } });
+    return successResponse(res, 200, 'Paid from wallet', { ...result, wallet_balance: Number(debit.wallet.balance) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── POST /api/bookings/:id/payment/order ──────────────────────────────────────
 // Client wants to pay online — opens a gateway order (a real Razorpay order when
 // PAYMENT_PROVIDER=razorpay, a mock one in fake/demo mode) for the client's checkout widget to
@@ -1236,7 +1267,7 @@ const listEligibleBrokers = async (req, res, next) => {
 const createBooking = async (req, res, next) => {
   try {
     const {
-      pickup_location, pickup_lat, pickup_lng, drop_location, drop_lat, drop_lng, drop_state,
+      pickup_location, pickup_lat, pickup_lng, pickup_pincode, drop_location, drop_lat, drop_lng, drop_pincode, drop_state,
       truck_type, truck_category, truck_body_type, weight, weight_unit, quantity, material,
       transport_type = 'intra', city, scheduled_date, distance, duration_min, duration_in_traffic_min,
       amount: providedAmount, payment_status, notes,
@@ -1244,6 +1275,31 @@ const createBooking = async (req, res, next) => {
       search_mode, search_radius_km, broker_id, is_scheduled, is_express,
       part_truck_size_category,
     } = req.body;
+
+    // Mandatory for every client, no exceptions — the frontend shows a "verify now" popup before
+    // ever reaching this call, but this is the real lock (see gst.controller.js's verifyGst).
+    if (req.user.role === 'client' && req.user.gst_verification_status !== 'verified') {
+      return errorResponse(res, 403, 'GST verification is required before you can create a booking.', { code: 'GST_VERIFICATION_REQUIRED' });
+    }
+
+    // Both ends must fall inside the admin's pincode whitelist, once one is configured — an
+    // empty/all-inactive whitelist means "not configured yet" (fail-open), so a fresh deploy
+    // doesn't instantly block every booking before an admin populates it.
+    if (await GeofenceModel.isAnyConfigured()) {
+      if (!pickup_pincode || !drop_pincode) {
+        return errorResponse(res, 422, 'A precise pickup and drop location (with a resolvable pincode) is required.', { code: 'PINCODE_REQUIRED' });
+      }
+      const [pickupAllowed, dropAllowed] = await Promise.all([
+        GeofenceModel.isAllowed(pickup_pincode),
+        GeofenceModel.isAllowed(drop_pincode),
+      ]);
+      if (!pickupAllowed || !dropAllowed) {
+        const message = !pickupAllowed && !dropAllowed
+          ? 'We do not currently service either the pickup or drop pincode.'
+          : !pickupAllowed ? 'We do not currently service the pickup pincode.' : 'We do not currently service the drop pincode.';
+        return errorResponse(res, 422, message, { code: 'PINCODE_NOT_SERVICEABLE' });
+      }
+    }
 
     // Nothing here is required (see booking.validation.js) — pickup_location/drop_location
     // can be missing, so every place that builds human-readable text from them needs a
@@ -1296,9 +1352,11 @@ const createBooking = async (req, res, next) => {
       pickupLocation: pickup_location,
       pickupLat: pickup_lat,
       pickupLng: pickup_lng,
+      pickupPincode: pickup_pincode,
       dropLocation: drop_location,
       dropLat: drop_lat,
       dropLng: drop_lng,
+      dropPincode: drop_pincode,
       city: transport_type === 'intra' ? city : null,
       truckType: truck_type,
       truckCategory: truck_category,
@@ -1426,4 +1484,4 @@ const getClientAnalytics = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, rebroadcastBooking, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, payFromWallet, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, rebroadcastBooking, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory };

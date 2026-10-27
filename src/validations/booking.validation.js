@@ -25,6 +25,10 @@ const isWithinCity = (location, city) =>
 const createBookingValidation = [
   body('pickup_location').optional({ nullable: true, checkFalsy: true }).trim(),
   body('drop_location').optional({ nullable: true, checkFalsy: true }).trim(),
+  // Optional at the validation layer — createBooking itself enforces these once the admin
+  // pincode whitelist is populated (see GeofenceModel.isAnyConfigured).
+  body('pickup_pincode').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 10 }),
+  body('drop_pincode').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 10 }),
   body('transport_type').optional({ nullable: true, checkFalsy: true })
     .isIn(TRANSPORT_TYPES).withMessage(`transport_type must be one of: ${TRANSPORT_TYPES.join(', ')}`),
   body('city').optional({ nullable: true, checkFalsy: true }).trim(),

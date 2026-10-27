@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit *)",
+      "Bash(curl -s \"https://gadidostclient.asynk.in/\")",
+      "Bash(curl -s \"https://gadidostbroker.asynk.in/\")",
+      "Bash(node -e \"console.log\\(require\\('express-validator/package.json'\\).version\\)\")",
+      "PowerShell(Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue })",
+      "Bash(node -e ' *)",
+      "Bash(git commit -m ' *)",
+      "Bash(node \"C:\\\\Users\\\\Lenovo\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\d--Clients-gaddidost-gadidosti-backend\\\\1f3f92c1-5d25-4663-8211-a574c6c44c34\\\\scratchpad\\\\test_part_truck.js\")",
+      "Bash(node _test_part_truck.js)",
+      "Bash(xargs -n1 node --check)",
+      "Bash(curl -s -o /dev/null -w \"health: %{http_code}\\\\n\" https://apigadidosti.asynk.in/api/health)",
+      "Bash(curl -s -o /dev/null -w \"health: %{http_code}\\\\n\" https://apigadidosti.asynk.in/)",
+      "Bash(curl -s -o /dev/null -w \"truck-mode endpoint: %{http_code}\\\\n\" -X PATCH https://apigadidosti.asynk.in/api/vehicles/drivers/me/truck-mode -H \"Content-Type: application/json\" -d '{\"part_truck_mode\":true}')",
+      "Bash(cp /tmp/_test_query.js /d/Clients/gaddidost/gadidosti-backend/_test_query.js)",
+      "Bash(sed -i \"s|require\\('/d/Clients/gaddidost/gadidosti-backend/src/config/db'\\)|require\\('./src/config/db'\\)|\" /d/Clients/gaddidost/gadidosti-backend/_test_query.js)",
+      "Bash(node _test_query.js)",
+      "Bash(node --check src/constants/legalPages.js)",
+      "Bash(node --check src/constants/adminPages.js)",
+      "Bash(node --check src/routes/legalPage.routes.js)",
+      "Bash(node --check src/controllers/legalPage.controller.js)",
+      "Bash(node --check src/validations/legalPage.validation.js)",
+      "Bash(node --check src/models/legalPage.model.js)",
+      "Bash(node --check src/models/accountDeletionRequest.model.js)",
+      "Bash(curl -s http://localhost:5000/api/legal-pages/client/privacy_policy)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5000/api/legal-pages/nope/privacy_policy)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:5000/api/legal-pages)",
+      "Bash(curl -s -X POST http://localhost:5000/api/legal-pages/client/account-deletion-request -H \"Content-Type: application/json\" -d '{\"name\":\"Test\"}')",
+      "Bash(curl -s -X POST http://localhost:5000/api/legal-pages/client/account-deletion-request -H \"Content-Type: application/json\" -d '{\"name\":\"Test User\",\"email\":\"test@example.com\",\"reason\":\"No longer using the app\"}')"
+    ]
+  }
+}

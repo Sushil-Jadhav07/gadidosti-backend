@@ -12,6 +12,9 @@
  * @property {string} dlNumber
  * @property {string} dob - YYYY-MM-DD.
  *
+ * @typedef {Object} VerifyGstParams
+ * @property {string} gstin
+ *
  * @typedef {Object} SendAadhaarOtpResult
  * @property {string} refId - Pass back into verifyAadhaarOtp.
  * @property {string} status
@@ -29,6 +32,11 @@ class VerificationProvider {
   /** @param {VerifyDrivingLicenseParams} params */
   async verifyDrivingLicense(params) {
     throw new Error('VerificationProvider.verifyDrivingLicense not implemented');
+  }
+
+  /** @param {VerifyGstParams} params */
+  async verifyGst(params) {
+    throw new Error('VerificationProvider.verifyGst not implemented');
   }
 
   /** @param {string} aadhaarNumber @returns {Promise<SendAadhaarOtpResult>} */

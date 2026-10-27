@@ -66,6 +66,9 @@ const submitDriverKycValidation = [
   // which requires an exact DOB match against the license record.
   body('documents.date_of_birth').optional({ nullable: true, checkFalsy: true }).isISO8601()
     .withMessage('date_of_birth must be a valid date'),
+  // GST joined REQUIRED_CHECKS_BY_ROLE.driver — mirrors the broker field above.
+  body('documents.gst_number').optional({ nullable: true, checkFalsy: true }).trim()
+    .matches(GST_REGEX).withMessage('GST number must be a valid 15-character GSTIN'),
 ];
 
 const rejectKycValidation = [];
@@ -76,6 +79,10 @@ const rejectKycValidation = [];
 const verifyPanValidation = [
   body('pan').trim().notEmpty().withMessage('pan is required').matches(PAN_REGEX).withMessage('PAN number must be in the format ABCDE1234F'),
   body('name').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 100 }),
+];
+
+const verifyGstValidation = [
+  body('gstin').trim().notEmpty().withMessage('gstin is required').matches(GST_REGEX).withMessage('gstin must be a valid 15-character GSTIN'),
 ];
 
 const verifyDrivingLicenseValidation = [
@@ -118,8 +125,10 @@ module.exports = {
   uploadKycDocumentValidation,
   ALLOWED_DOCUMENT_KEYS,
   verifyPanValidation,
+  verifyGstValidation,
   verifyDrivingLicenseValidation,
   sendAadhaarOtpValidation,
   verifyAadhaarOtpValidation,
   startDigilockerValidation,
+  GST_REGEX,
 };

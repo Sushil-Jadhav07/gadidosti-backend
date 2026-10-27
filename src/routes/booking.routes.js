@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, listBookingDriverRequests, rebroadcastBooking, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, payFromWallet, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, listBookingDriverRequests, rebroadcastBooking, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory } = require('../controllers/booking.controller');
 const { getBookingOffers } = require('../controllers/job.controller');
 const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
@@ -644,6 +644,46 @@ router.patch('/bookings/:id/cancel', authenticate, authorize('client'), cancelBo
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/bookings/:id/pay', authenticate, authorize('client'), payBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/pay/wallet:
+ *   post:
+ *     tags: [Bookings]
+ *     summary: Pay a booking from the client's wallet balance (client only)
+ *     description: Internal debit, no gateway round-trip — same eligibility rule as PATCH .../pay.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               pay_type: { type: string, enum: [full, advance], default: full }
+ *     responses:
+ *       200:
+ *         description: Paid from wallet
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       402:
+ *         description: Insufficient wallet balance
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Already paid, or booking is cancelled
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/bookings/:id/pay/wallet', authenticate, authorize('client'), payFromWallet);
 
 /**
  * @swagger

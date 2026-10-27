@@ -179,6 +179,21 @@ const computeAdvanceAmount = (amount, advanceRuleConfig) => {
   return Math.min(round2(raw), amt);
 };
 
+// Replaces the old per-bucket platformFee percentage (intraCity.small/medium/large, interCity,
+// partTruck each had their own) with one global tiered rule, configurable via
+// pricing_config.serviceCharge (db/69service_charge.sql seeds the default): lowRate for a base
+// amount at or below threshold, highRate above it. Used in place of `adjustedSubtotal *
+// cfg.platformFee` in all three estimate() branches below — the result is still returned under
+// the same `platformFee` key, so every existing consumer (booking.controller.js, projectBooking,
+// quoteBooking) needs no changes.
+const DEFAULT_SERVICE_CHARGE = { threshold: 10000, lowRate: 0.07, highRate: 0.05 };
+const computeServiceCharge = (baseAmount, config) => {
+  const cfg = config?.serviceCharge || DEFAULT_SERVICE_CHARGE;
+  const amt = Number(baseAmount) || 0;
+  const rate = amt <= Number(cfg.threshold) ? Number(cfg.lowRate) : Number(cfg.highRate);
+  return amt * rate;
+};
+
 // Delivery SLA — distance-tiered "expected total delivery time" (door-to-door, not just time
 // spent halted — see HALTING_TIERS above for that separate, smaller-scale concept). Confirmed
 // design: three tiers by distance. Admin-configurable via pricing_config.deliverySla.tiers,
@@ -311,7 +326,6 @@ class PricingModel {
     }
 
     if (truckCategory === 'part') {
-      const cfg = config.partTruck || {};
       const pct = capacityUsedPct != null ? Math.min(100, Math.max(0, Number(capacityUsedPct))) : 100;
       // No standalone "full truck" cost table exists yet — approximate a full truck's
       // linehaul cost off the inter-city per-km rate, then scale down by capacity used.
@@ -320,7 +334,7 @@ class PricingModel {
       const trafficSurcharge = round2(totalTruckCost * (trafficMultiplier - 1));
       const supplySurcharge = round2(totalTruckCost * (supplyMultiplier - 1));
       const adjustedTruckCost = round2(totalTruckCost + trafficSurcharge + supplySurcharge);
-      const platformFee = round2(adjustedTruckCost * (cfg.platformFee || 0));
+      const platformFee = round2(computeServiceCharge(adjustedTruckCost, config));
       return {
         totalTruckCost,
         capacityUsedPct: pct,
@@ -339,14 +353,10 @@ class PricingModel {
       };
     }
 
-    // The base/distance fare itself now comes from the unified vehicle-pricing rate card
-    // (computeVehicleFare) regardless of intra/inter — fuel surcharge, toll and platform fee
-    // stay wired to their existing admin-configurable places (config.interCity /
-    // config.intraCity[<legacy bucket>]) since this update didn't touch those.
-    const legacyBucket = ['small', 'medium', 'large'].includes(truckCategory)
-      ? truckCategory
-      : (VEHICLE_TYPE_TO_LEGACY_BUCKET[truckCategory] || 'medium');
-
+    // The base/distance fare itself comes from the unified vehicle-pricing rate card
+    // (computeVehicleFare) regardless of intra/inter — fuel surcharge and toll stay wired to
+    // their existing admin-configurable place (config.interCity); the service charge below is
+    // now global (config.serviceCharge), no longer per legacy small/medium/large bucket.
     if (transportType === 'inter') {
       const cfg = config.interCity || {};
       const { baseFare, distanceFare, ratePerKm, minimumFareApplied, regionApplied } = computeVehicleFare(dist, truckCategory, dropState, config);
@@ -356,7 +366,7 @@ class PricingModel {
       const trafficSurcharge = round2(subtotal * (trafficMultiplier - 1));
       const supplySurcharge = round2(subtotal * (supplyMultiplier - 1));
       const adjustedSubtotal = round2(subtotal + trafficSurcharge + supplySurcharge);
-      const platformFee = round2(adjustedSubtotal * (cfg.platformFee || 0));
+      const platformFee = round2(computeServiceCharge(adjustedSubtotal, config));
       const total = round2(adjustedSubtotal + platformFee);
       const haltingTier = getHaltingTier(dist);
       return {
@@ -390,15 +400,13 @@ class PricingModel {
       };
     }
 
-    // intra-city — platformFee still comes from the legacy per-bucket config (unchanged); the
-    // fare itself is the same unified vehicle-pricing lookup used above.
-    const cfg = (config.intraCity && config.intraCity[legacyBucket]) || config.intraCity?.medium || {};
+    // intra-city — the fare itself is the same unified vehicle-pricing lookup used above.
     const { baseFare, distanceFare, ratePerKm, minimumFareApplied, regionApplied } = computeVehicleFare(dist, truckCategory, dropState, config);
     const subtotal = round2(baseFare + distanceFare);
     const trafficSurcharge = round2(subtotal * (trafficMultiplier - 1));
     const supplySurcharge = round2(subtotal * (supplyMultiplier - 1));
     const adjustedSubtotal = round2(subtotal + trafficSurcharge + supplySurcharge);
-    const platformFee = round2(adjustedSubtotal * (cfg.platformFee || 0));
+    const platformFee = round2(computeServiceCharge(adjustedSubtotal, config));
     const normalTotal = round2(adjustedSubtotal + platformFee);
     // Applied on top of the fully-computed normal total (matches the confirmed example: a
     // ₹20,000 normal freight becomes ₹24,000 Express at the default 20%) — not folded into
@@ -433,6 +441,7 @@ PricingModel.DEFAULT_REGION_RATES = DEFAULT_REGION_RATES;
 PricingModel.DEFAULT_REGION_ZONES = DEFAULT_REGION_ZONES;
 PricingModel.DISTANCE_BANDS_KM = DISTANCE_BANDS_KM;
 PricingModel.DEFAULT_ADVANCE_TIERS = DEFAULT_ADVANCE_TIERS;
+PricingModel.DEFAULT_SERVICE_CHARGE = DEFAULT_SERVICE_CHARGE;
 PricingModel.HALTING_BASE_THRESHOLD_KM = HALTING_BASE_THRESHOLD_KM;
 PricingModel.getExpectedDeliveryHours = getExpectedDeliveryHours;
 PricingModel.getEstimatedDeliveryDays = getEstimatedDeliveryDays;

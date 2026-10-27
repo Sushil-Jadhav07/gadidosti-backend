@@ -1477,6 +1477,112 @@ const runMigrations = async (client) => {
         ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES users(id) ON DELETE SET NULL;
     `);
 
+    // ── GEOFENCING (mirrors db/65geofencing.sql) ──
+    // Admin pincode whitelist. Empty table = no restriction yet (fail-open) so a fresh deploy
+    // doesn't instantly block every booking before an admin populates it — see GeofenceModel.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS allowed_pincodes (
+        id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        pincode     TEXT NOT NULL UNIQUE,
+        label       TEXT,
+        active      BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at  TIMESTAMPTZ DEFAULT NOW(),
+        updated_at  TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_allowed_pincodes_active ON allowed_pincodes(active);
+    `);
+    await client.query(`
+      DROP TRIGGER IF EXISTS update_allowed_pincodes_updated_at ON allowed_pincodes;
+      CREATE TRIGGER update_allowed_pincodes_updated_at
+        BEFORE UPDATE ON allowed_pincodes
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `);
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS pickup_pincode TEXT;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS drop_pincode TEXT;
+    `);
+
+    // ── WALLET (mirrors db/66wallet.sql) ──
+    // Client-only rechargeable balance, usable as an alternative payment method at booking time.
+    // pending_recharge_order_id/amount cache the most recent recharge order a user opened (same
+    // caching pattern as kyc_submissions.aadhaar_otp_ref_id) so /recharge/verify credits the
+    // amount the order was actually created for server-side, never a client-claimed amount.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS wallets (
+        id                         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        user_id                    UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        balance                    NUMERIC(12,2) NOT NULL DEFAULT 0,
+        pending_recharge_order_id  TEXT,
+        pending_recharge_amount    NUMERIC(12,2),
+        created_at                 TIMESTAMPTZ DEFAULT NOW(),
+        updated_at                 TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      DROP TRIGGER IF EXISTS update_wallets_updated_at ON wallets;
+      CREATE TRIGGER update_wallets_updated_at
+        BEFORE UPDATE ON wallets
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS wallet_transactions (
+        id                     UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        wallet_id              UUID NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+        type                   TEXT NOT NULL CHECK (type IN ('recharge', 'booking_payment', 'refund')),
+        amount                 NUMERIC(12,2) NOT NULL,
+        balance_after          NUMERIC(12,2) NOT NULL,
+        reference_booking_id   UUID REFERENCES bookings(id) ON DELETE SET NULL,
+        reference_order_id     TEXT,
+        created_at             TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_wallet_transactions_wallet_id ON wallet_transactions(wallet_id);
+    `);
+
+    // ── CLIENT GST VERIFICATION (mirrors db/67client_gst.sql) ──
+    // Every client must verify a GSTIN before creating a booking — no opt-out. Plain columns,
+    // not the kyc_submissions machinery: one field, one single-shot provider result.
+    await client.query(`
+      DO $$ BEGIN
+        CREATE TYPE gst_verification_status AS ENUM ('unverified', 'verified', 'failed');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    `);
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS gst_number TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS gst_verification_status gst_verification_status NOT NULL DEFAULT 'unverified';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS gst_verified_at TIMESTAMPTZ;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS gst_verification_result JSONB;
+    `);
+
+    // ── KYC GST REQUIREMENT (mirrors db/68kyc_gst_requirement.sql) ──
+    // GST joins PAN/Aadhaar as a required driver/broker check, mandatory with no exceptions —
+    // so anyone already 'verified' under the old PAN+Aadhaar-only rule is pushed back to
+    // 'submitted' until they add + verify GST. Guarded to stay safe on every-boot re-run: only
+    // matches users who still lack a verified GST check, so re-approved users aren't re-queued.
+    await client.query(`
+      UPDATE users
+      SET kyc_status = 'submitted'
+      WHERE role IN ('driver', 'broker')
+        AND kyc_status = 'verified'
+        AND id IN (
+          SELECT user_id FROM kyc_submissions
+          WHERE kyc_submissions.user_id = users.id
+            AND COALESCE(verification_results -> 'gst' ->> 'status', '') != 'verified'
+        );
+    `);
+
+    // ── SERVICE CHARGE (mirrors db/69service_charge.sql) ──
+    // Replaces the old per-bucket platformFee percentage with one global tiered rule: 7% for
+    // orders <= threshold, 5% above it. See computeServiceCharge in pricing.model.js. Old
+    // platformFee keys are left in place (harmless, simply unread) rather than stripped.
+    await client.query(`
+      UPDATE pricing_config
+      SET config = config || '{
+        "serviceCharge": { "threshold": 10000, "lowRate": 0.07, "highRate": 0.05 }
+      }'::jsonb
+      WHERE id = '00000000-0000-0000-0000-000000000001'
+        AND NOT (config ? 'serviceCharge');
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

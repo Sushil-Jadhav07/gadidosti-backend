@@ -18,6 +18,7 @@ const {
   brokerVerifyKyc,
   brokerRejectKyc,
   verifyPan,
+  verifyGst,
   verifyDrivingLicense,
   sendAadhaarOtp,
   verifyAadhaarOtp,
@@ -33,6 +34,7 @@ const {
   rejectKycValidation,
   uploadKycDocumentValidation,
   verifyPanValidation,
+  verifyGstValidation,
   verifyDrivingLicenseValidation,
   sendAadhaarOtpValidation,
   verifyAadhaarOtpValidation,
@@ -723,6 +725,29 @@ router.patch('/broker/kyc/:driverId/reject', authenticate, authorize('broker'), 
  *         description: Result of the verification attempt (status 'verified' or 'failed')
  */
 router.post('/kyc/verify/pan', authenticate, authorize('broker', 'driver'), verifyPanValidation, validate, verifyPan);
+
+/**
+ * @swagger
+ * /api/kyc/verify/gst:
+ *   post:
+ *     tags: [KYC]
+ *     summary: Verify a GSTIN (broker or driver)
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [gstin]
+ *             properties:
+ *               gstin: { type: string, example: "27ABCDE1234F1Z5" }
+ *     responses:
+ *       200:
+ *         description: Result of the verification attempt (status 'verified' or 'failed')
+ */
+router.post('/kyc/verify/gst', authenticate, authorize('broker', 'driver'), verifyGstValidation, validate, verifyGst);
 
 /**
  * @swagger

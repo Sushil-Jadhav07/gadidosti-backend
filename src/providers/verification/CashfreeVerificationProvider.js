@@ -73,6 +73,26 @@ class CashfreeVerificationProvider extends VerificationProvider {
     };
   }
 
+  // GSTIN Verification API — https://www.cashfree.com/docs/api-reference/vrs/v2/gstin/verify-gstin
+  // A "GSTIN doesn't exist" response omits `valid` entirely rather than sending `valid: false`,
+  // so checking `=== true` (not just falsy-vs-truthy) covers both the documented success and
+  // not-found shapes correctly.
+  async verifyGst({ gstin }) {
+    const { body } = await this.request('/gstin', { GSTIN: gstin });
+    const verified = body.valid === true;
+    return {
+      status: verified ? 'verified' : 'failed',
+      details: {
+        gstin: body.GSTIN,
+        legalName: body.legal_name_of_business || null,
+        tradeName: body.trade_name_of_business || null,
+        gstinStatus: body.gst_in_status || null,
+        message: body.message || null,
+      },
+      raw: body,
+    };
+  }
+
   async verifyDrivingLicense({ dlNumber, dob }) {
     // verification_id is Cashfree's own idempotency key for this call, not something we need to
     // look up later — a fresh one per call avoids a "verification id already exists" 409 on retry.

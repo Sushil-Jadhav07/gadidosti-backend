@@ -19,8 +19,8 @@ const verificationProvider = getVerificationProvider();
 // was skipped, or errored — falls back to the old 'submitted' queue, where the admin/broker
 // manual-review screens (still present, just no longer the default path) pick it up.
 const REQUIRED_CHECKS_BY_ROLE = {
-  driver: ['pan', 'aadhaar', 'drivingLicense'],
-  broker: ['pan', 'aadhaar'],
+  driver: ['pan', 'aadhaar', 'drivingLicense', 'gst'],
+  broker: ['pan', 'aadhaar', 'gst'],
 };
 
 // A document verified through DigiLocker never has its number typed by the user, so the submitted
@@ -573,6 +573,30 @@ const verifyPan = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/kyc/verify/gst ───────────────────────────────────────────────────
+// Required for both driver and broker (see REQUIRED_CHECKS_BY_ROLE) — same single-shot
+// lookup shape as PAN, no OTP/DigiLocker step.
+const verifyGst = async (req, res, next) => {
+  try {
+    const { gstin } = req.body;
+    if (!gstin) return errorResponse(res, 422, 'gstin is required');
+
+    const result = await verificationProvider.verifyGst({ gstin });
+    await KycModel.updateVerificationResult(req.user.id, 'gst', result);
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'KYC_GST_VERIFICATION_ATTEMPTED', entity: 'kyc_submissions',
+      entityId: req.user.id, meta: { status: result.status }, ipAddress: req.ip,
+    });
+
+    logger.info(`GST verification for ${req.user.id}: ${result.status}`);
+    return successResponse(res, 200, result.status === 'verified' ? 'GST verified' : 'GST verification did not pass', result);
+  } catch (err) {
+    logger.error(`GST verification failed for ${req.user.id}: ${err.message}`, err);
+    return errorResponse(res, 503, verificationErrorMessage(err));
+  }
+};
+
 // ─── POST /api/kyc/verify/driving-license ──────────────────────────────────────
 const verifyDrivingLicense = async (req, res, next) => {
   try {
@@ -767,6 +791,7 @@ module.exports = {
   brokerVerifyKyc,
   brokerRejectKyc,
   verifyPan,
+  verifyGst,
   verifyDrivingLicense,
   sendAadhaarOtp,
   verifyAadhaarOtp,

@@ -21,6 +21,14 @@ class FakeVerificationProvider extends VerificationProvider {
     };
   }
 
+  async verifyGst({ gstin }) {
+    return {
+      status: 'verified',
+      details: { gstin, legalName: 'Fake Business Pvt Ltd', tradeName: 'Fake Business', gstinStatus: 'Active' },
+      raw: { provider: 'fake' },
+    };
+  }
+
   async sendAadhaarOtp(aadhaarNumber) {
     return { refId: `FAKE-REF-${Date.now()}`, status: 'otp_sent' };
   }
