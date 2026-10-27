@@ -40,7 +40,7 @@ class UserModel {
     const result = await pool.query(
       `SELECT id, name, email, phone, role, status, is_phone_verified, is_email_verified,
               profile_image, address, company_name, kyc_status, last_login_at, created_at, updated_at,
-              sessions_valid_after, page_permissions, gst_number, gst_verification_status, gst_verified_at
+              sessions_valid_after, page_permissions
        FROM users WHERE id = $1`,
       [id]
     );
@@ -262,23 +262,6 @@ class UserModel {
     };
   }
 
-  // Client-only GST verification gate (see gst.controller.js) — plain columns, not the
-  // kyc_submissions machinery used by driver/broker, since a client submits one field and gets
-  // one single-shot provider result rather than a multi-document review.
-  static async setGstVerification(userId, { gstNumber, status, result }) {
-    const updated = await pool.query(
-      `UPDATE users SET
-         gst_number = $1,
-         gst_verification_status = $2,
-         gst_verified_at = CASE WHEN $2 = 'verified' THEN NOW() ELSE gst_verified_at END,
-         gst_verification_result = $3::jsonb,
-         updated_at = NOW()
-       WHERE id = $4
-       RETURNING id, gst_number, gst_verification_status, gst_verified_at`,
-      [gstNumber, status, JSON.stringify(result), userId]
-    );
-    return updated.rows[0] || null;
-  }
 }
 
 module.exports = UserModel;

@@ -1,14 +1,17 @@
 -- ============================================================
---  SSK LOGISTICS — MANDATORY CLIENT GST VERIFICATION
+--  SSK LOGISTICS — CLIENT GST COLUMNS (superseded — see note below)
 --  Database: ssk_logistics
 --  File:     db/67client_gst.sql
 --  Run this file in pgAdmin Query Tool on the ssk_logistics DB
 --  (mirrors the "CLIENT GST VERIFICATION" block in src/config/migrate.js)
 --
---  Every client must verify a GSTIN before creating a booking — no opt-out. Kept as
---  plain columns on users rather than the kyc_submissions machinery: a client submits
---  one field and gets one single-shot provider result, not a multi-document review
---  queue. See src/controllers/gst.controller.js and booking.controller.js::createBooking.
+--  SUPERSEDED: client verification was originally this bespoke set of columns (one GSTIN,
+--  single-shot, no kyc_submissions). It's since been folded into the same unified KYC flow
+--  drivers/brokers use instead (PAN + Aadhaar via DigiLocker + GST, gated on users.kyc_status —
+--  see REQUIRED_CHECKS_BY_ROLE.client in kyc.controller.js and createBooking's guard in
+--  booking.controller.js). These columns are no longer read or written by any code — left in
+--  place rather than dropped (this codebase's migrations are additive-only; nothing here ever
+--  DROPs a column), harmless dead schema.
 -- ============================================================
 
 DO $$ BEGIN
@@ -22,4 +25,4 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS gst_verification_status gst_verificat
 ALTER TABLE users ADD COLUMN IF NOT EXISTS gst_verified_at TIMESTAMPTZ;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS gst_verification_result JSONB;
 
-COMMENT ON COLUMN users.gst_verification_status IS 'Client GST verification gate for booking creation. Driver/broker GST verification lives separately in kyc_submissions.';
+COMMENT ON COLUMN users.gst_verification_status IS 'Superseded by users.kyc_status (see REQUIRED_CHECKS_BY_ROLE.client) — unused.';

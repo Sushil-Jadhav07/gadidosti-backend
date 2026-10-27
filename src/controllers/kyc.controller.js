@@ -21,6 +21,7 @@ const verificationProvider = getVerificationProvider();
 const REQUIRED_CHECKS_BY_ROLE = {
   driver: ['pan', 'aadhaar', 'drivingLicense', 'gst'],
   broker: ['pan', 'aadhaar', 'gst'],
+  client: ['pan', 'aadhaar', 'gst'],
 };
 
 // A document verified through DigiLocker never has its number typed by the user, so the submitted
@@ -100,6 +101,37 @@ const submitKyc = async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+};
+
+// ─── Client-only auto-finalize ───────────────────────────────────────────────────
+// Drivers/brokers type document numbers + upload photos and explicitly hit Submit, which is when
+// auto-verify gets evaluated (see submitKyc above). A client has none of that — just the three
+// automated checks themselves (pan/aadhaar/gst, no manual review ever needed since there's
+// nothing for a human reviewer to look at) — so there's no natural "Submit" moment. Each client
+// verify endpoint below calls this right after recording its own result instead: once every
+// check in REQUIRED_CHECKS_BY_ROLE.client is verified, it finalizes the submission the same way
+// submitKyc would, with no extra click required. No-op for every other role.
+const maybeAutoFinalizeClientKyc = async (req) => {
+  if (req.user.role !== 'client') return;
+  const required = REQUIRED_CHECKS_BY_ROLE.client;
+  const submission = await KycModel.findByUserId(req.user.id);
+  const results = submission?.verification_results || {};
+  if (!required.every((key) => results[key]?.status === 'verified')) return;
+
+  await KycModel.upsertSubmission(req.user.id, submission?.documents || {});
+  await KycModel.autoVerify(req.user.id);
+
+  await AuditLogModel.log({
+    userId: req.user.id, action: 'KYC_AUTO_VERIFIED', entity: 'kyc_submissions',
+    entityId: submission.id, meta: { auto_verified: true }, ipAddress: req.ip,
+  });
+  await NotificationModel.create({
+    userId: req.user.id,
+    title: 'Verification Complete',
+    message: 'Your PAN, Aadhaar and GST were verified automatically. You now have full access to the platform.',
+    type: 'kyc',
+  });
+  logger.info(`KYC auto-finalized for client ${req.user.id}`);
 };
 
 // ─── POST /api/kyc/documents/upload ──────────────────────────────────────────────
@@ -559,6 +591,7 @@ const verifyPan = async (req, res, next) => {
 
     const result = await verificationProvider.verifyPan({ pan, name });
     await KycModel.updateVerificationResult(req.user.id, 'pan', result);
+    await maybeAutoFinalizeClientKyc(req);
 
     await AuditLogModel.log({
       userId: req.user.id, action: 'KYC_PAN_VERIFICATION_ATTEMPTED', entity: 'kyc_submissions',
@@ -583,6 +616,7 @@ const verifyGst = async (req, res, next) => {
 
     const result = await verificationProvider.verifyGst({ gstin });
     await KycModel.updateVerificationResult(req.user.id, 'gst', result);
+    await maybeAutoFinalizeClientKyc(req);
 
     await AuditLogModel.log({
       userId: req.user.id, action: 'KYC_GST_VERIFICATION_ATTEMPTED', entity: 'kyc_submissions',
@@ -674,6 +708,7 @@ const verifyAadhaarOtp = async (req, res, next) => {
 
     const result = await verificationProvider.verifyAadhaarOtp({ refId: ref_id, otp });
     await KycModel.updateVerificationResult(req.user.id, 'aadhaar', result);
+    await maybeAutoFinalizeClientKyc(req);
 
     await AuditLogModel.log({
       userId: req.user.id, action: 'KYC_AADHAAR_VERIFICATION_ATTEMPTED', entity: 'kyc_submissions',
@@ -697,6 +732,7 @@ const verifyAadhaarOtp = async (req, res, next) => {
 const DIGILOCKER_DOCS_BY_ROLE = {
   driver: ['AADHAAR', 'PAN', 'DRIVING_LICENSE'],
   broker: ['AADHAAR', 'PAN'],
+  client: ['AADHAAR', 'PAN'],
 };
 // DigiLocker document type -> the verification_results key (same keys the manual checks use, so
 // submitKyc's auto-approve is unchanged whichever way each document got verified).
@@ -758,6 +794,7 @@ const getDigilockerStatus = async (req, res, next) => {
         });
       }
     }
+    await maybeAutoFinalizeClientKyc(req);
 
     await AuditLogModel.log({
       userId: req.user.id, action: 'KYC_DIGILOCKER_COMPLETED', entity: 'kyc_submissions',

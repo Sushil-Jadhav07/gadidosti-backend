@@ -1538,9 +1538,10 @@ const runMigrations = async (client) => {
       CREATE INDEX IF NOT EXISTS idx_wallet_transactions_wallet_id ON wallet_transactions(wallet_id);
     `);
 
-    // ── CLIENT GST VERIFICATION (mirrors db/67client_gst.sql) ──
-    // Every client must verify a GSTIN before creating a booking — no opt-out. Plain columns,
-    // not the kyc_submissions machinery: one field, one single-shot provider result.
+    // ── CLIENT GST COLUMNS (mirrors db/67client_gst.sql) — SUPERSEDED, see that file's note ──
+    // Client verification now goes through the same unified KYC flow drivers/brokers use
+    // (REQUIRED_CHECKS_BY_ROLE.client, gated on users.kyc_status) — these columns are no
+    // longer read or written anywhere, left in place since migrations here never DROP.
     await client.query(`
       DO $$ BEGIN
         CREATE TYPE gst_verification_status AS ENUM ('unverified', 'verified', 'failed');

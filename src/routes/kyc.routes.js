@@ -333,7 +333,7 @@ router.get('/kyc/documents/file/:id', authenticate, authorize('broker', 'driver'
  *                         submission:
  *                           $ref: '#/components/schemas/KycSubmission'
  */
-router.get('/kyc/status', authenticate, authorize('broker', 'driver'), getMyKyc);
+router.get('/kyc/status', authenticate, authorize('broker', 'driver', 'client'), getMyKyc);
 
 /**
  * @swagger
@@ -374,7 +374,7 @@ router.get('/kyc/status', authenticate, authorize('broker', 'driver'), getMyKyc)
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/kyc/:userId', authenticate, authorize('broker', 'driver'), getKycById);
+router.get('/kyc/:userId', authenticate, authorize('broker', 'driver', 'client'), getKycById);
 
 // ─── Admin — KYC review queue ──────────────────────────────────────────────────
 
@@ -724,7 +724,7 @@ router.patch('/broker/kyc/:driverId/reject', authenticate, authorize('broker'), 
  *       200:
  *         description: Result of the verification attempt (status 'verified' or 'failed')
  */
-router.post('/kyc/verify/pan', authenticate, authorize('broker', 'driver'), verifyPanValidation, validate, verifyPan);
+router.post('/kyc/verify/pan', authenticate, authorize('broker', 'driver', 'client'), verifyPanValidation, validate, verifyPan);
 
 /**
  * @swagger
@@ -747,7 +747,7 @@ router.post('/kyc/verify/pan', authenticate, authorize('broker', 'driver'), veri
  *       200:
  *         description: Result of the verification attempt (status 'verified' or 'failed')
  */
-router.post('/kyc/verify/gst', authenticate, authorize('broker', 'driver'), verifyGstValidation, validate, verifyGst);
+router.post('/kyc/verify/gst', authenticate, authorize('broker', 'driver', 'client'), verifyGstValidation, validate, verifyGst);
 
 /**
  * @swagger
@@ -794,7 +794,7 @@ router.post('/kyc/verify/driving-license', authenticate, authorize('driver'), ve
  *       200:
  *         description: OTP sent — refId must be passed to /kyc/verify/aadhaar/verify-otp
  */
-router.post('/kyc/verify/aadhaar/send-otp', authenticate, authorize('broker', 'driver'), sendAadhaarOtpValidation, validate, sendAadhaarOtp);
+router.post('/kyc/verify/aadhaar/send-otp', authenticate, authorize('broker', 'driver', 'client'), sendAadhaarOtpValidation, validate, sendAadhaarOtp);
 
 /**
  * @swagger
@@ -818,7 +818,7 @@ router.post('/kyc/verify/aadhaar/send-otp', authenticate, authorize('broker', 'd
  *       200:
  *         description: Result of the verification attempt (status 'verified' or 'failed')
  */
-router.post('/kyc/verify/aadhaar/verify-otp', authenticate, authorize('broker', 'driver'), verifyAadhaarOtpValidation, validate, verifyAadhaarOtp);
+router.post('/kyc/verify/aadhaar/verify-otp', authenticate, authorize('broker', 'driver', 'client'), verifyAadhaarOtpValidation, validate, verifyAadhaarOtp);
 
 /**
  * @swagger
@@ -842,7 +842,7 @@ router.post('/kyc/verify/aadhaar/verify-otp', authenticate, authorize('broker', 
  *       200:
  *         description: "{ url, verificationId, documents: ['aadhaar','pan','drivingLicense'] }"
  */
-router.post('/kyc/verify/digilocker/start', authenticate, authorize('broker', 'driver'), startDigilockerValidation, validate, startDigilocker);
+router.post('/kyc/verify/digilocker/start', authenticate, authorize('broker', 'driver', 'client'), startDigilockerValidation, validate, startDigilocker);
 
 /**
  * @swagger
@@ -861,6 +861,6 @@ router.post('/kyc/verify/digilocker/start', authenticate, authorize('broker', 'd
  *       200:
  *         description: "status is 'pending' (poll again), 'failed' (expired / access denied), or 'done' with documents.{aadhaar,pan,drivingLicense}.status of 'verified' or 'missing' (not in the user's DigiLocker — verify that one by number instead)"
  */
-router.get('/kyc/verify/digilocker/status', authenticate, authorize('broker', 'driver'), getDigilockerStatus);
+router.get('/kyc/verify/digilocker/status', authenticate, authorize('broker', 'driver', 'client'), getDigilockerStatus);
 
 module.exports = router;

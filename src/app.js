@@ -34,7 +34,6 @@ const webhookRoutes = require('./routes/webhook.routes');
 const legalPageRoutes = require('./routes/legalPage.routes');
 const geofenceRoutes = require('./routes/geofence.routes');
 const walletRoutes = require('./routes/wallet.routes');
-const gstRoutes = require('./routes/gst.routes');
 const errorHandler  = require('./middleware/errorHandler.middleware');
 const logger        = require('./utils/logger');
 const allowedOrigins = require('./config/corsOrigins');
@@ -173,7 +172,6 @@ app.use('/api', webhookRoutes);
 app.use('/api', legalPageRoutes);
 app.use('/api', geofenceRoutes);
 app.use('/api', walletRoutes);
-app.use('/api', gstRoutes);
 
 // 404 handler
 app.use((req, res) => {

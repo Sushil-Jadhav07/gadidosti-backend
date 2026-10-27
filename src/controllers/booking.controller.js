@@ -1276,10 +1276,12 @@ const createBooking = async (req, res, next) => {
       part_truck_size_category,
     } = req.body;
 
-    // Mandatory for every client, no exceptions — the frontend shows a "verify now" popup before
-    // ever reaching this call, but this is the real lock (see gst.controller.js's verifyGst).
-    if (req.user.role === 'client' && req.user.gst_verification_status !== 'verified') {
-      return errorResponse(res, 403, 'GST verification is required before you can create a booking.', { code: 'GST_VERIFICATION_REQUIRED' });
+    // Mandatory for every client, no exceptions — PAN + Aadhaar (via DigiLocker) + GST, same KYC
+    // machinery drivers/brokers already go through (see kyc.controller.js's
+    // REQUIRED_CHECKS_BY_ROLE.client and maybeAutoFinalizeClientKyc). The frontend shows a
+    // "verify now" popup before ever reaching this call, but this is the real lock.
+    if (req.user.role === 'client' && req.user.kyc_status !== 'verified') {
+      return errorResponse(res, 403, 'Verification is required before you can create a booking.', { code: 'KYC_VERIFICATION_REQUIRED' });
     }
 
     // Both ends must fall inside the admin's pincode whitelist, once one is configured — an
