@@ -14,6 +14,9 @@ For the Flutter app developer. Covers five backend changes, all live in producti
    amount). Nothing to build — it's the same `platformFee` field in the pricing breakdown, just
    computed differently server-side.
 
+Driver/broker commission and the earnings wallet are covered separately in
+`COMMISSION_AND_EARNINGS_WALLET_FLUTTER_GUIDE.md`.
+
 Base URL for every endpoint below: `https://apigadidosti.asynk.in`. Every response is
 `{ success, message, data }` unless noted.
 
