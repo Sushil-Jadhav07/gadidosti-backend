@@ -1,5 +1,6 @@
 const BookingModel = require('../models/booking.model');
 const GeofenceModel = require('../models/geofence.model');
+const PostpaidBillModel = require('../models/postpaidBill.model');
 const WalletModel = require('../models/wallet.model');
 const AnalyticsModel = require('../models/analytics.model');
 const PricingModel = require('../models/pricing.model');
@@ -1316,6 +1317,23 @@ const createBooking = async (req, res, next) => {
     const geofenceError = await checkGeofence(pickup_pincode, drop_pincode);
     if (geofenceError) return errorResponse(res, geofenceError.status, geofenceError.message, { code: geofenceError.code });
 
+    // Postpaid clients skip the payment step entirely (see below, forced to payment_status
+    // 'to_be_billed') and accumulate charges against an admin-set credit limit instead — blocked
+    // here, before any pricing work, once what they already owe (unbilled + billed-but-unpaid)
+    // has reached it. Prepaid clients (the default, and everyone else) are completely unaffected
+    // by any of this — billingInfo stays unused for them.
+    let billingInfo = null;
+    if (req.user.role === 'client') {
+      billingInfo = await UserModel.getBillingInfo(req.user.id);
+      if (billingInfo?.billing_type === 'postpaid') {
+        const outstanding = await PostpaidBillModel.getOutstandingTotal(req.user.id);
+        const limit = Number(billingInfo.credit_limit || 0);
+        if (outstanding >= limit) {
+          return errorResponse(res, 403, `You've reached your credit limit of ₹${limit.toLocaleString('en-IN')}. Please clear your outstanding bill before booking again.`, { code: 'CREDIT_LIMIT_REACHED' });
+        }
+      }
+    }
+
     // Nothing here is required (see booking.validation.js) — pickup_location/drop_location
     // can be missing, so every place that builds human-readable text from them needs a
     // fallback rather than printing "undefined".
@@ -1386,7 +1404,7 @@ const createBooking = async (req, res, next) => {
       pricingBreakdown,
       distance,
       platformFee,
-      paymentStatus: payment_status,
+      paymentStatus: billingInfo?.billing_type === 'postpaid' ? 'to_be_billed' : payment_status,
       notes,
       loadingLocations: add_loading_location,
       unloadingLocations: add_unloading_location,
@@ -1400,6 +1418,34 @@ const createBooking = async (req, res, next) => {
     });
 
     await BookingModel.addTimelineStep(booking.id, { step: 'pending', position: 0 });
+
+    // Re-check after this booking's own amount is now counted — if it pushed them to (or past)
+    // their limit, raise a bill immediately for everything outstanding rather than waiting for
+    // the monthly sweep, and let admin know. Best-effort: a failure here must never fail the
+    // booking that already succeeded.
+    if (billingInfo?.billing_type === 'postpaid') {
+      try {
+        const newOutstanding = await PostpaidBillModel.getOutstandingTotal(req.user.id);
+        if (newOutstanding >= Number(billingInfo.credit_limit || 0)) {
+          const bill = await PostpaidBillModel.generate(req.user.id, { trigger: 'credit_limit' });
+          if (bill) {
+            logger.info(`Postpaid credit limit reached for ${req.user.id} — bill ${bill.id} raised for ₹${bill.total_amount}`);
+            const admins = await UserModel.findAll({ role: 'admin', limit: 100 });
+            for (const admin of admins.users || []) {
+              await NotificationModel.create({
+                userId: admin.id,
+                title: 'Postpaid Credit Limit Reached',
+                message: `${req.user.name} has reached their ₹${Number(billingInfo.credit_limit).toLocaleString('en-IN')} credit limit — a bill for ₹${Number(bill.total_amount).toLocaleString('en-IN')} has been raised.`,
+                type: 'payment',
+                meta: { bill_id: bill.id, client_id: req.user.id },
+              });
+            }
+          }
+        }
+      } catch (err) {
+        logger.error(`Postpaid credit-limit bill generation failed for ${req.user.id}: ${err.message}`);
+      }
+    }
 
     if (isScheduled) {
       logger.info(`Booking ${booking.id} scheduled — broadcast deferred to ${broadcastAt.toISOString()}`);

@@ -1603,6 +1603,60 @@ const runMigrations = async (client) => {
         CHECK (type IN ('recharge', 'booking_payment', 'refund', 'earning', 'payout'));
     `);
 
+    // ── POSTPAID BILLING (mirrors db/71postpaid_billing.sql) ──
+    // Admin can flip a client from 'prepaid' (unchanged Pay Now/Advance/Wallet/To Pay flow) to
+    // 'postpaid' with a credit limit — their bookings then skip payment entirely
+    // (payment_status='to_be_billed' automatically), accumulate against the limit, and get
+    // bundled into a 'billed' bill either when the limit is hit or on the monthly cron.
+    await client.query(`
+      DO $$ BEGIN
+        CREATE TYPE billing_type AS ENUM ('prepaid', 'postpaid');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    `);
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS billing_type billing_type NOT NULL DEFAULT 'prepaid';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS credit_limit NUMERIC(12,2);
+    `);
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TYPE payment_status ADD VALUE IF NOT EXISTS 'billed';
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS postpaid_bills (
+        id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        client_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        period_start  TIMESTAMPTZ,
+        period_end    TIMESTAMPTZ,
+        total_amount  NUMERIC(12,2) NOT NULL,
+        status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid')),
+        trigger       TEXT NOT NULL DEFAULT 'monthly' CHECK (trigger IN ('monthly', 'credit_limit')),
+        sent_at       TIMESTAMPTZ,
+        paid_at       TIMESTAMPTZ,
+        payment_mode  TEXT,
+        note          TEXT,
+        created_at    TIMESTAMPTZ DEFAULT NOW(),
+        updated_at    TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_postpaid_bills_client ON postpaid_bills(client_id);
+      CREATE INDEX IF NOT EXISTS idx_postpaid_bills_status ON postpaid_bills(status);
+    `);
+    await client.query(`
+      DROP TRIGGER IF EXISTS update_postpaid_bills_updated_at ON postpaid_bills;
+      CREATE TRIGGER update_postpaid_bills_updated_at
+        BEFORE UPDATE ON postpaid_bills
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS postpaid_bill_items (
+        id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        bill_id     UUID NOT NULL REFERENCES postpaid_bills(id) ON DELETE CASCADE,
+        booking_id  UUID NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+        amount      NUMERIC(12,2) NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_postpaid_bill_items_bill ON postpaid_bill_items(bill_id);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

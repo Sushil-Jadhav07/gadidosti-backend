@@ -40,7 +40,7 @@ class UserModel {
     const result = await pool.query(
       `SELECT id, name, email, phone, role, status, is_phone_verified, is_email_verified,
               profile_image, address, company_name, kyc_status, last_login_at, created_at, updated_at,
-              sessions_valid_after, page_permissions
+              sessions_valid_after, page_permissions, billing_type
        FROM users WHERE id = $1`,
       [id]
     );
@@ -246,7 +246,8 @@ class UserModel {
 
     const usersResult = await pool.query(
       `SELECT id, name, email, phone, role, status, is_phone_verified, is_email_verified,
-              profile_image, kyc_status, last_login_at, created_at, updated_at, page_permissions
+              profile_image, kyc_status, last_login_at, created_at, updated_at, page_permissions,
+              billing_type, credit_limit
        FROM users ${where}
        ORDER BY created_at DESC
        LIMIT $${idx} OFFSET $${idx + 1}`,
@@ -277,6 +278,26 @@ class UserModel {
       `UPDATE users SET commission_rate = $1, updated_at = NOW() WHERE id = $2 AND role IN ('driver', 'broker')
        RETURNING id, name, role, commission_rate`,
       [rate, userId]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Only queried at booking-creation time (the credit-limit check), not part of findById's hot
+  // path — same reasoning as getCommissionRate above.
+  static async getBillingInfo(userId) {
+    const result = await pool.query(`SELECT billing_type, credit_limit FROM users WHERE id = $1`, [userId]);
+    return result.rows[0] || null;
+  }
+
+  // Admin flips a client prepaid <-> postpaid, setting/clearing their credit limit in the same
+  // call. creditLimit is required when switching to postpaid (the admin UI prompts for it,
+  // defaulting to ₹50,000) but harmless to pass null when switching back to prepaid.
+  static async setBillingType(userId, { billingType, creditLimit }) {
+    const result = await pool.query(
+      `UPDATE users SET billing_type = $1, credit_limit = $2, updated_at = NOW()
+       WHERE id = $3 AND role = 'client'
+       RETURNING id, name, billing_type, credit_limit`,
+      [billingType, creditLimit ?? null, userId]
     );
     return result.rows[0] || null;
   }
