@@ -11,7 +11,7 @@ const { createRechargeOrderValidation, verifyRechargeValidation } = require('../
  * /api/wallet:
  *   get:
  *     tags: [Wallet]
- *     summary: Get own wallet balance (client only)
+ *     summary: Get own wallet balance (client's prepaid balance, or a driver/broker's earnings balance)
  *     security:
  *       - BearerAuth: []
  *     responses:
@@ -21,14 +21,14 @@ const { createRechargeOrderValidation, verifyRechargeValidation } = require('../
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
-router.get('/wallet', authenticate, authorize('client'), getWallet);
+router.get('/wallet', authenticate, authorize('client', 'driver', 'broker'), getWallet);
 
 /**
  * @swagger
  * /api/wallet/transactions:
  *   get:
  *     tags: [Wallet]
- *     summary: List own wallet transactions (client only)
+ *     summary: List own wallet transactions (client's recharges/payments, or a driver/broker's earnings/payouts)
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -45,7 +45,7 @@ router.get('/wallet', authenticate, authorize('client'), getWallet);
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
  */
-router.get('/wallet/transactions', authenticate, authorize('client'), listTransactions);
+router.get('/wallet/transactions', authenticate, authorize('client', 'driver', 'broker'), listTransactions);
 
 /**
  * @swagger

@@ -1584,6 +1584,25 @@ const runMigrations = async (client) => {
         AND NOT (config ? 'serviceCharge');
     `);
 
+    // ── COMMISSION + EARNINGS WALLET (mirrors db/70commission_and_earnings_wallet.sql) ──
+    // Commission is the platform's cut of a driver/broker's own earnings — distinct from the
+    // client-facing service charge above. users.commission_rate is a per-person override (NULL
+    // = use admin_settings.commission_rate, the existing global default). The driver/broker
+    // earnings wallet reuses the client wallet tables (two new transaction types: 'earning' on
+    // trip completion, 'payout' when a superadmin logs having manually paid someone) rather than
+    // a parallel table.
+    await client.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS commission_rate NUMERIC(5,2);
+    `);
+    await client.query(`
+      ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS note TEXT;
+    `);
+    await client.query(`
+      ALTER TABLE wallet_transactions DROP CONSTRAINT IF EXISTS wallet_transactions_type_check;
+      ALTER TABLE wallet_transactions ADD CONSTRAINT wallet_transactions_type_check
+        CHECK (type IN ('recharge', 'booking_payment', 'refund', 'earning', 'payout'));
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

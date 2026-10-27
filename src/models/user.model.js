@@ -262,6 +262,24 @@ class UserModel {
     };
   }
 
+  // Per-person commission override (NULL = use admin_settings.commission_rate, the global
+  // default) — see trip.controller.js's resolveCommissionRate, the only consumer. Not part of
+  // findById's SELECT since it's only needed at trip-completion time, not on every authenticated
+  // request.
+  static async getCommissionRate(userId) {
+    const result = await pool.query(`SELECT commission_rate FROM users WHERE id = $1`, [userId]);
+    return result.rows[0]?.commission_rate ?? null;
+  }
+
+  // rate: a number to set an override, or null to clear it (fall back to the global default).
+  static async setCommissionRate(userId, rate) {
+    const result = await pool.query(
+      `UPDATE users SET commission_rate = $1, updated_at = NOW() WHERE id = $2 AND role IN ('driver', 'broker')
+       RETURNING id, name, role, commission_rate`,
+      [rate, userId]
+    );
+    return result.rows[0] || null;
+  }
 }
 
 module.exports = UserModel;

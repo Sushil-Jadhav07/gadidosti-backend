@@ -5,6 +5,8 @@ const PricingModel = require('../models/pricing.model');
 const DriverProfileModel = require('../models/driverProfile.model');
 const TruckModel = require('../models/truck.model');
 const SettlementModel = require('../models/settlement.model');
+const UserModel = require('../models/user.model');
+const WalletModel = require('../models/wallet.model');
 const TripIncidentModel = require('../models/tripIncident.model');
 const MechanicRequestModel = require('../models/mechanicRequest.model');
 const TripPodPhotoModel = require('../models/tripPodPhoto.model');
@@ -22,6 +24,31 @@ const RazorpayPaymentProvider = require('../providers/payment/RazorpayPaymentPro
 
 const storageProvider = getStorageProvider();
 const STATUS_STEPS = ['pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up', 'in_transit', 'delivered', 'completed'];
+
+// Commission is the platform's own cut of a driver/broker's earnings — independent of the
+// client-facing service charge already netted out of settlements.net_earnings. A person's own
+// override (users.commission_rate) wins if set; otherwise the admin-wide default
+// (admin_settings.commission_rate, same field the Settings page's "Commission" tab already
+// edits) applies.
+const resolveCommissionRate = async (userId) => {
+  const override = await UserModel.getCommissionRate(userId);
+  if (override != null) return Number(override);
+  const settings = await AdminSettingsModel.get();
+  return Number(settings?.commission_rate ?? 0);
+};
+
+// Credits a driver/broker's earnings wallet for one completed trip — net_earnings (the
+// settlement's own amount-minus-service-charge figure) further reduced by their commission rate.
+// Both roles can be credited independently off the same net_earnings, mirroring how the existing
+// broker/driver Earnings screens already each display the full net_earnings as their own (see
+// the research behind this feature — not something this change invents).
+const creditEarningsWallet = async ({ userId, netEarnings, bookingId }) => {
+  if (!userId || !(netEarnings > 0)) return;
+  const commissionRate = await resolveCommissionRate(userId);
+  const payout = Math.round(netEarnings * (1 - commissionRate / 100) * 100) / 100;
+  if (payout <= 0) return;
+  await WalletModel.credit(userId, payout, { type: 'earning', referenceBookingId: bookingId });
+};
 
 // How close the truck's last-reported GPS position must be to the pickup/drop point before a
 // driver (not broker/admin, who may need to override manually) is allowed to mark it picked
@@ -591,6 +618,14 @@ const updateTripStatus = async (req, res, next) => {
         amount: booking.amount || 0,
         platformFee: booking.platform_fee || 0,
       });
+
+      // Credit the earnings wallet — net of each person's own commission rate (see
+      // resolveCommissionRate/creditEarningsWallet above). Independent of the settlement row
+      // above, which stays the historical per-order record; this is the running balance a
+      // superadmin later pays out against (see wallet.controller.js's admin payout endpoints).
+      const netEarnings = Math.round(((booking.amount || 0) - (booking.platform_fee || 0)) * 100) / 100;
+      await creditEarningsWallet({ userId: trip.driver_id, netEarnings, bookingId: trip.booking_id });
+      await creditEarningsWallet({ userId: trip.broker_id, netEarnings, bookingId: trip.booking_id });
 
       // Free up the driver/truck now that the trip is over — previously left stuck at
       // 'on_trip' forever, since this was the only status-changing path that never reset them.
