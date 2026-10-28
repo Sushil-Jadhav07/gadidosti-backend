@@ -104,6 +104,9 @@ const getSettings = async (req, res, next) => {
       // what actually surfaces this to the driver app (this endpoint is admin-only).
       companyUpiId: settings.company_upi_id,
       companyUpiName: settings.company_upi_name,
+      // GadiDost's own GSTIN — printed on every invoice and used to decide CGST+SGST vs IGST
+      // on the platform fee's GST breakdown (see gstCalculator.js).
+      companyGstin: settings.company_gstin,
       updatedAt: settings.updated_at,
     });
   } catch (err) {
@@ -114,7 +117,7 @@ const getSettings = async (req, res, next) => {
 // ─── PUT /api/admin/settings ──────────────────────────────────────────────────
 const updateSettings = async (req, res, next) => {
   try {
-    const { platform_name, contact_email, commission_rate, email_alerts, sms_alerts, push_notifications, company_upi_id, company_upi_name } = req.body;
+    const { platform_name, contact_email, commission_rate, email_alerts, sms_alerts, push_notifications, company_upi_id, company_upi_name, company_gstin } = req.body;
 
     const updated = await AdminSettingsModel.update({
       platformName: platform_name,
@@ -125,6 +128,7 @@ const updateSettings = async (req, res, next) => {
       pushNotifications: push_notifications,
       companyUpiId: company_upi_id,
       companyUpiName: company_upi_name,
+      companyGstin: company_gstin,
     });
     if (!updated) return errorResponse(res, 404, 'Settings not found');
 

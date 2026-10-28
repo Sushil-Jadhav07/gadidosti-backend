@@ -13,6 +13,10 @@ const SELECT_WITH_JOINS = `
          client.name  AS client_name,
          client.phone AS client_phone,
          client.email AS client_email,
+         -- Client's verified GSTIN (if on file) — used only to print on the invoice and to
+         -- decide CGST+SGST vs IGST on the platform fee's GST breakdown (invoicePdf.js /
+         -- gstCalculator.js). NULL for an unregistered/unverified client, not an error.
+         client_kyc.verification_results->'gst'->'details'->>'gstin' AS client_gstin,
          driver.name  AS driver_name,
          driver.phone AS driver_phone,
          t.registration AS truck_reg,
@@ -43,6 +47,7 @@ const SELECT_WITH_JOINS = `
   FROM bookings b
   LEFT JOIN users broker ON broker.id = b.broker_id
   LEFT JOIN users client ON client.id = b.client_id
+  LEFT JOIN kyc_submissions client_kyc ON client_kyc.user_id = b.client_id
   LEFT JOIN users driver ON driver.id = b.driver_id
   LEFT JOIN trucks t     ON t.id = b.truck_id
   LEFT JOIN trips trip   ON trip.booking_id = b.id

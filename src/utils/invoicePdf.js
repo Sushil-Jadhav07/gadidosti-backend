@@ -1,5 +1,6 @@
 const path = require('path');
 const PDFDocument = require('pdfkit');
+const { computePlatformFeeGst } = require('./gstCalculator');
 
 const BRAND_NAVY = '#041E42';
 const BRAND_BLUE = '#1976FF';
@@ -18,10 +19,17 @@ const formatDuration = (minutes) => {
 };
 
 // Builds a one-page invoice PDF from a raw booking row (BookingModel.findById's shape —
-// b.* plus the joined broker_name/client_name/driver_name/truck_reg/client_email/
-// trip_started_at/trip_delivered_at fields). booking_number is the invoice reference — no
-// separate invoice-numbering scheme, since it's already a unique, human-readable reference.
-const buildInvoicePdfBuffer = (booking) => new Promise((resolve, reject) => {
+// b.* plus the joined broker_name/client_name/driver_name/truck_reg/client_email/client_gstin/
+// trip_started_at/trip_delivered_at fields) and the admin_settings row (for company_gstin).
+// booking_number is the invoice reference — no separate invoice-numbering scheme, since it's
+// already a unique, human-readable reference.
+//
+// GST treatment (see gstCalculator.js for the full reasoning): GadiDost is not the GTA — the
+// driver/broker is — so the freight portion (amount - platform_fee) is always shown under
+// reverse charge, no GST added by GadiDost. The platform_fee itself IS GadiDost's own taxable
+// supply, forward-charge @ 18%, shown as a taxable-value + CGST/SGST/IGST breakdown of the same
+// already-collected fee (not a new charge).
+const buildInvoicePdfBuffer = (booking, companySettings = {}) => new Promise((resolve, reject) => {
   const doc = new PDFDocument({ margin: 0, size: 'A4' });
   const chunks = [];
   doc.on('data', (chunk) => chunks.push(chunk));
@@ -41,6 +49,9 @@ const buildInvoicePdfBuffer = (booking) => new Promise((resolve, reject) => {
   }
   doc.fillColor('#fff').fontSize(20).font('Helvetica-Bold').text('GadiDost', marginX + 52, 32);
   doc.fillColor('#B9C6DA').fontSize(9).font('Helvetica').text('SSK Logistics', marginX + 52, 55);
+  if (companySettings?.company_gstin) {
+    doc.fillColor('#B9C6DA').fontSize(8).font('Helvetica').text(`GSTIN: ${companySettings.company_gstin}`, marginX + 52, 68);
+  }
 
   doc.fillColor('#fff').fontSize(16).font('Helvetica-Bold').text('TAX INVOICE', marginX, 32, { width: contentWidth, align: 'right' });
   doc.fillColor('#B9C6DA').fontSize(9).font('Helvetica')
@@ -65,7 +76,10 @@ const buildInvoicePdfBuffer = (booking) => new Promise((resolve, reject) => {
 
   doc.fillColor(MUTED).fontSize(9).text(booking.client_email || '-', marginX, y, { width: colWidth });
   doc.fillColor(MUTED).fontSize(9).text(`Truck: ${booking.truck_reg || '-'}`, marginX + colWidth + 20, y, { width: colWidth });
-  y += 30;
+  y += 13;
+
+  doc.fillColor(MUTED).fontSize(9).text(`GSTIN: ${booking.client_gstin || 'Not registered'}`, marginX, y, { width: colWidth });
+  y += 17;
 
   // ─── Route ────────────────────────────────────────────────────────────────
   doc.fillColor(BRAND_BLUE).fontSize(11).font('Helvetica-Bold').text('SHIPMENT', marginX, y);
@@ -104,17 +118,20 @@ const buildInvoicePdfBuffer = (booking) => new Promise((resolve, reject) => {
 
   const amount = Number(booking.amount || 0);
   const platformFee = Number(booking.platform_fee || 0);
+  const freight = Math.round((amount - platformFee) * 100) / 100;
   const rowH = 22;
+  const subRowH = 17;
   const tableX = marginX;
   const tableW = contentWidth;
 
   const drawRow = (label, value, opts = {}) => {
-    doc.rect(tableX, y, tableW, rowH).fillOpacity(opts.highlight ? 1 : 0).fill(opts.highlight ? '#F3F6FF' : '#fff').fillOpacity(1);
-    doc.fillColor(opts.highlight ? BRAND_NAVY : '#374151').fontSize(opts.highlight ? 11 : 10).font(opts.highlight ? 'Helvetica-Bold' : 'Helvetica')
-      .text(label, tableX + 10, y + 6, { width: tableW - 140 });
-    doc.fillColor(opts.highlight ? BRAND_NAVY : '#374151').fontSize(opts.highlight ? 11 : 10).font(opts.highlight ? 'Helvetica-Bold' : 'Helvetica')
-      .text(value, tableX, y + 6, { width: tableW - 10, align: 'right' });
-    y += rowH;
+    const h = opts.sub ? subRowH : rowH;
+    doc.rect(tableX, y, tableW, h).fillOpacity(opts.highlight ? 1 : 0).fill(opts.highlight ? '#F3F6FF' : '#fff').fillOpacity(1);
+    doc.fillColor(opts.highlight ? BRAND_NAVY : opts.sub ? MUTED : '#374151').fontSize(opts.highlight ? 11 : opts.sub ? 9 : 10).font(opts.highlight ? 'Helvetica-Bold' : 'Helvetica')
+      .text(label, tableX + (opts.sub ? 22 : 10), y + (opts.sub ? 4 : 6), { width: tableW - 150 });
+    doc.fillColor(opts.highlight ? BRAND_NAVY : opts.sub ? MUTED : '#374151').fontSize(opts.highlight ? 11 : opts.sub ? 9 : 10).font(opts.highlight ? 'Helvetica-Bold' : 'Helvetica')
+      .text(value, tableX, y + (opts.sub ? 4 : 6), { width: tableW - 10, align: 'right' });
+    y += h;
     doc.moveTo(tableX, y).lineTo(tableX + tableW, y).strokeColor('#E5E7EB').lineWidth(0.5).stroke();
   };
 
@@ -122,8 +139,28 @@ const buildInvoicePdfBuffer = (booking) => new Promise((resolve, reject) => {
   const haltingCharge = Number(booking.trip_halting_charge || 0);
   const slaOverageCharge = Number(booking.trip_sla_overage_charge || 0);
 
-  drawRow('Amount', money(amount));
-  drawRow('Platform Fee', money(platformFee));
+  // Freight — the driver/broker's GTA supply, always reverse charge (see gstCalculator.js).
+  // GadiDost never adds GST to this line; the small note below is the legally-required
+  // disclosure that the recipient (the client, if a specified person) self-assesses and pays it.
+  drawRow('Freight (Transportation Charges)', money(freight));
+  doc.fillColor(MUTED).fontSize(7).font('Helvetica-Oblique')
+    .text('GST on freight is payable by the recipient under Reverse Charge Mechanism (Notification No. 13/2017-Central Tax (Rate), as amended). GadiDost does not collect GST on this amount.',
+      tableX + 10, y + 3, { width: tableW - 20 });
+  y = doc.y + 6;
+
+  // Platform fee — GadiDost's own forward-charge supply. The fee amount itself is unchanged
+  // from what's collected everywhere else in the app; these sub-rows just decompose it into a
+  // taxable value + GST split for the tax invoice (see gstCalculator.js).
+  const gst = computePlatformFeeGst(platformFee, { companyGstin: companySettings?.company_gstin, clientGstin: booking.client_gstin });
+  drawRow('Platform Service Fee (incl. GST)', money(platformFee));
+  drawRow(`Taxable Value`, money(gst.taxableValue), { sub: true });
+  if (gst.isIntraState) {
+    drawRow(`CGST @ ${(gst.rate / 2 * 100).toFixed(0)}%`, money(gst.cgst), { sub: true });
+    drawRow(`SGST @ ${(gst.rate / 2 * 100).toFixed(0)}%`, money(gst.sgst), { sub: true });
+  } else {
+    drawRow(`IGST @ ${(gst.rate * 100).toFixed(0)}%`, money(gst.igst), { sub: true });
+  }
+
   if (haltingCharge > 0) {
     drawRow(`Halting Charge (${Number(booking.trip_halting_hours || 0)}h overage, included above)`, money(haltingCharge));
   }

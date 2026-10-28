@@ -1,5 +1,6 @@
 const BookingModel = require('../models/booking.model');
 const NotificationModel = require('../models/notification.model');
+const AdminSettingsModel = require('../models/adminSettings.model');
 const { buildInvoicePdfBuffer } = require('../utils/invoicePdf');
 const { getEmailProvider } = require('../providers/email');
 const { errorResponse, successResponse } = require('../utils/response');
@@ -25,7 +26,8 @@ const downloadInvoice = async (req, res, next) => {
     if (!booking) return errorResponse(res, 404, 'Booking not found');
     if (!assertCanView(booking, req.user)) return errorResponse(res, 403, 'You do not have access to this booking');
 
-    const pdfBuffer = await buildInvoicePdfBuffer(booking);
+    const companySettings = await AdminSettingsModel.get();
+    const pdfBuffer = await buildInvoicePdfBuffer(booking, companySettings);
     res.set('Content-Type', 'application/pdf');
     res.set('Content-Disposition', `attachment; filename="invoice-${booking.booking_number}.pdf"`);
     return res.send(pdfBuffer);
@@ -47,7 +49,8 @@ const emailInvoice = async (req, res, next) => {
     if (!booking) return errorResponse(res, 404, 'Booking not found');
     if (!assertCanView(booking, req.user)) return errorResponse(res, 403, 'You do not have access to this booking');
 
-    const pdfBuffer = await buildInvoicePdfBuffer(booking);
+    const companySettings = await AdminSettingsModel.get();
+    const pdfBuffer = await buildInvoicePdfBuffer(booking, companySettings);
     const result = await getEmailProvider().send({
       to,
       subject,

@@ -1,0 +1,26 @@
+-- ============================================================
+--  SSK LOGISTICS — GST-COMPLIANT INVOICE (RCM freight + GST on platform fee)
+--  Database: ssk_logistics
+--  File:     db/72gst_invoice.sql
+--  Run this file in pgAdmin Query Tool on the ssk_logistics DB
+--  (mirrors the "GST INVOICE" block in src/config/migrate.js)
+--
+--  GadiDost is not the GTA (Goods Transport Agency) — the driver/broker is. So the freight
+--  portion of every invoice (amount minus platform fee) is always shown under GST Reverse
+--  Charge Mechanism: no GST is charged by GadiDost on it, the invoice simply states the
+--  recipient is liable to self-assess and pay GST directly (Notification No. 13/2017-Central
+--  Tax (Rate), as amended) — this never changes, no per-client toggle.
+--
+--  GadiDost's OWN taxable supply is its platform/service fee (the existing `platform_fee`
+--  already collected from the client) — always forward-charge GST @ 18%. The already-collected
+--  platform_fee is treated as GST-INCLUSIVE (no new charge added on top, nothing about what the
+--  client pays or what gets settled/paid out changes) — the invoice just decomposes it into a
+--  taxable value + CGST/SGST (same state as GadiDost) or IGST (different state), using the
+--  company's own GSTIN and the client's verified GSTIN (from kyc_submissions, if on file).
+--
+--  Only new schema needed: GadiDost's own GSTIN, stored once on admin_settings (singleton row)
+--  the same way company_upi_id/company_upi_name already are — admin-editable, used to print on
+--  every invoice and to determine the company's GST state code for the CGST+SGST vs IGST split.
+-- ============================================================
+
+ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS company_gstin TEXT;

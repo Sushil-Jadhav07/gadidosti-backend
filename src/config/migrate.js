@@ -1657,6 +1657,15 @@ const runMigrations = async (client) => {
       CREATE INDEX IF NOT EXISTS idx_postpaid_bill_items_bill ON postpaid_bill_items(bill_id);
     `);
 
+    // ── GST INVOICE (mirrors db/72gst_invoice.sql) ──
+    // GadiDost's own GSTIN — printed on every invoice and used to decide CGST+SGST (same state
+    // as the client) vs IGST (different state) on the platform fee. See invoicePdf.js /
+    // gstCalculator.js for the actual computation; the freight portion is always reverse-charge
+    // (no schema needed for that — it's a fixed invoice note, not a toggle).
+    await client.query(`
+      ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS company_gstin TEXT;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
