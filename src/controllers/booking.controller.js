@@ -1,5 +1,6 @@
 const BookingModel = require('../models/booking.model');
 const GeofenceModel = require('../models/geofence.model');
+const ClientBillingPartyModel = require('../models/clientBillingParty.model');
 const PostpaidBillModel = require('../models/postpaidBill.model');
 const WalletModel = require('../models/wallet.model');
 const AnalyticsModel = require('../models/analytics.model');
@@ -153,6 +154,14 @@ const projectBooking = (row, timeline, role) => {
     // findPartTruckCandidates' category param), independent of truck_category which stays
     // 'part' regardless. Null means "any size".
     partTruckSizeCategory: row.part_truck_size_category || null,
+    // Who's liable for the freight's RCM GST, and the mandatory E-Way Bill number — see
+    // createBooking's billed_to/eway_bill_number handling and invoicePdf.js, which uses
+    // billingPartyName/billingPartyGstin on the invoice instead of the client's own when
+    // billedTo is 'receiver'.
+    billedTo: row.billed_to || 'self',
+    billingPartyName: row.billing_party_name || null,
+    billingPartyGstin: row.billing_party_gstin || null,
+    ewayBillNumber: row.eway_bill_number || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -1304,6 +1313,7 @@ const createBooking = async (req, res, next) => {
       add_loading_location, add_unloading_location,
       search_mode, search_radius_km, broker_id, is_scheduled, is_express,
       part_truck_size_category,
+      billed_to = 'self', billing_party_name, billing_party_gstin, eway_bill_number,
     } = req.body;
 
     // Mandatory for every client, no exceptions — PAN + Aadhaar (via DigiLocker) + GST, same KYC
@@ -1345,6 +1355,18 @@ const createBooking = async (req, res, next) => {
     }
     if (is_express && transport_type !== 'intra') {
       return errorResponse(res, 422, 'Express Delivery is only available for intra-city bookings');
+    }
+
+    // Who's liable for the freight's RCM GST — a named receiver/consignee needs their own name
+    // + GSTIN (used on the invoice instead of the client's own, see invoicePdf.js); omitting
+    // either once "Receiver Pays" is chosen is a hard 422, not silently falling back to the
+    // client's own details.
+    if (billed_to === 'receiver' && (!billing_party_name || !billing_party_gstin)) {
+      return errorResponse(res, 422, 'Supplier Name and GST Number are required when the receiver is paying', { code: 'BILLING_PARTY_REQUIRED' });
+    }
+    // Mandatory for every booking (admin's explicit choice, not threshold-based).
+    if (!eway_bill_number) {
+      return errorResponse(res, 422, 'E-Way Bill number is required', { code: 'EWAY_BILL_REQUIRED' });
     }
 
     let amount = providedAmount;
@@ -1415,9 +1437,21 @@ const createBooking = async (req, res, next) => {
       selectedBrokerId: search_mode === 'broker' ? broker_id : null,
       isExpress: transport_type === 'intra' ? !!is_express : false,
       partTruckSizeCategory: search_mode === 'part_load' ? part_truck_size_category : null,
+      billedTo: billed_to,
+      billingPartyName: billed_to === 'receiver' ? billing_party_name : null,
+      billingPartyGstin: billed_to === 'receiver' ? billing_party_gstin : null,
+      ewayBillNumber: eway_bill_number,
     });
 
     await BookingModel.addTimelineStep(booking.id, { step: 'pending', position: 0 });
+
+    // Save this receiver for next time — same "typed once, picked thereafter" reuse as Saved
+    // Addresses. A plain DB upsert, not worth wrapping in try/catch (unlike the postpaid/credit-
+    // limit block below, which calls out to notifications) — a failure here should surface like
+    // any other unexpected error rather than being silently swallowed.
+    if (billed_to === 'receiver' && billing_party_name && billing_party_gstin) {
+      await ClientBillingPartyModel.upsert(req.user.id, { name: billing_party_name, gstin: billing_party_gstin });
+    }
 
     // Re-check after this booking's own amount is now counted — if it pushed them to (or past)
     // their limit, raise a bill immediately for everything outstanding rather than waiting for

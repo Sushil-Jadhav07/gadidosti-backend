@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 
-const { getDashboard, getAdminAnalytics, getSettings, updateSettings, listOpenIncidents } = require('../controllers/admin.controller');
+const { getDashboard, getAdminAnalytics, getSettings, updateSettings, listOpenIncidents, verifyCompanyGstin } = require('../controllers/admin.controller');
 const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { updateSettingsValidation } = require('../validations/admin.validation');
@@ -132,5 +132,22 @@ router.get('/admin/settings', authenticate, authorize('admin', 'staff'), require
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.put('/admin/settings', authenticate, authorize('admin', 'staff'), requireAdminPage('settings'), updateSettingsValidation, validate, updateSettings);
+
+/**
+ * @swagger
+ * /api/admin/settings/verify-gstin:
+ *   post:
+ *     tags: [Admin]
+ *     summary: Verify and save GadiDost's own company GSTIN (admin only) — fetches the legal name from Cashfree
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: GSTIN verified and saved
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ */
+router.post('/admin/settings/verify-gstin', authenticate, authorize('admin', 'staff'), requireAdminPage('settings'), verifyCompanyGstin);
 
 module.exports = router;

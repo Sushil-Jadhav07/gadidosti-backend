@@ -1,5 +1,6 @@
 const { body } = require('express-validator');
 const { TRUCK_TYPE_VALUES, LEGACY_TRUCK_CATEGORIES, TRUCK_BODY_TYPE_VALUES } = require('../constants/truckTypes');
+const { GST_REGEX } = require('./kyc.validation');
 
 const TRANSPORT_TYPES = ['intra', 'inter'];
 // 'part' (part-load — a booking mode, not a truck size) is still selectable on top of every
@@ -114,6 +115,20 @@ const createBookingValidation = [
     }
     return true;
   }),
+
+  // Who's liable for the freight's RCM GST — format-checked here only; the controller enforces
+  // billing_party_name/billing_party_gstin actually being present once billed_to is 'receiver'
+  // (same "optional at this layer, required with a clear error code in the controller" pattern
+  // as pickup_pincode/drop_pincode above).
+  body('billed_to').optional({ nullable: true, checkFalsy: true })
+    .isIn(['self', 'receiver']).withMessage('billed_to must be one of: self, receiver'),
+  body('billing_party_name').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 200 }),
+  body('billing_party_gstin').optional({ nullable: true, checkFalsy: true }).trim()
+    .matches(GST_REGEX).withMessage('billing_party_gstin must be a valid 15-character GSTIN'),
+
+  // E-Way Bill number — mandatory for every booking (admin's explicit choice, not threshold-
+  // based); the controller 422s if it's missing, this just format-checks it when present.
+  body('eway_bill_number').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 30 }),
 ];
 
 const quoteBookingValidation = [

@@ -2,7 +2,11 @@ const AnalyticsModel = require('../models/analytics.model');
 const AdminSettingsModel = require('../models/adminSettings.model');
 const AuditLogModel = require('../models/auditLog.model');
 const TripIncidentModel = require('../models/tripIncident.model');
+const { getVerificationProvider } = require('../providers/verification');
 const { successResponse, errorResponse } = require('../utils/response');
+const logger = require('../utils/logger');
+
+const verificationProvider = getVerificationProvider();
 
 const projectIncident = (row) => ({
   id: row.id,
@@ -105,8 +109,12 @@ const getSettings = async (req, res, next) => {
       companyUpiId: settings.company_upi_id,
       companyUpiName: settings.company_upi_name,
       // GadiDost's own GSTIN — printed on every invoice and used to decide CGST+SGST vs IGST
-      // on the platform fee's GST breakdown (see gstCalculator.js).
+      // on the platform fee's GST breakdown (see gstCalculator.js). Only ever set via a
+      // verified Cashfree lookup (see verifyCompanyGstin below), never free-typed — hence the
+      // paired legal name and verified-at timestamp, not just the bare GSTIN.
       companyGstin: settings.company_gstin,
+      companyLegalName: settings.company_legal_name,
+      companyGstVerifiedAt: settings.company_gst_verified_at,
       updatedAt: settings.updated_at,
     });
   } catch (err) {
@@ -117,7 +125,7 @@ const getSettings = async (req, res, next) => {
 // ─── PUT /api/admin/settings ──────────────────────────────────────────────────
 const updateSettings = async (req, res, next) => {
   try {
-    const { platform_name, contact_email, commission_rate, email_alerts, sms_alerts, push_notifications, company_upi_id, company_upi_name, company_gstin } = req.body;
+    const { platform_name, contact_email, commission_rate, email_alerts, sms_alerts, push_notifications, company_upi_id, company_upi_name } = req.body;
 
     const updated = await AdminSettingsModel.update({
       platformName: platform_name,
@@ -128,7 +136,6 @@ const updateSettings = async (req, res, next) => {
       pushNotifications: push_notifications,
       companyUpiId: company_upi_id,
       companyUpiName: company_upi_name,
-      companyGstin: company_gstin,
     });
     if (!updated) return errorResponse(res, 404, 'Settings not found');
 
@@ -155,4 +162,44 @@ const updateSettings = async (req, res, next) => {
   }
 };
 
-module.exports = { getDashboard, getAdminAnalytics, getSettings, updateSettings, listOpenIncidents };
+// ─── POST /api/admin/settings/verify-gstin ────────────────────────────────────
+// The only way company_gstin/company_legal_name ever get set — admin provides just the GSTIN,
+// the backend calls the same Cashfree GST check used for client/driver/broker KYC, and the
+// GSTIN + the legal business name IT returns are saved together only once verification
+// succeeds. Never free-typed (see AdminSettingsModel.update, which deliberately can't touch
+// these two columns).
+const verifyCompanyGstin = async (req, res, next) => {
+  try {
+    const { gstin } = req.body;
+    if (!gstin) return errorResponse(res, 422, 'gstin is required');
+
+    const result = await verificationProvider.verifyGst({ gstin });
+    if (result.status !== 'verified') {
+      return errorResponse(res, 422, result.details?.message || 'GSTIN could not be verified', { code: 'GSTIN_VERIFICATION_FAILED' });
+    }
+
+    const legalName = result.details?.legalName || result.details?.tradeName || null;
+    const updated = await AdminSettingsModel.setCompanyGstin({ gstin: result.details?.gstin || gstin, legalName });
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'ADMIN_SETTINGS_COMPANY_GSTIN_VERIFIED',
+      entity: 'admin_settings',
+      entityId: updated.id,
+      meta: { gstin: updated.company_gstin, legal_name: updated.company_legal_name },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Company GSTIN verified and saved by admin ${req.user.id}: ${updated.company_gstin}`);
+    return successResponse(res, 200, 'GSTIN verified and saved', {
+      companyGstin: updated.company_gstin,
+      companyLegalName: updated.company_legal_name,
+      companyGstVerifiedAt: updated.company_gst_verified_at,
+    });
+  } catch (err) {
+    logger.error(`Company GSTIN verification failed: ${err.message}`, err);
+    return errorResponse(res, 503, 'GST verification service is unavailable right now');
+  }
+};
+
+module.exports = { getDashboard, getAdminAnalytics, getSettings, updateSettings, listOpenIncidents, verifyCompanyGstin };

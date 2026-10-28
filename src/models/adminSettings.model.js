@@ -9,7 +9,9 @@ class AdminSettingsModel {
     return result.rows[0] || null;
   }
 
-  static async update({ platformName, contactEmail, commissionRate, emailAlerts, smsAlerts, pushNotifications, companyUpiId, companyUpiName, companyGstin }) {
+  // company_gstin/company_legal_name are deliberately NOT settable here — see setCompanyGstin
+  // below, the only path that writes them (straight from a verified Cashfree lookup).
+  static async update({ platformName, contactEmail, commissionRate, emailAlerts, smsAlerts, pushNotifications, companyUpiId, companyUpiName }) {
     const result = await pool.query(
       `UPDATE admin_settings SET
          platform_name = COALESCE($1, platform_name),
@@ -20,11 +22,28 @@ class AdminSettingsModel {
          push_notifications = COALESCE($6, push_notifications),
          company_upi_id = COALESCE($7, company_upi_id),
          company_upi_name = COALESCE($8, company_upi_name),
-         company_gstin = COALESCE($9, company_gstin),
          updated_at = NOW()
-       WHERE id = $10
+       WHERE id = $9
        RETURNING *`,
-      [platformName, contactEmail, commissionRate, emailAlerts, smsAlerts, pushNotifications, companyUpiId, companyUpiName, companyGstin, ADMIN_SETTINGS_ID]
+      [platformName, contactEmail, commissionRate, emailAlerts, smsAlerts, pushNotifications, companyUpiId, companyUpiName, ADMIN_SETTINGS_ID]
+    );
+    return result.rows[0] || null;
+  }
+
+  // Separate from update() above — company_gstin/company_legal_name are only ever written
+  // together, straight from a successful Cashfree verification (see admin.controller.js's
+  // verifyCompanyGstin), never free-typed, so this sets both directly rather than COALESCE-
+  // merging against whatever's already there.
+  static async setCompanyGstin({ gstin, legalName }) {
+    const result = await pool.query(
+      `UPDATE admin_settings SET
+         company_gstin = $1,
+         company_legal_name = $2,
+         company_gst_verified_at = NOW(),
+         updated_at = NOW()
+       WHERE id = $3
+       RETURNING *`,
+      [gstin, legalName, ADMIN_SETTINGS_ID]
     );
     return result.rows[0] || null;
   }

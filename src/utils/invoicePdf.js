@@ -48,7 +48,10 @@ const buildInvoicePdfBuffer = (booking, companySettings = {}) => new Promise((re
     // Logo missing/unreadable — fall back to text-only wordmark, don't fail the invoice.
   }
   doc.fillColor('#fff').fontSize(20).font('Helvetica-Bold').text('GadiDost', marginX + 52, 32);
-  doc.fillColor('#B9C6DA').fontSize(9).font('Helvetica').text('SSK Logistics', marginX + 52, 55);
+  // The legal entity name, straight from the verified GSTIN (see admin.controller.js's
+  // verifyCompanyGstin) — never hand-typed. Falls back to the brand name alone until a company
+  // GSTIN has actually been verified in Settings.
+  doc.fillColor('#B9C6DA').fontSize(9).font('Helvetica').text(companySettings?.company_legal_name || 'GadiDost Logistics', marginX + 52, 55);
   if (companySettings?.company_gstin) {
     doc.fillColor('#B9C6DA').fontSize(8).font('Helvetica').text(`GSTIN: ${companySettings.company_gstin}`, marginX + 52, 68);
   }
@@ -60,25 +63,33 @@ const buildInvoicePdfBuffer = (booking, companySettings = {}) => new Promise((re
 
   let y = 140;
 
+  // Who's actually liable for the freight's GST (RCM) — the client themselves (default) or a
+  // named receiver/consignee (Step 1's "Receiver Pays"). When it's a receiver, THEIR name+GSTIN
+  // go under BILL TO (and feed the platform-fee GST state match below), with the client who
+  // actually booked it kept visible as a "Booked by" reference line rather than dropped.
+  const billedToReceiver = booking.billed_to === 'receiver';
+  const billToName = billedToReceiver ? (booking.billing_party_name || '-') : (booking.client_name || '-');
+  const billToGstin = billedToReceiver ? booking.billing_party_gstin : booking.client_gstin;
+
   // ─── Bill To / Trip parties (two columns) ────────────────────────────────
   const colWidth = contentWidth / 2 - 10;
   doc.fillColor(BRAND_BLUE).fontSize(11).font('Helvetica-Bold').text('BILL TO', marginX, y);
   doc.fillColor(BRAND_BLUE).fontSize(11).font('Helvetica-Bold').text('TRIP', marginX + colWidth + 20, y);
   y += 16;
 
-  doc.fillColor('#111').fontSize(10).font('Helvetica-Bold').text(booking.client_name || '-', marginX, y, { width: colWidth });
+  doc.fillColor('#111').fontSize(10).font('Helvetica-Bold').text(billToName, marginX, y, { width: colWidth });
   doc.fillColor('#111').fontSize(10).font('Helvetica-Bold').text(`Broker: ${booking.broker_name || '-'}`, marginX + colWidth + 20, y, { width: colWidth });
   y += 14;
 
-  doc.fillColor(MUTED).fontSize(9).font('Helvetica').text(booking.client_phone || '-', marginX, y, { width: colWidth });
+  doc.fillColor(MUTED).fontSize(9).font('Helvetica').text(billedToReceiver ? `Booked by: ${booking.client_name || '-'}` : (booking.client_phone || '-'), marginX, y, { width: colWidth });
   doc.fillColor(MUTED).fontSize(9).font('Helvetica').text(`Driver: ${booking.driver_name || '-'}`, marginX + colWidth + 20, y, { width: colWidth });
   y += 13;
 
-  doc.fillColor(MUTED).fontSize(9).text(booking.client_email || '-', marginX, y, { width: colWidth });
+  doc.fillColor(MUTED).fontSize(9).text(billedToReceiver ? (booking.client_phone || '-') : (booking.client_email || '-'), marginX, y, { width: colWidth });
   doc.fillColor(MUTED).fontSize(9).text(`Truck: ${booking.truck_reg || '-'}`, marginX + colWidth + 20, y, { width: colWidth });
   y += 13;
 
-  doc.fillColor(MUTED).fontSize(9).text(`GSTIN: ${booking.client_gstin || 'Not registered'}`, marginX, y, { width: colWidth });
+  doc.fillColor(MUTED).fontSize(9).text(`GSTIN: ${billToGstin || 'Not registered'}`, marginX, y, { width: colWidth });
   y += 17;
 
   // ─── Route ────────────────────────────────────────────────────────────────
@@ -89,6 +100,9 @@ const buildInvoicePdfBuffer = (booking, companySettings = {}) => new Promise((re
   y = doc.y + 4;
   doc.fillColor('#111').fontSize(9).font('Helvetica-Bold').text('Drop: ', marginX, y, { continued: true })
     .font('Helvetica').fillColor(MUTED).text(booking.drop_location || '-', { width: contentWidth - 55 });
+  y = doc.y + 4;
+  doc.fillColor('#111').fontSize(9).font('Helvetica-Bold').text('E-Way Bill No: ', marginX, y, { continued: true })
+    .font('Helvetica').fillColor(MUTED).text(booking.eway_bill_number || '-', { width: contentWidth - 55 });
   y = doc.y + 10;
 
   const timeTakenMinutes = booking.trip_started_at && booking.trip_delivered_at
@@ -151,7 +165,7 @@ const buildInvoicePdfBuffer = (booking, companySettings = {}) => new Promise((re
   // Platform fee — GadiDost's own forward-charge supply. The fee amount itself is unchanged
   // from what's collected everywhere else in the app; these sub-rows just decompose it into a
   // taxable value + GST split for the tax invoice (see gstCalculator.js).
-  const gst = computePlatformFeeGst(platformFee, { companyGstin: companySettings?.company_gstin, clientGstin: booking.client_gstin });
+  const gst = computePlatformFeeGst(platformFee, { companyGstin: companySettings?.company_gstin, clientGstin: billToGstin });
   drawRow('Platform Service Fee (incl. GST)', money(platformFee));
   drawRow(`Taxable Value`, money(gst.taxableValue), { sub: true });
   if (gst.isIntraState) {

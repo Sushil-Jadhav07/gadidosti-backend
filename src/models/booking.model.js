@@ -77,6 +77,12 @@ class BookingModel {
     loadingLocations, unloadingLocations,
     isScheduled, broadcastAt, searchMode, searchRadiusKm, selectedBrokerId, isExpress,
     partTruckSizeCategory,
+    // Who's liable for the freight's GST (RCM) — 'self' (the client, default) or 'receiver', a
+    // named third party identified by billingPartyName/billingPartyGstin (see
+    // booking.controller.js's createBooking and invoicePdf.js, which uses these instead of the
+    // client's own name/GSTIN on the invoice when billedTo is 'receiver'). ewayBillNumber is
+    // mandatory for every booking (see booking.validation.js), unrelated to billedTo.
+    billedTo, billingPartyName, billingPartyGstin, ewayBillNumber,
   }) {
     const bookingNumber = await this.generateBookingNumber();
     const result = await pool.query(
@@ -87,8 +93,9 @@ class BookingModel {
          pricing_breakdown, distance, platform_fee, payment_status, notes, city,
          loading_locations, unloading_locations,
          is_scheduled, broadcast_at, search_mode, search_radius_km, selected_broker_id, is_express,
-         part_truck_size_category, pickup_pincode, drop_pincode
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
+         part_truck_size_category, pickup_pincode, drop_pincode,
+         billed_to, billing_party_name, billing_party_gstin, eway_bill_number
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43)
        RETURNING *`,
       [
         bookingNumber, clientId, brokerId || null, driverId || null, truckId || null, pickupLocation || null, pickupLat || null, pickupLng || null,
@@ -99,6 +106,7 @@ class BookingModel {
         JSON.stringify(loadingLocations || []), JSON.stringify(unloadingLocations || []),
         !!isScheduled, broadcastAt || null, searchMode || null, searchRadiusKm != null ? searchRadiusKm : null, selectedBrokerId || null, !!isExpress,
         partTruckSizeCategory || null, pickupPincode || null, dropPincode || null,
+        billedTo || 'self', billingPartyName || null, billingPartyGstin || null, ewayBillNumber || null,
       ]
     );
     return result.rows[0];

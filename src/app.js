@@ -36,6 +36,7 @@ const geofenceRoutes = require('./routes/geofence.routes');
 const walletRoutes = require('./routes/wallet.routes');
 const payoutRoutes = require('./routes/payout.routes');
 const postpaidBillRoutes = require('./routes/postpaidBill.routes');
+const billingPartyRoutes = require('./routes/billingParty.routes');
 const errorHandler  = require('./middleware/errorHandler.middleware');
 const logger        = require('./utils/logger');
 const allowedOrigins = require('./config/corsOrigins');
@@ -176,6 +177,7 @@ app.use('/api', geofenceRoutes);
 app.use('/api', walletRoutes);
 app.use('/api', payoutRoutes);
 app.use('/api', postpaidBillRoutes);
+app.use('/api', billingPartyRoutes);
 
 // 404 handler
 app.use((req, res) => {

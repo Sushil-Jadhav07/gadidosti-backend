@@ -1666,6 +1666,41 @@ const runMigrations = async (client) => {
       ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS company_gstin TEXT;
     `);
 
+    // ── BILLING PARTY + E-WAY BILL (mirrors db/73billing_party_eway_bill.sql) ──
+    // Step 1 of the booking wizard now asks who's liable for the freight's RCM GST — the client
+    // ("self", default, unchanged) or a named receiver/consignee ("receiver"), whose name+GSTIN
+    // gets saved to client_billing_parties for reuse on future bookings. Step 2 gains a mandatory
+    // E-Way Bill number (required for every booking, not threshold-based — see
+    // booking.validation.js).
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS billed_to TEXT NOT NULL DEFAULT 'self' CHECK (billed_to IN ('self', 'receiver'));
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS billing_party_name TEXT;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS billing_party_gstin TEXT;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS eway_bill_number TEXT;
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS client_billing_parties (
+        id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        client_id   UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name        TEXT NOT NULL,
+        gstin       TEXT NOT NULL,
+        created_at  TIMESTAMPTZ DEFAULT NOW(),
+        updated_at  TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (client_id, gstin)
+      );
+      CREATE INDEX IF NOT EXISTS idx_client_billing_parties_client ON client_billing_parties(client_id);
+    `);
+
+    // ── COMPANY GST VERIFICATION (mirrors db/74company_gst_verification.sql) ──
+    // company_gstin (db/72gst_invoice.sql) was plain free-text — this adds a verified legal
+    // name, fetched from Cashfree's GST check (the same one used for client/driver/broker KYC)
+    // instead of hand-typed, printed on every invoice (see admin.controller.js's
+    // verifyCompanyGstin and invoicePdf.js).
+    await client.query(`
+      ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS company_legal_name TEXT;
+      ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS company_gst_verified_at TIMESTAMPTZ;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
