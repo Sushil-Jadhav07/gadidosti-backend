@@ -27,6 +27,27 @@ class GeofenceModel {
     return result.rowCount > 0;
   }
 
+  // Bulk import (see geofence.controller.js's bulkUploadPincodes) — one multi-row INSERT rather
+  // than a query per row. ON CONFLICT upserts the label instead of erroring, so re-uploading the
+  // same sheet (or one with overlapping pincodes) is safe to repeat. `xmax = 0` is Postgres' own
+  // tell for "this row was actually inserted" vs "this hit the ON CONFLICT UPDATE branch" —
+  // lets the caller report accurate added/updated counts instead of just a total.
+  static async bulkCreate(rows) {
+    if (!rows.length) return [];
+    const values = [];
+    const placeholders = rows.map((row, i) => {
+      values.push(row.pincode, row.label || null);
+      return `($${i * 2 + 1}, $${i * 2 + 2})`;
+    });
+    const result = await pool.query(
+      `INSERT INTO allowed_pincodes (pincode, label) VALUES ${placeholders.join(', ')}
+       ON CONFLICT (pincode) DO UPDATE SET label = COALESCE(EXCLUDED.label, allowed_pincodes.label), updated_at = NOW()
+       RETURNING pincode, (xmax = 0) AS inserted`,
+      values
+    );
+    return result.rows;
+  }
+
   // An empty/all-inactive whitelist means "no restriction configured yet" — fail-open so a fresh
   // deploy doesn't instantly block every booking before an admin populates the list.
   static async isAnyConfigured() {

@@ -1,7 +1,13 @@
+const ExcelJS = require('exceljs');
 const GeofenceModel = require('../models/geofence.model');
 const AuditLogModel = require('../models/auditLog.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
+
+const PINCODE_REGEX = /^\d{6}$/;
+// A hard ceiling, not a realistic whitelist size — just a sane guard against someone uploading
+// an enormous sheet by mistake (or on purpose) in one request.
+const MAX_BULK_ROWS = 5000;
 
 // ─── GET /api/admin/geofencing/pincodes ──────────────────────────────────────────
 const listPincodes = async (req, res, next) => {
@@ -70,4 +76,161 @@ const deletePincode = async (req, res, next) => {
   }
 };
 
-module.exports = { listPincodes, createPincode, setPincodeActive, deletePincode };
+// Reads the uploaded sheet (buffer, from multer memory storage) into plain {pincode, label}
+// rows. Finds the Pincode/Label columns by header NAME (case-insensitive), not fixed position,
+// so both the sample template and an admin's own re-ordered copy of it work the same way; falls
+// back to column order (pincode first, label second) only if no recognizable header is found at
+// all. Handles .csv (hand-parsed — this is a plain two-column format, not worth a dependency)
+// and .xlsx (via exceljs) the same way from there.
+const extractRows = async (file) => {
+  const isCsv = /\.csv$/i.test(file.originalname || '') || file.mimetype === 'text/csv';
+  let rawRows;
+
+  if (isCsv) {
+    const text = file.buffer.toString('utf8');
+    rawRows = text
+      .split(/\r\n|\n|\r/)
+      .filter((line) => line.trim() !== '')
+      .map((line) => {
+        const cells = [];
+        let cur = '';
+        let inQuotes = false;
+        for (let i = 0; i < line.length; i++) {
+          const ch = line[i];
+          if (ch === '"') {
+            if (inQuotes && line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = !inQuotes;
+          } else if (ch === ',' && !inQuotes) {
+            cells.push(cur);
+            cur = '';
+          } else {
+            cur += ch;
+          }
+        }
+        cells.push(cur);
+        return cells.map((c) => c.trim());
+      });
+  } else {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(file.buffer);
+    const sheet = workbook.worksheets[0];
+    rawRows = [];
+    if (sheet) {
+      sheet.eachRow((row) => {
+        const values = row.values.slice(1).map((v) => {
+          if (v == null) return '';
+          if (typeof v === 'object' && v.text != null) return String(v.text).trim();
+          if (typeof v === 'object' && v.result != null) return String(v.result).trim();
+          return String(v).trim();
+        });
+        rawRows.push(values);
+      });
+    }
+  }
+
+  if (!rawRows.length) return [];
+
+  const header = rawRows[0].map((cell) => String(cell || '').trim().toLowerCase());
+  let pincodeIdx = header.findIndex((h) => h.includes('pincode') || h === 'pin');
+  let labelIdx = header.findIndex((h) => h.includes('label') || h.includes('city') || h.includes('name'));
+  const hasHeader = pincodeIdx !== -1;
+  if (!hasHeader) {
+    pincodeIdx = 0;
+    if (labelIdx === -1) labelIdx = 1;
+  }
+  const dataRows = hasHeader ? rawRows.slice(1) : rawRows;
+  const rowOffset = hasHeader ? 2 : 1; // matches the row number the admin would see in Excel
+
+  return dataRows
+    .filter((row) => row.some((cell) => String(cell || '').trim() !== ''))
+    .map((row, i) => ({
+      rowNumber: i + rowOffset,
+      pincode: String(row[pincodeIdx] || '').trim(),
+      label: labelIdx !== -1 ? String(row[labelIdx] || '').trim() : '',
+    }));
+};
+
+// ─── GET /api/admin/geofencing/pincodes/sample ───────────────────────────────────
+// A ready-to-fill .xlsx matching exactly what bulkUploadPincodes expects — two columns,
+// Pincode + Label, a bold header row, and a couple of real example rows to copy the pattern from.
+const downloadSampleTemplate = async (req, res, next) => {
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Pincodes');
+    sheet.columns = [
+      { header: 'Pincode', key: 'pincode', width: 15 },
+      { header: 'Label', key: 'label', width: 30 },
+    ];
+    sheet.getRow(1).font = { bold: true };
+    sheet.addRow({ pincode: '452001', label: 'Indore' });
+    sheet.addRow({ pincode: '400067', label: 'Kandivali West, Mumbai' });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.set('Content-Disposition', 'attachment; filename="pincode-upload-sample.xlsx"');
+    return res.send(Buffer.from(buffer));
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── POST /api/admin/geofencing/pincodes/bulk ────────────────────────────────────
+// Parses the uploaded .xlsx/.csv, validates every row, then upserts whatever's valid in one
+// statement (GeofenceModel.bulkCreate) — a few bad rows never fail the whole upload, they're
+// just reported back individually alongside what did go through.
+const bulkUploadPincodes = async (req, res, next) => {
+  try {
+    if (!req.file) return errorResponse(res, 422, 'No file uploaded — attach an .xlsx or .csv file as "file"');
+
+    let parsedRows;
+    try {
+      parsedRows = await extractRows(req.file);
+    } catch (err) {
+      return errorResponse(res, 422, "Could not read this file — make sure it's a valid .xlsx or .csv export");
+    }
+
+    if (!parsedRows.length) return errorResponse(res, 422, 'No rows found in this file');
+    if (parsedRows.length > MAX_BULK_ROWS) {
+      return errorResponse(res, 422, `This file has ${parsedRows.length} rows — the limit per upload is ${MAX_BULK_ROWS}`);
+    }
+
+    const invalid = [];
+    // Dedupe by pincode within the file itself — a single INSERT ... ON CONFLICT statement
+    // can't touch the same conflict target twice (Postgres errors on that), so the LAST
+    // occurrence of a repeated pincode in the sheet wins instead of failing the whole upload.
+    const byPincode = new Map();
+    for (const row of parsedRows) {
+      if (!row.pincode) {
+        invalid.push({ row: row.rowNumber, reason: 'Pincode is empty' });
+        continue;
+      }
+      if (!PINCODE_REGEX.test(row.pincode)) {
+        invalid.push({ row: row.rowNumber, reason: `"${row.pincode}" is not a 6-digit pincode` });
+        continue;
+      }
+      byPincode.set(row.pincode, { pincode: row.pincode, label: row.label || null });
+    }
+
+    const validRows = Array.from(byPincode.values());
+    const saved = validRows.length ? await GeofenceModel.bulkCreate(validRows) : [];
+    const insertedCount = saved.filter((r) => r.inserted).length;
+    const updatedCount = saved.length - insertedCount;
+
+    await AuditLogModel.log({
+      userId: req.user.id, action: 'GEOFENCE_PINCODES_BULK_UPLOADED', entity: 'allowed_pincodes',
+      meta: { fileName: req.file.originalname, totalRows: parsedRows.length, inserted: insertedCount, updated: updatedCount, invalid: invalid.length },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Bulk pincode upload by ${req.user.id}: ${insertedCount} added, ${updatedCount} updated, ${invalid.length} invalid (of ${parsedRows.length} rows)`);
+    return successResponse(res, 200, 'Bulk upload processed', {
+      totalRows: parsedRows.length,
+      inserted: insertedCount,
+      updated: updatedCount,
+      invalid,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { listPincodes, createPincode, setPincodeActive, deletePincode, downloadSampleTemplate, bulkUploadPincodes };

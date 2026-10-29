@@ -1,9 +1,10 @@
 const express = require('express');
 const router = express.Router();
 
-const { listPincodes, createPincode, setPincodeActive, deletePincode } = require('../controllers/geofence.controller');
+const { listPincodes, createPincode, setPincodeActive, deletePincode, downloadSampleTemplate, bulkUploadPincodes } = require('../controllers/geofence.controller');
 const { authenticate, authorize } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
+const upload = require('../middleware/upload.middleware');
 const { createPincodeValidation, setPincodeActiveValidation } = require('../validations/geofence.validation');
 
 // Deliberately NOT gated by requireAdminPage/ADMIN_PAGE_KEYS — authorize('admin') only, so this
@@ -59,6 +60,52 @@ router.get('/admin/geofencing/pincodes', authenticate, authorize('admin'), listP
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/admin/geofencing/pincodes', authenticate, authorize('admin'), createPincodeValidation, validate, createPincode);
+
+/**
+ * @swagger
+ * /api/admin/geofencing/pincodes/sample:
+ *   get:
+ *     tags: [Geofencing]
+ *     summary: Download a sample .xlsx template for bulk pincode upload (admin only)
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Sample .xlsx file
+ */
+// Registered BEFORE /pincodes/:id below — otherwise "sample"/"bulk" would be swallowed as an :id.
+router.get('/admin/geofencing/pincodes/sample', authenticate, authorize('admin'), downloadSampleTemplate);
+
+/**
+ * @swagger
+ * /api/admin/geofencing/pincodes/bulk:
+ *   post:
+ *     tags: [Geofencing]
+ *     summary: Bulk-upload pincodes from an .xlsx or .csv file (admin only)
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [file]
+ *             properties:
+ *               file: { type: string, format: binary }
+ *     responses:
+ *       200:
+ *         description: Bulk upload processed
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       422:
+ *         description: No file / no rows / too many rows
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/admin/geofencing/pincodes/bulk', authenticate, authorize('admin'), upload.single('file'), bulkUploadPincodes);
 
 /**
  * @swagger
