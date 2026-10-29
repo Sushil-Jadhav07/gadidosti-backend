@@ -1,9 +1,38 @@
 const pool = require('../config/db');
 
 class GeofenceModel {
-  static async list() {
-    const result = await pool.query(`SELECT * FROM allowed_pincodes ORDER BY created_at DESC`);
-    return result.rows;
+  // Paginated + searchable — the whitelist can now run into the thousands via bulk upload, so
+  // the admin page can no longer just render every row at once. `search` matches either the
+  // pincode itself or its label (case-insensitive substring), same ILIKE pattern used elsewhere
+  // in this codebase (e.g. KycModel.findAll).
+  static async list({ search, page = 1, limit = 25 } = {}) {
+    const offset = (page - 1) * limit;
+    const conditions = [];
+    const params = [];
+    let idx = 1;
+
+    if (search) {
+      conditions.push(`(pincode ILIKE $${idx} OR label ILIKE $${idx})`);
+      params.push(`%${search}%`);
+      idx++;
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const countResult = await pool.query(`SELECT COUNT(*) FROM allowed_pincodes ${where}`, params);
+    const total = parseInt(countResult.rows[0].count, 10);
+
+    const rows = await pool.query(
+      `SELECT * FROM allowed_pincodes ${where} ORDER BY created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
+      [...params, limit, offset]
+    );
+
+    return {
+      pincodes: rows.rows,
+      total,
+      page: parseInt(page, 10),
+      limit: parseInt(limit, 10),
+      total_pages: Math.ceil(total / limit) || 0,
+    };
   }
 
   static async create({ pincode, label }) {

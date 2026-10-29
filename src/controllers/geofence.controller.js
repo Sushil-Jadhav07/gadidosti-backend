@@ -5,15 +5,22 @@ const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
 const PINCODE_REGEX = /^\d{6}$/;
-// A hard ceiling, not a realistic whitelist size — just a sane guard against someone uploading
-// an enormous sheet by mistake (or on purpose) in one request.
-const MAX_BULK_ROWS = 5000;
+// A generous ceiling, not a realistic whitelist size on its own — India has ~19,300 pincodes
+// total, so this comfortably covers even a full national list in one upload. Rows beyond this
+// are rejected outright (422) rather than silently truncated; BULK_INSERT_CHUNK_SIZE below is
+// the separate, unrelated limit on how many rows go into one INSERT statement at a time.
+const MAX_BULK_ROWS = 20000;
+// Postgres caps a single query at 65535 bind parameters — bulkCreate uses 2 per row, so 5000 is
+// nowhere near that ceiling on its own; it's here because the admin explicitly asked for
+// uploads to be processed "5000 at a time" rather than one giant statement.
+const BULK_INSERT_CHUNK_SIZE = 5000;
 
 // ─── GET /api/admin/geofencing/pincodes ──────────────────────────────────────────
 const listPincodes = async (req, res, next) => {
   try {
-    const pincodes = await GeofenceModel.list();
-    return successResponse(res, 200, 'Pincodes fetched', { pincodes });
+    const { search, page = 1, limit = 25 } = req.query;
+    const result = await GeofenceModel.list({ search, page: parseInt(page, 10), limit: Math.min(parseInt(limit, 10) || 25, 100) });
+    return successResponse(res, 200, 'Pincodes fetched', result);
   } catch (err) {
     next(err);
   }
@@ -194,9 +201,12 @@ const bulkUploadPincodes = async (req, res, next) => {
     }
 
     const invalid = [];
+    const duplicates = [];
     // Dedupe by pincode within the file itself — a single INSERT ... ON CONFLICT statement
-    // can't touch the same conflict target twice (Postgres errors on that), so the LAST
-    // occurrence of a repeated pincode in the sheet wins instead of failing the whole upload.
+    // can't touch the same conflict target twice (Postgres errors on that). A repeated pincode
+    // is common in real pincode exports (one PIN often covers several post offices/areas), so
+    // every repeat is recorded here — not silently merged away — with the LAST occurrence's
+    // label winning for the one row actually sent to the database.
     const byPincode = new Map();
     for (const row of parsedRows) {
       if (!row.pincode) {
@@ -207,26 +217,44 @@ const bulkUploadPincodes = async (req, res, next) => {
         invalid.push({ row: row.rowNumber, reason: `"${row.pincode}" is not a 6-digit pincode` });
         continue;
       }
+      if (byPincode.has(row.pincode)) {
+        duplicates.push({ row: row.rowNumber, pincode: row.pincode, reason: `Duplicate of an earlier row in this file — only the last occurrence of ${row.pincode} was kept` });
+      }
       byPincode.set(row.pincode, { pincode: row.pincode, label: row.label || null });
     }
 
+    // Processed in chunks of BULK_INSERT_CHUNK_SIZE rather than one giant statement — keeps
+    // each INSERT's parameter count small and matches what was asked for directly ("5000 at a
+    // time"), not just a single raised ceiling.
     const validRows = Array.from(byPincode.values());
-    const saved = validRows.length ? await GeofenceModel.bulkCreate(validRows) : [];
+    const saved = [];
+    for (let i = 0; i < validRows.length; i += BULK_INSERT_CHUNK_SIZE) {
+      const chunk = validRows.slice(i, i + BULK_INSERT_CHUNK_SIZE);
+      const chunkResult = await GeofenceModel.bulkCreate(chunk);
+      saved.push(...chunkResult);
+    }
     const insertedCount = saved.filter((r) => r.inserted).length;
     const updatedCount = saved.length - insertedCount;
 
+    // Full lists can run into the thousands on a large file — cap what's actually sent back to
+    // the browser, but keep the true counts (used in the summary line) unaffected by the cap.
+    const SAMPLE_CAP = 500;
+
     await AuditLogModel.log({
       userId: req.user.id, action: 'GEOFENCE_PINCODES_BULK_UPLOADED', entity: 'allowed_pincodes',
-      meta: { fileName: req.file.originalname, totalRows: parsedRows.length, inserted: insertedCount, updated: updatedCount, invalid: invalid.length },
+      meta: { fileName: req.file.originalname, totalRows: parsedRows.length, inserted: insertedCount, updated: updatedCount, invalid: invalid.length, duplicates: duplicates.length },
       ipAddress: req.ip,
     });
 
-    logger.info(`Bulk pincode upload by ${req.user.id}: ${insertedCount} added, ${updatedCount} updated, ${invalid.length} invalid (of ${parsedRows.length} rows)`);
+    logger.info(`Bulk pincode upload by ${req.user.id}: ${insertedCount} added, ${updatedCount} updated, ${invalid.length} invalid, ${duplicates.length} duplicate (of ${parsedRows.length} rows)`);
     return successResponse(res, 200, 'Bulk upload processed', {
       totalRows: parsedRows.length,
       inserted: insertedCount,
       updated: updatedCount,
-      invalid,
+      invalidCount: invalid.length,
+      duplicateCount: duplicates.length,
+      invalid: invalid.slice(0, SAMPLE_CAP),
+      duplicates: duplicates.slice(0, SAMPLE_CAP),
     });
   } catch (err) {
     next(err);
