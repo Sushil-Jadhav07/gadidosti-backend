@@ -11,7 +11,10 @@ class AdminSettingsModel {
 
   // company_gstin/company_legal_name are deliberately NOT settable here — see setCompanyGstin
   // below, the only path that writes them (straight from a verified Cashfree lookup).
-  static async update({ platformName, contactEmail, commissionRate, emailAlerts, smsAlerts, pushNotifications, companyUpiId, companyUpiName }) {
+  // company_display_name IS free-typed here on purpose — a plain fallback name shown on the
+  // invoice/Bilty headers that never depends on GST verification succeeding (see
+  // invoicePdf.js/biltyPdf.js's fallback chain).
+  static async update({ platformName, contactEmail, commissionRate, emailAlerts, smsAlerts, pushNotifications, companyUpiId, companyUpiName, companyDisplayName }) {
     const result = await pool.query(
       `UPDATE admin_settings SET
          platform_name = COALESCE($1, platform_name),
@@ -22,10 +25,11 @@ class AdminSettingsModel {
          push_notifications = COALESCE($6, push_notifications),
          company_upi_id = COALESCE($7, company_upi_id),
          company_upi_name = COALESCE($8, company_upi_name),
+         company_display_name = COALESCE($9, company_display_name),
          updated_at = NOW()
-       WHERE id = $9
+       WHERE id = $10
        RETURNING *`,
-      [platformName, contactEmail, commissionRate, emailAlerts, smsAlerts, pushNotifications, companyUpiId, companyUpiName, ADMIN_SETTINGS_ID]
+      [platformName, contactEmail, commissionRate, emailAlerts, smsAlerts, pushNotifications, companyUpiId, companyUpiName, companyDisplayName, ADMIN_SETTINGS_ID]
     );
     return result.rows[0] || null;
   }

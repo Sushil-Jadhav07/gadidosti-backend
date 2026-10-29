@@ -48,10 +48,11 @@ const buildInvoicePdfBuffer = (booking, companySettings = {}) => new Promise((re
     // Logo missing/unreadable — fall back to text-only wordmark, don't fail the invoice.
   }
   doc.fillColor('#fff').fontSize(20).font('Helvetica-Bold').text('GadiDost', marginX + 52, 32);
-  // The legal entity name, straight from the verified GSTIN (see admin.controller.js's
-  // verifyCompanyGstin) — never hand-typed. Falls back to the brand name alone until a company
-  // GSTIN has actually been verified in Settings.
-  doc.fillColor('#B9C6DA').fontSize(9).font('Helvetica').text(companySettings?.company_legal_name || 'GadiDost Logistics', marginX + 52, 55);
+  // company_display_name (plain admin-set text, Settings) takes priority over the GST-verified
+  // legal name so the header never depends on that verification having succeeded — falls back
+  // further to the legal name, then the bare brand name, in that order.
+  doc.fillColor('#B9C6DA').fontSize(9).font('Helvetica')
+    .text(companySettings?.company_display_name || companySettings?.company_legal_name || 'GadiDost Logistics', marginX + 52, 55);
   if (companySettings?.company_gstin) {
     doc.fillColor('#B9C6DA').fontSize(8).font('Helvetica').text(`GSTIN: ${companySettings.company_gstin}`, marginX + 52, 68);
   }

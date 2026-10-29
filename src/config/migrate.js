@@ -1701,6 +1701,15 @@ const runMigrations = async (client) => {
       ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS company_gst_verified_at TIMESTAMPTZ;
     `);
 
+    // ── BILTY + COMPANY NAME (mirrors db/75bilty_and_company_name.sql) ──
+    // A second, non-tax document (the Lorry Receipt) auto-emailed to the client on delivery and
+    // re-sendable on demand (see biltyPdf.js / bilty.controller.js). company_display_name is a
+    // plain admin-set fallback shown whenever the GST-verified legal name isn't available yet.
+    await client.query(`
+      ALTER TABLE admin_settings ADD COLUMN IF NOT EXISTS company_display_name TEXT;
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS bilty_number TEXT UNIQUE;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

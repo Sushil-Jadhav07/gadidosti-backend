@@ -11,6 +11,7 @@ const TripIncidentModel = require('../models/tripIncident.model');
 const MechanicRequestModel = require('../models/mechanicRequest.model');
 const TripPodPhotoModel = require('../models/tripPodPhoto.model');
 const AdminSettingsModel = require('../models/adminSettings.model');
+const { generateAndEmailBilty } = require('./bilty.controller');
 const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -597,6 +598,18 @@ const updateTripStatus = async (req, res, next) => {
       if (status === 'delivered') {
         await applyHaltingCharge(trip);
         await applySlaOverageCharge(trip);
+
+        // Auto-email the Bilty (Lorry Receipt) to the client the moment the goods are marked
+        // delivered — best-effort, a failure here must never fail the delivery status update
+        // that already succeeded (same reasoning as the postpaid credit-limit block in
+        // booking.controller.js's createBooking). Also re-sendable on demand, see
+        // bilty.controller.js's sendBilty.
+        try {
+          const deliveredBooking = await BookingModel.findById(trip.booking_id);
+          if (deliveredBooking) await generateAndEmailBilty(deliveredBooking);
+        } catch (err) {
+          logger.error(`Auto-Bilty email failed for booking ${trip.booking_id}: ${err.message}`);
+        }
       }
     }
     const stepIndex = TRIP_STEPS.indexOf(status);

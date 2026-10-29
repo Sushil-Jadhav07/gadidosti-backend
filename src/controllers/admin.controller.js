@@ -115,6 +115,9 @@ const getSettings = async (req, res, next) => {
       companyGstin: settings.company_gstin,
       companyLegalName: settings.company_legal_name,
       companyGstVerifiedAt: settings.company_gst_verified_at,
+      // Plain admin-set fallback name — shown on the invoice/Bilty headers ahead of the GST-
+      // verified legal name, so they never depend on that verification having succeeded.
+      companyDisplayName: settings.company_display_name,
       updatedAt: settings.updated_at,
     });
   } catch (err) {
@@ -125,7 +128,7 @@ const getSettings = async (req, res, next) => {
 // ─── PUT /api/admin/settings ──────────────────────────────────────────────────
 const updateSettings = async (req, res, next) => {
   try {
-    const { platform_name, contact_email, commission_rate, email_alerts, sms_alerts, push_notifications, company_upi_id, company_upi_name } = req.body;
+    const { platform_name, contact_email, commission_rate, email_alerts, sms_alerts, push_notifications, company_upi_id, company_upi_name, company_display_name } = req.body;
 
     const updated = await AdminSettingsModel.update({
       platformName: platform_name,
@@ -136,6 +139,7 @@ const updateSettings = async (req, res, next) => {
       pushNotifications: push_notifications,
       companyUpiId: company_upi_id,
       companyUpiName: company_upi_name,
+      companyDisplayName: company_display_name,
     });
     if (!updated) return errorResponse(res, 404, 'Settings not found');
 

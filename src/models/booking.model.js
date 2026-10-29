@@ -140,6 +140,30 @@ class BookingModel {
     return token;
   }
 
+  // Same lazy-generate-once-then-reuse shape as getOrCreateTrackingShareToken above, but a
+  // readable sequential reference (mirrors generateBookingNumber's own monthly-counter style)
+  // rather than a random token — this is a document number a client/consignee would actually
+  // read and quote, not a URL secret. Generated the first time a Bilty is downloaded/emailed for
+  // this booking (see biltyPdf.js / bilty.controller.js), never regenerated after that.
+  static async getOrCreateBiltyNumber(id) {
+    const existing = await pool.query(`SELECT bilty_number FROM bookings WHERE id = $1`, [id]);
+    if (existing.rows[0]?.bilty_number) return existing.rows[0].bilty_number;
+
+    const prefix = `LR-${new Date().toISOString().slice(0, 7).replace('-', '')}`;
+    const countResult = await pool.query(`SELECT COUNT(*) FROM bookings WHERE bilty_number LIKE $1`, [`${prefix}-%`]);
+    const startSeq = parseInt(countResult.rows[0].count, 10) + 1;
+
+    let biltyNumber = `${prefix}-${Date.now().toString().slice(-6)}`;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = `${prefix}-${String(startSeq + attempt).padStart(3, '0')}`;
+      const exists = await pool.query(`SELECT 1 FROM bookings WHERE bilty_number = $1`, [candidate]);
+      if (!exists.rows.length) { biltyNumber = candidate; break; }
+    }
+
+    await pool.query(`UPDATE bookings SET bilty_number = $1 WHERE id = $2`, [biltyNumber, id]);
+    return biltyNumber;
+  }
+
   // Public lookup for GET /api/track/:token — deliberately the plain SELECT_WITH_JOINS shape
   // (same as findById), not a trimmed-down query, since buildTrackingPayload (the caller) is
   // itself responsible for deciding what a public viewer may see.
