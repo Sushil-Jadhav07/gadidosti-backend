@@ -1,4 +1,5 @@
 const bcrypt = require('bcryptjs');
+const { getFirebaseAdminApp } = require('../config/firebaseAdmin');
 const { verifyGoogleIdToken } = require('../utils/googleClient');
 const UserModel = require('../models/user.model');
 const TruckModel = require('../models/truck.model');
@@ -598,9 +599,89 @@ const googleSignIn = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/auth/firebase-login ────────────────────────────────────────────
+// Phone + OTP login via Firebase Phone Authentication — the client/broker-driver apps call
+// Firebase's own SDK directly (signInWithPhoneNumber + reCAPTCHA) to send and verify the OTP,
+// entirely outside this backend; this endpoint only verifies the resulting Firebase ID token
+// (proof the phone number really was confirmed) and issues our own session on top of it,
+// exactly like every other login path here. Login-only, same as the existing OTP-login flow —
+// 404s rather than creating an account if no user has this phone number yet.
+const firebasePhoneLogin = async (req, res, next) => {
+  try {
+    const { id_token } = req.body;
+    if (!id_token) return errorResponse(res, 422, 'id_token is required');
+
+    let decoded;
+    try {
+      decoded = await getFirebaseAdminApp().auth().verifyIdToken(id_token);
+    } catch (err) {
+      logger.warn(`Firebase ID token verification failed: ${err.message}`);
+      return errorResponse(res, 401, 'Invalid or expired verification token');
+    }
+
+    if (!decoded.phone_number) {
+      return errorResponse(res, 401, 'This verification token has no verified phone number');
+    }
+
+    // Firebase returns E.164 (+91XXXXXXXXXX) — this app stores plain 10-digit Indian numbers
+    // everywhere else (registration, OTP login, password reset), so strip the country code to
+    // match the same column every other auth path looks up against.
+    const phone = decoded.phone_number.replace(/^\+91/, '');
+
+    const user = await UserModel.findByPhone(phone);
+    if (!user) return errorResponse(res, 404, 'No account found with this phone number');
+    if (user.status === 'blocked') return errorResponse(res, 403, 'Your account has been blocked. Contact support.');
+    if (user.status === 'inactive') return errorResponse(res, 403, 'Account is inactive');
+
+    if (await rejectIfActiveSession(user)) return errorResponse(res, 409, ACTIVE_SESSION_MESSAGE);
+
+    // Firebase already proved ownership of this number — same effect as a successful local OTP
+    // verify (see verifyOtp's login branch), just via a different delivery/verification path.
+    await UserModel.verifyPhone(phone);
+
+    const tokenPayload = { id: user.id, role: user.role, phone: user.phone };
+    const accessToken  = generateAccessToken(tokenPayload);
+    const refreshTkn   = generateRefreshToken(tokenPayload);
+    const tokenHash    = hashToken(refreshTkn);
+
+    await RefreshTokenModel.create({
+      userId: user.id,
+      tokenHash,
+      userAgent: req.headers['user-agent'],
+      ipAddress: req.ip,
+    });
+
+    await UserModel.updateLastLogin(user.id);
+
+    await AuditLogModel.log({
+      userId: user.id,
+      action: 'FIREBASE_OTP_LOGIN',
+      entity: 'users',
+      entityId: user.id,
+      meta: { role: user.role },
+      ipAddress: req.ip,
+    });
+
+    const { password_hash, ...safeUser } = user;
+    logger.info(`Firebase OTP login: ${phone} [${user.role}]`);
+
+    return successResponse(res, 200, 'Login successful', {
+      user: safeUser,
+      tokens: {
+        access_token:  accessToken,
+        refresh_token: refreshTkn,
+        token_type:    'Bearer',
+        expires_in:    process.env.JWT_EXPIRES_IN || '7d',
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── GET /api/auth/me ─────────────────────────────────────────────────────────
 const getMe = async (req, res) => {
   return successResponse(res, 200, 'Current user fetched', { user: req.user });
 };
 
-module.exports = { register, registerDriverWithTruck, registerAdmin, login, googleSignIn, sendOtp, verifyOtp, refreshToken, logout, forgotPassword, resetPassword, getMe };
+module.exports = { register, registerDriverWithTruck, registerAdmin, login, googleSignIn, firebasePhoneLogin, sendOtp, verifyOtp, refreshToken, logout, forgotPassword, resetPassword, getMe };

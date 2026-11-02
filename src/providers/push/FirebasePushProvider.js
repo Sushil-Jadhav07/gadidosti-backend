@@ -1,6 +1,6 @@
-const admin = require('firebase-admin');
 const PushProvider = require('./PushProvider');
 const logger = require('../../utils/logger');
+const { getFirebaseAdminApp } = require('../../config/firebaseAdmin');
 
 // FCM caps a single multicast send at 500 tokens — one user with a handful of devices never
 // gets close, so no batching loop is needed, just the cap enforced defensively.
@@ -12,20 +12,6 @@ const INVALID_TOKEN_ERROR_CODES = new Set([
   'messaging/invalid-registration-token',
   'messaging/registration-token-not-registered',
 ]);
-
-let app = null;
-const getApp = () => {
-  if (app) return app;
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-  app = admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-      privateKey,
-    }),
-  });
-  return app;
-};
 
 class FirebasePushProvider extends PushProvider {
   async send({ tokens, title, body, data }) {
@@ -40,7 +26,7 @@ class FirebasePushProvider extends PushProvider {
     );
 
     try {
-      const response = await getApp().messaging().sendEachForMulticast({
+      const response = await getFirebaseAdminApp().messaging().sendEachForMulticast({
         tokens: targets,
         notification: { title, body },
         data: stringData,

@@ -8,6 +8,7 @@ const {
   registerAdmin,
   login,
   googleSignIn,
+  firebasePhoneLogin,
   sendOtp,
   verifyOtp,
   refreshToken,
@@ -444,6 +445,59 @@ router.post('/admin/register', authenticate, authorize('admin'), registerAdminVa
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post('/google', authLimiter, googleSignInValidation, validate, googleSignIn);
+
+// ─── FIREBASE PHONE LOGIN ────────────────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/auth/firebase-login:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Phone + OTP login via Firebase Phone Authentication
+ *     description: |
+ *       The client/broker-driver apps send and verify the OTP entirely via Firebase's own SDK
+ *       (signInWithPhoneNumber + reCAPTCHA), outside this backend. This endpoint verifies the
+ *       resulting Firebase ID token and issues a normal session on top of it — same shape as
+ *       every other login path here.
+ *
+ *       Login-only — 404s if no account exists with the verified phone number (does not
+ *       register a new account).
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id_token]
+ *             properties:
+ *               id_token: { type: string, example: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..." }
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AuthResponse'
+ *       401:
+ *         description: Invalid/expired Firebase token, or no verified phone number on it
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       404:
+ *         description: No account found with this phone number
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       422:
+ *         description: id_token missing
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.post('/firebase-login', authLimiter, firebasePhoneLogin);
 
 // ─── OTP ─────────────────────────────────────────────────────────────────────
 
