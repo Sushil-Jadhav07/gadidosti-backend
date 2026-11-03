@@ -129,17 +129,15 @@ const getUserById = async (req, res, next) => {
 
 // ─── PATCH /api/admin/users/:id ───────────────────────────────────────────────
 // Lets an admin correct a client's or broker's profile on their behalf (a typo'd name, a
-// stale email) — PATCH /api/users/profile above only ever lets someone edit themselves, and
-// there was no equivalent for an admin acting on someone else's record. Reuses the exact same
-// UserModel.updateProfile the self-service route calls, so both paths stay in sync
-// automatically. Deliberately excludes phone: it's the OTP-verified login identifier, not
-// just a display field — changing it here would desync from that verification, so it's
-// admin-view-only, same reasoning as why self-service PATCH /api/users/profile never let a
-// user change their own phone either.
+// stale email, now also a wrong phone number) — PATCH /api/users/profile above only ever lets
+// someone edit themselves, and there was no equivalent for an admin acting on someone else's
+// record. Reuses the exact same UserModel.updateProfile the self-service route calls, so both
+// paths stay in sync automatically — including resetting is_phone_verified when the admin
+// changes the phone, same as a self-service change does.
 const updateUserByAdmin = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, email, address, company_name } = req.body;
+    const { name, email, phone, address, company_name } = req.body;
 
     const targetUser = await UserModel.findById(id);
     if (!targetUser) return errorResponse(res, 404, 'User not found');
@@ -154,7 +152,17 @@ const updateUserByAdmin = async (req, res, next) => {
       }
     }
 
-    const updated = await UserModel.updateProfile(id, { name, email, companyName: company_name, address });
+    if (phone) {
+      if (!/^\d{10}$/.test(phone)) {
+        return errorResponse(res, 422, 'Phone number must be exactly 10 digits');
+      }
+      const existing = await UserModel.findByPhone(phone);
+      if (existing && existing.id !== id) {
+        return errorResponse(res, 409, 'Phone number already in use by another account');
+      }
+    }
+
+    const updated = await UserModel.updateProfile(id, { name, email, phone, companyName: company_name, address });
 
     await AuditLogModel.log({
       userId: req.user.id,
