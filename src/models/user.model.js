@@ -145,7 +145,11 @@ class UserModel {
   }
 
   // Update profile
-  static async updateProfile(id, { name, email, profileImage, address, companyName }) {
+  // phone is editable here too now — if it's actually changing (not just resubmitted as-is),
+  // is_phone_verified resets to false in the same statement, since the new number hasn't gone
+  // through OTP/Firebase verification yet. Same no-reverification-required pattern as email
+  // changes already use (no separate confirm step), just with that one flag kept honest.
+  static async updateProfile(id, { name, email, phone, profileImage, address, companyName }) {
     const result = await pool.query(
       `UPDATE users
        SET name = COALESCE($1, name),
@@ -153,11 +157,13 @@ class UserModel {
            profile_image = COALESCE($3, profile_image),
            address = COALESCE($4, address),
            company_name = COALESCE($5, company_name),
+           phone = COALESCE($6, phone),
+           is_phone_verified = CASE WHEN $6 IS NOT NULL AND $6 <> phone THEN false ELSE is_phone_verified END,
            updated_at = NOW()
-       WHERE id = $6
+       WHERE id = $7
        RETURNING id, name, email, phone, role, status, is_phone_verified, is_email_verified,
                  profile_image, address, company_name, updated_at`,
-      [name, email, profileImage, address, companyName, id]
+      [name, email, phone, profileImage, address, companyName, id]
     );
     return result.rows[0] || null;
   }

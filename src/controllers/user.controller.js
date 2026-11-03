@@ -20,7 +20,7 @@ const getProfile = async (req, res, next) => {
 // ─── PATCH /api/users/profile ─────────────────────────────────────────────────
 const updateProfile = async (req, res, next) => {
   try {
-    const { name, email, profile_image, address, company_name } = req.body;
+    const { name, email, phone, profile_image, address, company_name } = req.body;
 
     if (email) {
       const existing = await UserModel.findByEmail(email);
@@ -29,9 +29,20 @@ const updateProfile = async (req, res, next) => {
       }
     }
 
+    if (phone) {
+      if (!/^\d{10}$/.test(phone)) {
+        return errorResponse(res, 422, 'Phone number must be exactly 10 digits');
+      }
+      const existing = await UserModel.findByPhone(phone);
+      if (existing && existing.id !== req.user.id) {
+        return errorResponse(res, 409, 'Phone number already in use by another account');
+      }
+    }
+
     const updated = await UserModel.updateProfile(req.user.id, {
       name,
       email,
+      phone,
       profileImage: profile_image,
       address,
       companyName: company_name,
