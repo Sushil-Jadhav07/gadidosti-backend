@@ -68,10 +68,37 @@ const rejectIfActiveSession = async (user) => {
   return true;
 };
 
+// Mandatory for every client/broker/driver registration — the same Firebase Phone Auth flow
+// already used for OTP login (see firebasePhoneLogin below), just required UP FRONT here
+// instead of optional. Verifies the ID token proves ownership of EXACTLY the phone number being
+// registered — a token for a different number is rejected, not silently swapped in, so someone
+// can't verify their own phone and then register a different one on the strength of it. Returns
+// null on success, or an [status, message, errorData] tuple to pass straight to errorResponse.
+const verifyRegistrationPhone = async (idToken, submittedPhone) => {
+  if (!idToken) {
+    return [422, 'Phone verification is required to register', { code: 'PHONE_VERIFICATION_REQUIRED' }];
+  }
+  let decoded;
+  try {
+    decoded = await getFirebaseAdminApp().auth().verifyIdToken(idToken);
+  } catch (err) {
+    logger.warn(`Registration Firebase token verification failed: ${err.message}`);
+    return [401, 'Invalid or expired phone verification', { code: 'PHONE_VERIFICATION_INVALID' }];
+  }
+  const verifiedPhone = decoded.phone_number?.replace(/^\+91/, '');
+  if (!verifiedPhone || verifiedPhone !== submittedPhone) {
+    return [422, 'The verified phone number does not match the phone number entered', { code: 'PHONE_VERIFICATION_MISMATCH' }];
+  }
+  return null;
+};
+
 // ─── POST /api/auth/register ─────────────────────────────────────────────────
 const register = async (req, res, next) => {
   try {
-    const { name, phone, email, password, role = 'client' } = req.body;
+    const { name, phone, email, password, role = 'client', id_token } = req.body;
+
+    const phoneError = await verifyRegistrationPhone(id_token, phone);
+    if (phoneError) return errorResponse(res, ...phoneError);
 
     const existingPhone = await UserModel.findByPhone(phone);
     if (existingPhone) return errorResponse(res, 409, 'Phone number already registered');
@@ -82,7 +109,7 @@ const register = async (req, res, next) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const user = await UserModel.create({ name, phone, email, passwordHash, role });
+    const user = await UserModel.create({ name, phone, email, passwordHash, role, isPhoneVerified: true });
 
     await AuditLogModel.log({
       userId: user.id,
@@ -111,8 +138,11 @@ const registerDriverWithTruck = async (req, res, next) => {
   try {
     const {
       name, phone, email, password, registration,
-      category, capacity, make, year, insurance_expiry,
+      category, capacity, make, year, insurance_expiry, id_token,
     } = req.body;
+
+    const phoneError = await verifyRegistrationPhone(id_token, phone);
+    if (phoneError) return errorResponse(res, ...phoneError);
 
     const existingPhone = await UserModel.findByPhone(phone);
     if (existingPhone) return errorResponse(res, 409, 'Phone number already registered');
@@ -132,8 +162,8 @@ const registerDriverWithTruck = async (req, res, next) => {
       await client.query('BEGIN');
 
       const userResult = await client.query(
-        `INSERT INTO users (name, email, phone, password_hash, role, status, is_email_verified)
-         VALUES ($1, $2, $3, $4, 'driver', 'active', true)
+        `INSERT INTO users (name, email, phone, password_hash, role, status, is_email_verified, is_phone_verified)
+         VALUES ($1, $2, $3, $4, 'driver', 'active', true, true)
          RETURNING id, name, email, phone, role, status, kyc_status, created_at`,
         [name, email, phone, passwordHash]
       );

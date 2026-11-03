@@ -13,12 +13,15 @@ class UserModel {
   }
 
   // Create new user
-  static async create({ name, email, phone, passwordHash, role = 'client' }) {
+  // isPhoneVerified: true when the caller already confirmed this phone via a Firebase ID token
+  // at registration time (see auth.controller.js's register) — false (the column default) for
+  // any other path, so an account never claims a verified phone it never actually proved.
+  static async create({ name, email, phone, passwordHash, role = 'client', isPhoneVerified = false }) {
     const result = await pool.query(
-      `INSERT INTO users (name, email, phone, password_hash, role, status, is_email_verified)
-       VALUES ($1, $2, $3, $4, $5, 'active', true)
+      `INSERT INTO users (name, email, phone, password_hash, role, status, is_email_verified, is_phone_verified)
+       VALUES ($1, $2, $3, $4, $5, 'active', true, $6)
        RETURNING id, name, email, phone, role, status, is_phone_verified, is_email_verified, created_at`,
-      [name, email || null, phone, passwordHash, role]
+      [name, email || null, phone, passwordHash, role, isPhoneVerified]
     );
     return result.rows[0];
   }
