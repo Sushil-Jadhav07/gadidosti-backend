@@ -215,7 +215,10 @@ const buildBiltyPdfBuffer = (booking) => new Promise((resolve, reject) => {
     const ry = y + i * dftRowH;
     if (i > 0) hline(dftX, dftX + dftW, ry);
     doc.fillColor(BLACK).fontSize(7.5).font('Helvetica-Bold').text(label, dftX + 5, ry + 5, { width: 32 });
-    doc.fillColor(MUTED).fontSize(7).font('Helvetica').text(value, dftX + 40, ry + 5, { width: dftW - 46, ellipsis: true });
+    // `ellipsis: true` only truncates once a `height` is given — without it PDFKit just wraps
+    // onto a second line instead, which overflows this fixed-height row into the one below it
+    // (exactly what long addresses were doing here before this `height` was added).
+    doc.fillColor(MUTED).fontSize(7).font('Helvetica').text(value, dftX + 40, ry + 5, { width: dftW - 46, height: dftRowH - 7, ellipsis: true });
   });
 
   y += bandH;
