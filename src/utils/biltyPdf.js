@@ -9,21 +9,22 @@ const money = (value) => (value == null ? '' : Number(value).toLocaleString('en-
 const formatDate = (value) => (value ? new Date(value).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-');
 
 // This is a faithful digital reproduction of SSK India Logistics' actual pre-printed Lorry
-// Receipt (LR/Bilty) stationery — same sections, same fields, same boilerplate wording — with
-// the variable fields auto-filled from the booking instead of handwritten. The company
-// letterhead details below (address, phones, PAN, GST, the fixed boilerplate paragraphs) are
-// hardcoded on purpose, not pulled from admin_settings — this is one specific company's fixed
-// physical stationery, not a generic admin-configurable template. GSTIN confirmed directly off
-// the real printed form: 07CMFPS3661A1Z6 (PAN CMFPS3661A) — note this differs from whatever is
-// currently saved as company_gstin in Settings (used for the separate Tax Invoice's GST split),
-// worth reconciling separately since this PDF doesn't depend on that setting at all.
+// Receipt (LR/Bilty) stationery — same sections, same fields, same boilerplate wording, same
+// LANDSCAPE orientation as the physical form — with the variable fields auto-filled from the
+// booking instead of handwritten. The company letterhead details below (address, phones, PAN,
+// GST, the fixed boilerplate paragraphs) are hardcoded on purpose, not pulled from
+// admin_settings — this is one specific company's fixed physical stationery, not a generic
+// admin-configurable template. GSTIN confirmed directly off the real printed form:
+// 07CMFPS3661A1Z6 (PAN CMFPS3661A) — note this differs from whatever is currently saved as
+// company_gstin in Settings (used for the separate Tax Invoice's GST split), worth reconciling
+// separately since this PDF doesn't depend on that setting at all.
 //
 // A Bilty carries no GST/CGST/SGST breakdown — it isn't a tax document — but it does state WHO
 // is liable for the freight's GST under Reverse Charge ("GST Payable By"), which this fills in
 // from the same billed_to logic already used elsewhere (see booking.controller.js's
 // createBooking and invoicePdf.js).
 const buildBiltyPdfBuffer = (booking) => new Promise((resolve, reject) => {
-  const doc = new PDFDocument({ margin: 0, size: 'A4' });
+  const doc = new PDFDocument({ margin: 0, size: 'A4', layout: 'landscape' });
   const chunks = [];
   doc.on('data', (chunk) => chunks.push(chunk));
   doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -46,52 +47,54 @@ const buildBiltyPdfBuffer = (booking) => new Promise((resolve, reject) => {
 
   // ─── Top micro-header ───────────────────────────────────────────────────────
   doc.fillColor(RED).fontSize(7).font('Helvetica-Bold').text('Jai Dada Umdiram Ki', contentX, y, { width: contentW, align: 'center' });
-  y += 10;
+  y += 9;
   doc.fillColor(BLACK).fontSize(8).font('Helvetica-Bold').text('SUBJECT TO DELHI JURISDICTION', contentX, y, { width: contentW, align: 'center' });
-  y += 14;
+  y += 12;
 
   // ─── Main header: logo / company / contact ───────────────────────────────────
   const headerTop = y;
-  doc.fillColor(RED).fontSize(20).font('Helvetica-Bold').text('SSK', contentX + 4, y + 2);
-  doc.fillColor('#1E7A34').fontSize(7).font('Helvetica-Bold').text('INDIA LOGISTICS', contentX, y + 24, { width: 80, align: 'center' });
+  doc.fillColor(RED).fontSize(18).font('Helvetica-Bold').text('SSK', contentX + 4, y + 1);
+  doc.fillColor('#1E7A34').fontSize(6.5).font('Helvetica-Bold').text('INDIA LOGISTICS', contentX, y + 21, { width: 80, align: 'center' });
 
-  doc.fillColor(RED).fontSize(22).font('Helvetica-Bold').text('SSK INDIA LOGISTICS', contentX, y, { width: contentW, align: 'center' });
-  doc.fillColor(BLACK).fontSize(9).font('Helvetica-Bold').text('(Fleet Owner & Contractor)', contentX, y + 24, { width: contentW, align: 'center' });
+  doc.fillColor(RED).fontSize(20).font('Helvetica-Bold').text('SSK INDIA LOGISTICS', contentX, y, { width: contentW, align: 'center' });
+  doc.fillColor(BLACK).fontSize(9).font('Helvetica-Bold').text('(Fleet Owner & Contractor)', contentX, y + 22, { width: contentW, align: 'center' });
   doc.fillColor(BLACK).fontSize(7.5).font('Helvetica').text(
     'Shop No. 362-A/2, Sataya Puram Colony, Jharoda Border, Near Ashram, New Delhi-110072',
-    contentX, y + 38, { width: contentW, align: 'center' }
+    contentX, y + 36, { width: contentW, align: 'center' }
   );
   doc.fillColor(BLACK).fontSize(7.5).font('Helvetica').text(
     'Mail: sskindialogistics@gmail.com, Web: www.indialogistics.com',
-    contentX, y + 49, { width: contentW, align: 'center' }
+    contentX, y + 47, { width: contentW, align: 'center' }
   );
 
   const phones = ['7834819005', '8929920007', '7600026312', '9619905027'];
   doc.fillColor(BLACK).fontSize(7.5).font('Helvetica-Bold');
   phones.forEach((p, i) => doc.text(p, pageWidth - marginX - 110, headerTop + i * 9.5, { width: 100, align: 'right' }));
 
-  y = headerTop + 68;
+  y = headerTop + 60;
   hline(contentX, pageWidth - marginX, y);
-  y += 2;
+  y += 3;
 
-  // ─── Info row: 4 columns ──────────────────────────────────────────────────────
+  // ─── Info row: 4 columns, each internally subdivided to match the real form's stacked
+  // boxes (column 1: Available At / Consignor GST No.; column 3: At Owners Risk / Insurance;
+  // column 4: Demurrage / Address Of Delivery / Vehicle No. / C NOTE No. — four separate
+  // boxes, not one merged block). Column 2 (Caution/Notice) stays a single undivided box. ──
   const infoTop = y;
-  const infoH = 168;
+  const infoH = 160;
   const col1W = contentW * 0.14;
-  const col2W = contentW * 0.33;
-  const col3W = contentW * 0.26;
+  const col2W = contentW * 0.32;
+  const col3W = contentW * 0.17;
   const col4W = contentW - col1W - col2W - col3W;
   const col1X = contentX;
   const col2X = col1X + col1W;
   const col3X = col2X + col2W;
   const col4X = col3X + col3W;
 
-  box(col1X, infoTop, col1W, infoH);
-  box(col2X, infoTop, col2W, infoH);
-  box(col3X, infoTop, col3W, infoH);
-  box(col4X, infoTop, col4W, infoH);
-
-  // Column 1 — Available At
+  // Column 1 — Available At (top) / Consignor GST No. (bottom)
+  const availableAtH = infoH * 0.72;
+  const consignorGstH = infoH - availableAtH;
+  box(col1X, infoTop, col1W, availableAtH);
+  box(col1X, infoTop + availableAtH, col1W, consignorGstH);
   let cy = infoTop + 6;
   doc.fillColor(RED).fontSize(7.5).font('Helvetica-Bold').text('Available At :', col1X + 4, cy, { width: col1W - 8 });
   cy += 14;
@@ -99,31 +102,39 @@ const buildBiltyPdfBuffer = (booking) => new Promise((resolve, reject) => {
     doc.fillColor(BLACK).fontSize(8).font('Helvetica-Bold').text(city, col1X + 4, cy, { width: col1W - 8 });
     cy += 13;
   });
+  doc.fillColor(BLACK).fontSize(6.5).font('Helvetica-Bold').text('Consignor GST No. :', col1X + 4, infoTop + availableAtH + 6, { width: col1W - 8 });
+  doc.fillColor(MUTED).fontSize(6.5).font('Helvetica').text(booking.client_gstin || '', col1X + 4, infoTop + availableAtH + 18, { width: col1W - 8 });
 
-  // Column 2 — Caution / Notice
+  // Column 2 — Caution / Notice (single undivided box)
+  box(col2X, infoTop, col2W, infoH);
   cy = infoTop + 6;
   doc.fillColor(RED).fontSize(7).font('Helvetica-Bold').text('CAUTION', col2X, cy, { width: col2W, align: 'center' });
   cy += 10;
   doc.fillColor(BLACK).fontSize(6.3).font('Helvetica').text(
     'This Consignment Will Not Be Detained Diverted,Re-Routed Or Re-Booked Without Consignee Bank Writen Permission Will be Delivered At the Destination.',
-    col2X + 5, cy, { width: col2W - 10, align: 'center' }
+    col2X + 6, cy, { width: col2W - 12, align: 'center' }
   );
-  cy = doc.y + 6;
+  cy = doc.y + 7;
   doc.fillColor(RED).fontSize(7).font('Helvetica-Bold').text('NOTICE', col2X, cy, { width: col2W, align: 'center' });
   cy += 10;
   doc.fillColor(BLACK).fontSize(6.3).font('Helvetica').text(
     'This consignment covered in this set of special lorry receipt shall be stored at the destination under the control of the transport operator & shall be delivered to or to the order of the Consignee Bank whose name is mentioned in the lorry receipt. This consignment shall under no circumstances be delivered to anyone without the written authority form the consignee Bank or its order on a separated Letter or Authority.',
-    col2X + 5, cy, { width: col2W - 10, align: 'center' }
+    col2X + 6, cy, { width: col2W - 12, align: 'center' }
   );
 
-  // Column 3 — PAN / GST / Insurance
+  // Column 3 — At Owners Risk / PAN / GST (top), Insurance (bottom)
+  const ownerRiskH = infoH * 0.42;
+  const insuranceH = infoH - ownerRiskH;
+  box(col3X, infoTop, col3W, ownerRiskH);
+  box(col3X, infoTop + ownerRiskH, col3W, insuranceH);
   cy = infoTop + 6;
   doc.fillColor(BLACK).fontSize(7).font('Helvetica-Bold').text('AT OWNERS RISK', col3X, cy, { width: col3W, align: 'center' });
-  cy += 12;
+  cy += 13;
   doc.fillColor(BLACK).fontSize(7.5).font('Helvetica-Bold').text('Pan No. : CMFPS3661A', col3X, cy, { width: col3W, align: 'center' });
-  cy += 11;
+  cy += 12;
   doc.fillColor(RED).fontSize(7.5).font('Helvetica-Bold').text('GST No. : 07CMFPS3661A1Z6', col3X, cy, { width: col3W, align: 'center' });
-  cy += 16;
+
+  cy = infoTop + ownerRiskH + 6;
   doc.fillColor(BLACK).fontSize(7).font('Helvetica-Bold').text('INSURANCE', col3X, cy, { width: col3W, align: 'center' });
   cy += 10;
   doc.fillColor(BLACK).fontSize(6.3).font('Helvetica').text(
@@ -135,54 +146,49 @@ const buildBiltyPdfBuffer = (booking) => new Promise((resolve, reject) => {
   cy += 10;
   doc.fillColor(BLACK).fontSize(6.5).font('Helvetica').text('Amount __________ Risk __________', col3X + 5, cy, { width: col3W - 10 });
 
-  // Column 4 — Demurrage / Address / Vehicle / C Note
-  cy = infoTop + 6;
+  // Column 4 — four stacked boxes: Demurrage / Address Of Delivery / Vehicle No. / C NOTE No.
+  const demurrageH = infoH * 0.30;
+  const addressH = infoH * 0.22;
+  const vehicleH = infoH * 0.22;
+  const cnoteH = infoH - demurrageH - addressH - vehicleH;
+  const demurrageY = infoTop;
+  const addressY = demurrageY + demurrageH;
+  const vehicleY = addressY + addressH;
+  const cnoteY = vehicleY + vehicleH;
+  box(col4X, demurrageY, col4W, demurrageH);
+  box(col4X, addressY, col4W, addressH);
+  box(col4X, vehicleY, col4W, vehicleH);
+  box(col4X, cnoteY, col4W, cnoteH);
+
+  cy = demurrageY + 6;
   doc.fillColor(BLACK).fontSize(7).font('Helvetica-Bold').text('SCHEDULE OF DEMURRAGE CHARGES', col4X, cy, { width: col4W, align: 'center' });
   cy += 11;
   doc.fillColor(BLACK).fontSize(6.3).font('Helvetica').text(
     'Demmurage Chargeable After 5 days Arrival Of Goods Rs. 7/per Qtl.Per Day On Weight Charged',
     col4X + 5, cy, { width: col4W - 10, align: 'center' }
   );
-  cy = doc.y + 10;
-  hline(col4X, col4X + col4W, cy);
-  cy += 6;
-  doc.fillColor(BLACK).fontSize(7.5).font('Helvetica-Bold').text('Address Of Delivery :', col4X + 4, cy, { width: col4W - 8 });
-  doc.fillColor(MUTED).fontSize(7).font('Helvetica').text(booking.drop_location || '', col4X + 4, cy + 10, { width: col4W - 8 });
-  cy += 28;
-  hline(col4X, col4X + col4W, cy);
-  cy += 5;
-  doc.fillColor(BLACK).fontSize(8).font('Helvetica-Bold').text('Vehicle No. :', col4X + 4, cy, { width: col4W - 8, continued: true })
+
+  doc.fillColor(BLACK).fontSize(7.5).font('Helvetica-Bold').text('Address Of Delivery :', col4X + 4, addressY + 5, { width: col4W - 8 });
+  doc.fillColor(MUTED).fontSize(7).font('Helvetica').text(booking.drop_location || '', col4X + 4, addressY + 16, { width: col4W - 8, height: addressH - 20, ellipsis: true });
+
+  doc.fillColor(BLACK).fontSize(8).font('Helvetica-Bold').text('Vehicle No. :', col4X + 4, vehicleY + (vehicleH - 10) / 2, { width: col4W - 8, continued: true })
     .font('Helvetica').fillColor(MUTED).text(` ${booking.truck_reg || ''}`);
-  cy += 16;
-  hline(col4X, col4X + col4W, cy);
-  cy += 5;
-  doc.fillColor(BLACK).fontSize(8).font('Helvetica-Bold').text('C NOTE No. :', col4X + 4, cy, { width: col4W - 8, continued: true })
+
+  doc.fillColor(BLACK).fontSize(9).font('Helvetica-Bold').text('C NOTE No. :', col4X + 4, cnoteY + (cnoteH - 11) / 2, { width: col4W - 8, continued: true })
     .font('Helvetica-Bold').fillColor(RED).text(` ${booking.bilty_number || ''}`);
 
   y = infoTop + infoH;
 
-  // ─── Date / From / To strip (right side, under column 4) ─────────────────────
-  const dftH = 54;
-  const dftX = col4X;
-  const dftW = col4W;
-  box(dftX, y, dftW, dftH);
-  const dftRowH = dftH / 3;
-  [
-    ['DATE :', formatDate(booking.created_at)],
-    ['FROM :', booking.pickup_location || ''],
-    ['TO :', booking.drop_location || ''],
-  ].forEach(([label, value], i) => {
-    const ry = y + i * dftRowH;
-    if (i > 0) hline(dftX, dftX + dftW, ry);
-    doc.fillColor(BLACK).fontSize(7.5).font('Helvetica-Bold').text(label, dftX + 4, ry + 5, { width: 32 });
-    doc.fillColor(MUTED).fontSize(7).font('Helvetica').text(value, dftX + 38, ry + 5, { width: dftW - 42, ellipsis: true });
-  });
-  // Fill the left side at the same height with an empty bordered strip so the row reads as one
-  // continuous band under the 4-column info row (matches the real form's layout).
-  box(contentX, y, col4X - contentX, dftH);
-  y += dftH;
+  // ─── Consignor / Consignee (left, 2 rows) beside Date / From / To (right, under column 4,
+  // 3 rows) — same horizontal band, side by side, matching the real form; NOT stacked below
+  // each other like an earlier version of this PDF had it. ──────────────────────────────────
+  const bandH = 48;
+  const partyX = contentX;
+  const partyW = col4X - contentX;
+  const partyRowH = bandH / 2;
+  box(partyX, y, partyW, bandH);
+  hline(partyX, partyX + partyW, y + partyRowH);
 
-  // ─── Consignor / Consignee ────────────────────────────────────────────────────
   const hasNamedReceiver = booking.billed_to === 'receiver' && booking.billing_party_name;
   const consignorName = booking.client_name || '';
   const consigneeName = hasNamedReceiver ? booking.billing_party_name : (booking.client_name || '');
@@ -191,24 +197,36 @@ const buildBiltyPdfBuffer = (booking) => new Promise((resolve, reject) => {
   // Width passed to the FIRST segment of a `continued: true` chain sets the wrap width for
   // every segment that follows it, not just that one label — this must be the full remaining
   // line width, not a narrow label-sized box, or long consignor/consignee details wrap early
-  // and overflow this row's fixed height into the table below.
-  const partyRowH = 18;
-  box(contentX, y, contentW, partyRowH);
-  doc.fillColor(BLACK).fontSize(8).font('Helvetica-Bold').text('Consignor :', contentX + 4, y + 5, { width: contentW - 8, continued: true })
+  // and overflow this row's fixed height.
+  doc.fillColor(BLACK).fontSize(8).font('Helvetica-Bold').text('Consignor :', partyX + 5, y + 6, { width: partyW - 10, continued: true })
     .font('Helvetica').fillColor(MUTED).text(` ${consignorName}${booking.client_phone ? ` (${booking.client_phone})` : ''}${booking.client_gstin ? ` — GSTIN: ${booking.client_gstin}` : ''}`);
-  y += partyRowH;
-  box(contentX, y, contentW, partyRowH);
-  doc.fillColor(BLACK).fontSize(8).font('Helvetica-Bold').text('Consignee :', contentX + 4, y + 5, { width: contentW - 8, continued: true })
+  doc.fillColor(BLACK).fontSize(8).font('Helvetica-Bold').text('Consignee :', partyX + 5, y + partyRowH + 6, { width: partyW - 10, continued: true })
     .font('Helvetica').fillColor(MUTED).text(` ${consigneeName}${consigneeGstin ? ` — GSTIN: ${consigneeGstin}` : ''}`);
-  y += partyRowH;
+
+  const dftX = col4X;
+  const dftW = col4W;
+  const dftRowH = bandH / 3;
+  box(dftX, y, dftW, bandH);
+  [
+    ['DATE :', formatDate(booking.created_at)],
+    ['FROM :', booking.pickup_location || ''],
+    ['TO :', booking.drop_location || ''],
+  ].forEach(([label, value], i) => {
+    const ry = y + i * dftRowH;
+    if (i > 0) hline(dftX, dftX + dftW, ry);
+    doc.fillColor(BLACK).fontSize(7.5).font('Helvetica-Bold').text(label, dftX + 5, ry + 5, { width: 32 });
+    doc.fillColor(MUTED).fontSize(7).font('Helvetica').text(value, dftX + 40, ry + 5, { width: dftW - 46, ellipsis: true });
+  });
+
+  y += bandH;
 
   // ─── Main table ────────────────────────────────────────────────────────────────
   const tableTop = y;
-  const pkgW = contentW * 0.08;
-  const descW = contentW * 0.33;
-  const wtW = contentW * 0.12;
+  const pkgW = contentW * 0.06;
+  const descW = contentW * 0.30;
+  const wtW = contentW * 0.11;
   const rateW = contentW * 0.14;
-  const amtW = contentW * 0.14;
+  const amtW = contentW * 0.13;
   const remW = contentW - pkgW - descW - wtW - rateW - amtW;
   const pkgX = contentX;
   const descX = pkgX + pkgW;
@@ -217,7 +235,7 @@ const buildBiltyPdfBuffer = (booking) => new Promise((resolve, reject) => {
   const amtX = rateX + rateW;
   const remX = amtX + amtW;
 
-  const headH = 14;
+  const headH = 16;
   box(pkgX, tableTop, pkgW, headH);
   box(descX, tableTop, descW, headH);
   box(wtX, tableTop, wtW, headH);
@@ -225,15 +243,15 @@ const buildBiltyPdfBuffer = (booking) => new Promise((resolve, reject) => {
   box(amtX, tableTop, amtW, headH);
   box(remX, tableTop, remW, headH);
   doc.fillColor(BLACK).fontSize(7).font('Helvetica-Bold');
-  doc.text('Packages', pkgX, tableTop + 4, { width: pkgW, align: 'center' });
-  doc.text('Description', descX, tableTop + 4, { width: descW, align: 'center' });
-  doc.text('Weight', wtX, tableTop + 4, { width: wtW, align: 'center' });
-  doc.text('Rate', rateX, tableTop + 4, { width: rateW, align: 'center' });
-  doc.text('Amount', amtX, tableTop + 4, { width: amtW, align: 'center' });
-  doc.text('Any Other Information / Remarks', remX, tableTop + 4, { width: remW, align: 'center' });
+  doc.text('Packages', pkgX, tableTop + 5, { width: pkgW, align: 'center' });
+  doc.text('Description', descX, tableTop + 5, { width: descW, align: 'center' });
+  doc.text('Weight', wtX, tableTop + 5, { width: wtW, align: 'center' });
+  doc.text('Rate', rateX, tableTop + 5, { width: rateW, align: 'center' });
+  doc.text('Amount', amtX, tableTop + 5, { width: amtW, align: 'center' });
+  doc.text('Any Other Information / Remarks', remX, tableTop + 5, { width: remW, align: 'center' });
 
   const bodyTop = tableTop + headH;
-  const bodyH = 150;
+  const bodyH = 145;
   box(pkgX, bodyTop, pkgW, bodyH);
   box(descX, bodyTop, descW, bodyH);
   box(wtX, bodyTop, wtW, bodyH);
@@ -250,6 +268,7 @@ const buildBiltyPdfBuffer = (booking) => new Promise((resolve, reject) => {
   dy += 30;
   hline(descX, descX + descW, dy);
   dy += 4;
+  const invoiceRowY = dy;
   doc.fillColor(BLACK).fontSize(6.5).font('Helvetica').text('Invoice No.: ________  Date : ________', descX + 4, dy, { width: descW - 8 });
   dy += 11;
   doc.fillColor(RED).fontSize(6.5).font('Helvetica-Bold').text(`GST NO. : ${booking.client_gstin || '________________'}`, descX + 4, dy, { width: descW - 8 });
@@ -259,7 +278,7 @@ const buildBiltyPdfBuffer = (booking) => new Promise((resolve, reject) => {
     descX + 4, dy, { width: descW - 8 }
   );
 
-  // Weight — actual/charged split
+  // Weight — actual/charged split, with "Mark" labeling the same row as Invoice No. below it
   const wtMid = wtX + wtW / 2;
   vline(wtMid, bodyTop, bodyTop + bodyH);
   doc.fillColor(BLACK).fontSize(6.5).font('Helvetica-Bold').text('Actual', wtX, bodyTop + 4, { width: wtW / 2, align: 'center' });
@@ -268,6 +287,7 @@ const buildBiltyPdfBuffer = (booking) => new Promise((resolve, reject) => {
   const weightLabel = booking.weight ? `${booking.weight}` : '';
   doc.fillColor(MUTED).fontSize(8).font('Helvetica').text(weightLabel, wtX, bodyTop + 20, { width: wtW / 2, align: 'center' });
   doc.fillColor(MUTED).fontSize(8).font('Helvetica').text(booking.weight_unit || '', wtMid, bodyTop + 20, { width: wtW / 2, align: 'center' });
+  doc.fillColor(BLACK).fontSize(7).font('Helvetica-Bold').text('Mark', wtX, invoiceRowY, { width: wtW, align: 'center' });
 
   // Rate — itemized charge-type rows (left blank — not tracked individually), Total = freight
   const rateLabels = ['Hamail', 'Sur.CH.', 'St.CH.', 'Collection CH.', 'D.Dty CH.', 'Other CH.', 'Risk CH.'];
@@ -294,7 +314,7 @@ const buildBiltyPdfBuffer = (booking) => new Promise((resolve, reject) => {
   y = bodyTop + bodyH;
 
   // ─── Footer row: jurisdiction / value / GST payable by / signatory ──────────
-  const footH = 70;
+  const footH = 62;
   const footCol1W = contentW * 0.42;
   const footCol2W = contentW * 0.26;
   const footCol3W = contentW - footCol1W - footCol2W;
