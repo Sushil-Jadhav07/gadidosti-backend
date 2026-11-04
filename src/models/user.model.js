@@ -166,7 +166,7 @@ class UserModel {
        WHERE id = $7
        RETURNING id, name, email, phone, role, status, is_phone_verified, is_email_verified,
                  profile_image, address, company_name, updated_at`,
-      [name, email, phone, profileImage, address, companyName, id]
+      [name, email, profileImage, address, companyName, phone, id]
     );
     return result.rows[0] || null;
   }
