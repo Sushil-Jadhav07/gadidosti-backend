@@ -12,6 +12,13 @@ const BASE_URL = process.env.CASHFREE_VERIFICATION_ENV === 'production'
   ? 'https://api.cashfree.com/verification'
   : 'https://sandbox.cashfree.com/verification';
 
+// Mandatory on Create DigiLocker URL requests per Cashfree's Nov 2026 compliance update — shown
+// on DigiLocker's own consent screen so the user knows who's asking and why. Both are capped at
+// 50 chars and restricted to `^[A-Za-z0-9_ ]{1,50}$` (letters/digits/spaces/underscores only, no
+// punctuation) — "SSK India Logistics" and "KYC Verification" both satisfy that as-is.
+const DIGILOCKER_PURPOSE = 'KYC Verification';
+const DIGILOCKER_COMPANY_NAME = 'SSK India Logistics';
+
 class CashfreeVerificationProvider extends VerificationProvider {
   constructor() {
     super();
@@ -146,6 +153,8 @@ class CashfreeVerificationProvider extends VerificationProvider {
       document_requested: documents,
       redirect_url: redirectUrl,
       user_flow: 'signup',
+      purpose: DIGILOCKER_PURPOSE,
+      company_name: DIGILOCKER_COMPANY_NAME,
     });
     if (!body.url) {
       throw new Error(body.message || 'Failed to create the DigiLocker link');
