@@ -234,6 +234,14 @@ class UserModel {
     if (status) {
       conditions.push(`status = $${idx++}`);
       params.push(status);
+    } else {
+      // 'inactive' is exclusively how deleteUser soft-deletes an account (status set to
+      // 'inactive', row never actually removed) — there's no admin action anywhere that sets a
+      // user to 'inactive' any other way. Without this, a "deleted" user kept reappearing in the
+      // default (no status filter) list on the next fetch — looking exactly like the delete
+      // hadn't done anything — since nothing ever excluded that status before. Still visible by
+      // explicitly filtering to status=inactive, so nothing is actually hidden/lost.
+      conditions.push(`status <> 'inactive'`);
     }
     if (kycStatus) {
       conditions.push(`kyc_status = $${idx++}`);
