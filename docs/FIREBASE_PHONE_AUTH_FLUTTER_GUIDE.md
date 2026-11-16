@@ -1,20 +1,27 @@
-# Phone + OTP Login (Firebase Phone Auth) — Flutter (`SSK_Cargo`) Guide
+# Phone + OTP (Firebase Phone Auth) — Flutter (`SSK_Cargo`) Guide
 
 For the Flutter app developer. Written without access to the current `SSK_Cargo` source (same
 situation as `FCM_PUSH_NOTIFICATIONS_FLUTTER_GUIDE.md`), so there are no file/line references here
 — only the backend contract and how the two web apps (`gadidosti-client`,
-`gadidosti-broker-driver`) already implement the same login method, as parity notes for what the
-Flutter app should replicate.
+`gadidosti-broker-driver`) already implement the same flows, as parity notes for what the Flutter
+app should replicate.
+
+This covers **two** separate things that both use the same Firebase Phone Auth mechanics:
+1. **Login** via phone + OTP — an optional second way in, alongside email+password/Google.
+2. **Registration-time phone verification** — now **mandatory** for every new client, broker, and
+   driver account (not optional, not skippable). A brand-new signup is rejected by the backend if
+   it doesn't include a verified phone's Firebase ID token.
 
 ## The idea in one paragraph
 
-Phone + OTP login now exists as a **second way in**, alongside whatever email+password /
-Google Sign-In the app already has — not a replacement for them. Firebase's own Phone Auth SDK
-sends and verifies the OTP **entirely on-device**, never touching this backend at all for that
-part. Once Firebase confirms the number, the app gets a Firebase ID token and sends *that* to a
-new backend endpoint, which checks it and returns a normal session — the exact same
-`access_token`/`refresh_token` shape every other login method already returns. Nothing about
-session storage, `GET /api/auth/me`, token refresh, or logout changes.
+Firebase's own Phone Auth SDK sends and verifies the OTP **entirely on-device**, never touching
+this backend at all for that part. Once Firebase confirms the number, the app gets a Firebase ID
+token. **For login**, that token is sent to a dedicated endpoint which checks it and returns a
+normal session — the exact same `access_token`/`refresh_token` shape every other login method
+already returns; nothing about session storage, `GET /api/auth/me`, token refresh, or logout
+changes. **For registration**, that same token is sent *inside* the existing register request
+(`id_token` field) — the backend verifies it matches the phone number being registered before
+creating the account at all.
 
 ## What's needed in Firebase Console first (someone with console access, not app code)
 
@@ -34,7 +41,7 @@ session storage, `GET /api/auth/me`, token refresh, or logout changes.
 None of this is something the Flutter code can detect or work around — if phone auth isn't
 behaving, check these three first.
 
-## The flow
+## The on-device OTP flow (shared by both login and registration)
 
 1. User enters their phone number (plain 10-digit, no country code shown in the UI — same
    convention as the rest of this app's phone fields).
@@ -74,7 +81,7 @@ final userCredential = await FirebaseAuth.instance.signInWithCredential(credenti
 final idToken = await userCredential.user!.getIdToken();
 ```
 
-## Backend endpoint — already live, no changes needed on this side
+## Login endpoint — already live, no changes needed on this side
 
 ```
 POST /api/auth/firebase-login
@@ -113,15 +120,54 @@ After a successful response, **check the `user.role`** matches what this part of
 (client app only accepts `role: "client"`, driver/broker screens only accept their own role) —
 same client-side check the web apps do; the backend itself is role-agnostic for this endpoint.
 
+## Registration — now mandatory, already live, no backend changes needed
+
+Every new account (client, broker, and driver — **not** admin/staff, which is created by an
+admin without OTP by design) must prove phone ownership via the same on-device flow above
+*before* the account is created. There is no separate "verify" endpoint for this — the resulting
+Firebase ID token is just one more field (`id_token`) on the existing register call(s):
+
+```
+POST /api/auth/register
+Body: { "name", "email", "phone", "password", "role", "id_token": "<Firebase ID token>" }
+
+POST /api/auth/register/driver   (self-registration: owner-operator + their own truck, one call)
+Body: { "name", "email", "phone", "password", "confirm_password",
+        "registration", "category", "capacity", ..., "id_token": "<Firebase ID token>" }
+```
+
+The backend decodes `id_token`, reads its `phone_number` claim, strips the `+91`, and requires it
+to **exactly match** the `phone` field in the same request — this stops someone from verifying
+their own number and then registering a different one. Error responses, all via the normal
+`{ "success": false, "message": "...", "data": { "code": "..." } }` shape:
+
+| HTTP | `data.code` | Meaning | When it happens |
+|---|---|---|---|
+| 422 | `PHONE_VERIFICATION_REQUIRED` | `id_token` missing entirely | App tried to submit without completing OTP first — a client-side bug, not a user-facing case if the UI gates submission correctly |
+| 401 | `PHONE_VERIFICATION_INVALID` | Token invalid/expired | User sat on the registration form too long after verifying (Firebase ID tokens expire); re-run the OTP flow and retry |
+| 422 | `PHONE_VERIFICATION_MISMATCH` | Verified phone ≠ submitted phone | Phone field was edited after verifying — same fix as the web apps: re-verify whenever the number changes |
+
+**Required UI behavior in `SSK_Cargo`'s registration screen(s)** — same as the two web apps:
+- The phone field must be verified (OTP flow above completed, ID token obtained) before the
+  "Create Account"/submit button is enabled at all.
+- If the user edits the phone number *after* verifying it, immediately drop back to the
+  unverified state (clear the stored ID token, require Send OTP again) — the token only proves
+  ownership of the number that was verified, not whatever's currently typed.
+- On submit, include the stored `id_token` alongside the rest of the form fields in the register
+  call above.
+
 ## What to build in `SSK_Cargo`
 
-1. A phone-number entry screen + 6-digit code entry screen, wired to `verifyPhoneNumber` as
-   shown above — likely as a tab/toggle alongside the existing password login, not a full
-   replacement.
+1. A phone-number entry UI + 6-digit code entry step, wired to `verifyPhoneNumber` as shown
+   above — reused in **both** places it's needed:
+   - Login: as a tab/toggle alongside the existing password login, not a full replacement.
+   - Registration: as a required step before the account form can submit (see above) — every
+     new client/broker/driver signup needs this, no exceptions.
 2. Handle Android's `verificationCompleted` auto-path, not just manual code entry.
-3. POST the resulting ID token to `POST /api/auth/firebase-login`, store the session the same
-   way every other login method already does.
+3. Login: POST the resulting ID token to `POST /api/auth/firebase-login`, store the session the
+   same way every other login method already does.
+   Registration: include the resulting ID token as `id_token` in the existing
+   `POST /api/auth/register` / `POST /api/auth/register/driver` call.
 4. Map Firebase's error codes to readable messages (`invalid-phone-number`,
-   `too-many-requests`, `invalid-verification-code`, `code-expired` are the common ones).
-5. Nothing to build for registration — this endpoint is login-only; a brand-new phone number
-   still needs to go through whatever registration flow the app already has.
+   `too-many-requests`, `invalid-verification-code`, `code-expired` are the common ones), and
+   also handle the three `PHONE_VERIFICATION_*` backend error codes above for registration.
