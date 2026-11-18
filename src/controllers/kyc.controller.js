@@ -13,15 +13,22 @@ const { getVerificationProvider } = require('../providers/verification');
 const storageProvider = getStorageProvider();
 const verificationProvider = getVerificationProvider();
 
-// A submission auto-clears straight to 'verified' the moment every check Cashfree can run for
-// this role has already come back 'verified' (via the /kyc/verify/* endpoints, called from the
+// A submission auto-clears straight to 'verified' the moment the checks Cashfree can run for
+// this role have already come back 'verified' (via the /kyc/verify/* endpoints, called from the
 // onboarding wizard before this final submit). Anything short of that — a check that failed,
 // was skipped, or errored — falls back to the old 'submitted' queue, where the admin/broker
 // manual-review screens (still present, just no longer the default path) pick it up.
-const REQUIRED_CHECKS_BY_ROLE = {
-  driver: ['pan', 'aadhaar', 'drivingLicense', 'gst'],
-  broker: ['pan', 'aadhaar', 'gst'],
-  client: ['pan', 'aadhaar', 'gst'],
+//
+// driver: still needs all three — Aadhaar + PAN + Driving License, no GST concept for an
+// individual driver (an earlier version of this required 'gst' here too, but the driver app has
+// no GST field at all, so that was an unreachable requirement that silently forced every driver
+// into manual review regardless of how well everything else checked out).
+// broker/client: either identity path is enough — (Aadhaar + PAN) verified together, OR GST
+// alone — not all three. Presented as two choices in both frontends rather than one long list.
+const isKycSatisfied = (role, results) => {
+  const v = (key) => results?.[key]?.status === 'verified';
+  if (role === 'driver') return v('aadhaar') && v('pan') && v('drivingLicense');
+  return (v('aadhaar') && v('pan')) || v('gst');
 };
 
 // A document verified through DigiLocker never has its number typed by the user, so the submitted
@@ -64,9 +71,8 @@ const submitKyc = async (req, res, next) => {
 
     let submission = await KycModel.upsertSubmission(req.user.id, documents);
 
-    const requiredChecks = REQUIRED_CHECKS_BY_ROLE[req.user.role] || [];
     const results = submission.verification_results || {};
-    const autoVerified = requiredChecks.length > 0 && requiredChecks.every((key) => results[key]?.status === 'verified');
+    const autoVerified = isKycSatisfied(req.user.role, results);
 
     let kycStatus = 'submitted';
     if (autoVerified) {
@@ -105,18 +111,17 @@ const submitKyc = async (req, res, next) => {
 
 // ─── Client-only auto-finalize ───────────────────────────────────────────────────
 // Drivers/brokers type document numbers + upload photos and explicitly hit Submit, which is when
-// auto-verify gets evaluated (see submitKyc above). A client has none of that — just the three
+// auto-verify gets evaluated (see submitKyc above). A client has none of that — just the
 // automated checks themselves (pan/aadhaar/gst, no manual review ever needed since there's
 // nothing for a human reviewer to look at) — so there's no natural "Submit" moment. Each client
-// verify endpoint below calls this right after recording its own result instead: once every
-// check in REQUIRED_CHECKS_BY_ROLE.client is verified, it finalizes the submission the same way
-// submitKyc would, with no extra click required. No-op for every other role.
+// verify endpoint below calls this right after recording its own result instead: once either
+// path in isKycSatisfied is verified, it finalizes the submission the same way submitKyc would,
+// with no extra click required. No-op for every other role.
 const maybeAutoFinalizeClientKyc = async (req) => {
   if (req.user.role !== 'client') return;
-  const required = REQUIRED_CHECKS_BY_ROLE.client;
   const submission = await KycModel.findByUserId(req.user.id);
   const results = submission?.verification_results || {};
-  if (!required.every((key) => results[key]?.status === 'verified')) return;
+  if (!isKycSatisfied('client', results)) return;
 
   await KycModel.upsertSubmission(req.user.id, submission?.documents || {});
   await KycModel.autoVerify(req.user.id);
@@ -128,7 +133,7 @@ const maybeAutoFinalizeClientKyc = async (req) => {
   await NotificationModel.create({
     userId: req.user.id,
     title: 'Verification Complete',
-    message: 'Your PAN, Aadhaar and GST were verified automatically. You now have full access to the platform.',
+    message: 'Your verification is complete. You now have full access to the platform.',
     type: 'kyc',
   });
   logger.info(`KYC auto-finalized for client ${req.user.id}`);
@@ -329,7 +334,7 @@ const getAllKyc = async (req, res, next) => {
     const { kyc_status, role, search, page = 1, limit = 10 } = req.query;
 
     const result = await KycModel.findAll({
-      kycStatus: kyc_status, // model defaults to 'submitted' (the review queue) when omitted
+      kycStatus: kyc_status, // omitted = excludes 'pending' (the review queue); 'all' = every status
       role,
       search,
       page: parseInt(page),

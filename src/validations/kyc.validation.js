@@ -29,11 +29,26 @@ const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/i;
 const GST_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/i;
 const AADHAAR_REGEX = /^\d{4}-?\d{4}-?\d{4}$/;
 
+// Either (PAN + Aadhaar) together, or GST alone — not all three — mirrors isKycSatisfied in
+// kyc.controller.js at the submit-payload level, so a broker who picked the GST path isn't
+// forced to also type Aadhaar/PAN numbers they never verified. Each side counts as satisfied if
+// it was typed here OR already verified (same "DigiLocker never typed it" allowance
+// requiredUnlessVerified used to provide per-field).
+const requireIdentityOrGst = body('documents').custom(async (documents, { req }) => {
+  const hasValue = (v) => typeof v === 'string' && v.trim();
+  const submission = await KycModel.findByUserId(req.user.id);
+  const results = submission?.verification_results || {};
+  const panOk = hasValue(documents?.pan_number) || results.pan?.status === 'verified';
+  const aadhaarOk = hasValue(documents?.aadhaar_number) || results.aadhaar?.status === 'verified';
+  const gstOk = hasValue(documents?.gst_number) || results.gst?.status === 'verified';
+  if ((panOk && aadhaarOk) || gstOk) return true;
+  throw new Error('Provide either PAN + Aadhaar, or GST');
+});
+
 const submitBrokerKycValidation = [
-  requiredUnlessVerified('documents.pan_number', 'PAN number', 'pan'),
+  requireIdentityOrGst,
   body('documents.pan_number').optional({ nullable: true, checkFalsy: true }).trim()
     .matches(PAN_REGEX).withMessage('PAN number must be in the format ABCDE1234F'),
-  requiredUnlessVerified('documents.aadhaar_number', 'Aadhaar number', 'aadhaar'),
   body('documents.aadhaar_number').optional({ nullable: true, checkFalsy: true }).trim()
     .matches(AADHAAR_REGEX).withMessage('Aadhaar number must be 12 digits'),
   body('documents.gst_number').optional({ nullable: true, checkFalsy: true }).trim()

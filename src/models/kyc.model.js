@@ -59,7 +59,15 @@ class KycModel {
     const params = [];
     let idx = 1;
 
-    if (kycStatus) {
+    // 'all' is an explicit sentinel (admin's Client tab) for "every status, no filter at all" —
+    // distinct from omitting the param, which defaults to excluding 'pending' (the review-queue
+    // behavior broker/driver's tabs rely on). A client's kyc_status is only ever 'pending' or
+    // 'verified' under the auto-finalize design (it never passes through 'submitted' the way
+    // broker/driver do), so the default exclude-pending behavior would hide every
+    // not-yet-verified client — useless for the admin visibility this tab is actually for.
+    if (kycStatus === 'all') {
+      // no condition — every status included
+    } else if (kycStatus) {
       conditions.push(`u.kyc_status = $${idx++}`);
       params.push(kycStatus);
     } else {
