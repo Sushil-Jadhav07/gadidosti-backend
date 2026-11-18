@@ -203,12 +203,18 @@ class UserModel {
     return result.rows[0] || null;
   }
 
-  // Soft delete (admin)
+  // Hard delete (admin) — actually removes the row, not just a status flip, so the same
+  // email/phone is immediately free to register again (findByEmail/findByPhone simply won't find
+  // a row that no longer exists). This cascades per the FK delete rules on every table that
+  // references users.id — bookings.client_id, trucks.broker_id, driver_profiles/broker_profiles,
+  // kyc_submissions, kyc_files, chat_threads/chat_messages, wallets, etc. are all ON DELETE
+  // CASCADE — so deleting a user with real history (bookings, a fleet, chats) deletes that
+  // history too, permanently. deleteUser (user.controller.js) and deleteAccountFromRequest
+  // (legalPage.controller.js) — the only two callers — are both an admin's deliberate final
+  // confirmation to remove an account, not a casual action, which is what makes this acceptable
+  // here despite the blast radius.
   static async delete(id) {
-    await pool.query(
-      `UPDATE users SET status = 'inactive', updated_at = NOW() WHERE id = $1`,
-      [id]
-    );
+    await pool.query(`DELETE FROM users WHERE id = $1`, [id]);
   }
 
   // KYC-verified, active brokers — used to broadcast a new booking's job request to
