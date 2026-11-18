@@ -1710,6 +1710,18 @@ const runMigrations = async (client) => {
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS bilty_number TEXT UNIQUE;
     `);
 
+    // ── trips.pod_verified_by: match its sibling columns' ON DELETE behavior ──
+    // driver_id/broker_id on this same table already SET NULL when that user is deleted;
+    // pod_verified_by was defined with no ON DELETE clause at all (defaults to NO ACTION), which
+    // blocked admin's Delete User entirely for any account that had ever verified a trip's proof
+    // of delivery — the whole DELETE statement failed outright rather than just losing this one
+    // audit detail. Dropping/re-adding the FK is the only way to change its delete rule.
+    await client.query(`
+      ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_pod_verified_by_fkey;
+      ALTER TABLE trips ADD CONSTRAINT trips_pod_verified_by_fkey
+        FOREIGN KEY (pod_verified_by) REFERENCES users(id) ON DELETE SET NULL;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
