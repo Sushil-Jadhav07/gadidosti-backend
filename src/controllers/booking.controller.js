@@ -1566,9 +1566,12 @@ const requestTruckForBooking = async (req, res, next) => {
 // (job.controller.js's assignDriver — scoped to that broker's own fleet, via a job_request) and
 // the client's (requestTruckForBooking above — scoped to one specific truck_id the client
 // picked from a nearby-only list), admin can pick ANY driver anywhere in the system, no
-// fleet-ownership check and no distance restriction at all — same driver_requests negotiation
-// mechanism as both of those (the driver still gets to accept/decline, same as any other
-// assignment), just with neither of those two restrictions.
+// fleet-ownership check and no distance restriction at all. Also no negotiation, by design
+// (confirmed): admin_assigned_by marks this row the same "no counter-offers, driver's own
+// accept finalizes immediately" way job_request_id already does for the broker-assign origin
+// (see driverRequest.controller.js's isDirectAssignment) — the price is whatever the booking
+// already asks, admin isn't re-opening that once a driver's picked. The driver still gets to
+// accept or decline, just not counter.
 const adminAssignDriver = async (req, res, next) => {
   try {
     const { driver_id } = req.body;
@@ -1591,12 +1594,13 @@ const adminAssignDriver = async (req, res, next) => {
       driverId: driver_id,
       brokerId: truck.broker_id,
       amount: booking.amount,
+      adminAssignedBy: req.user.id,
     });
 
     await NotificationModel.create({
       userId: driver_id,
       title: 'New Booking Request',
-      message: `You've been assigned a booking: ${booking.pickup_location || 'pickup'} -> ${booking.drop_location || 'drop'} at ₹${booking.amount ?? 'TBD'}. Respond within a few minutes.`,
+      message: `You've been directly assigned a booking: ${booking.pickup_location || 'pickup'} -> ${booking.drop_location || 'drop'} at ₹${booking.amount ?? 'TBD'}. This price is fixed — accept or decline within a few minutes.`,
       type: 'booking',
       meta: { booking_id: booking.id, driver_request_id: driverRequest.id },
     });

@@ -41,14 +41,18 @@ class DriverRequestModel {
   // Seeds offer_history with the client's starting ask (the booking's estimated amount) so
   // the first entry is never blank — same convention as JobRequestModel.create. jobRequestId
   // is only set for the broker-assign origin (broker picked this driver for an already-
-  // negotiated job_requests booking) — null for the direct client-pick origin.
-  static async create({ bookingId, truckId, driverId, brokerId, amount, jobRequestId }) {
+  // negotiated job_requests booking) — null for the direct client-pick origin. adminAssignedBy
+  // is the admin-direct-assign origin's equivalent (booking.controller.js's adminAssignDriver) —
+  // same "no negotiation" treatment as jobRequestId everywhere that checks for it (see
+  // driverRequest.controller.js's isDirectAssignment), just without an actual job_requests row
+  // (there's no broker in this origin to attribute one to).
+  static async create({ bookingId, truckId, driverId, brokerId, amount, jobRequestId, adminAssignedBy }) {
     const initialHistory = JSON.stringify([{ by: 'client', amount: amount || null, note: null, at: new Date().toISOString() }]);
     const result = await pool.query(
-      `INSERT INTO driver_requests (booking_id, truck_id, driver_id, broker_id, amount, offer_history, job_request_id)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+      `INSERT INTO driver_requests (booking_id, truck_id, driver_id, broker_id, amount, offer_history, job_request_id, admin_assigned_by)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
        RETURNING *`,
-      [bookingId, truckId, driverId, brokerId, amount || null, initialHistory, jobRequestId || null]
+      [bookingId, truckId, driverId, brokerId, amount || null, initialHistory, jobRequestId || null, adminAssignedBy || null]
     );
     return result.rows[0];
   }
@@ -243,12 +247,20 @@ class DriverRequestModel {
 
   // Also valid out of 'awaiting_confirmation' when the RESPONDENT committed first and the
   // client is now rejecting that commitment instead of confirming it.
+  // Despite the name (kept for now — this was written back when the only caller was the
+  // single-truck-pick flow, where a client declining before the driver ever countered wasn't a
+  // real case), this now also has to accept plain 'pending' — DriverOfferCard.jsx's fan-out UI
+  // (FindTruckSearch.jsx) lets a client decline any one of several live offers at any point,
+  // including before that particular driver has responded at all, to stop waiting on them while
+  // staying in the search for the rest. Without 'pending' here, every such decline 400'd with
+  // "Request is not awaiting your response" — the button was always wired up, the backend just
+  // never caught up to this fan-out use case.
   static async clientRejectIfCountered(id) {
     const result = await pool.query(
       `UPDATE driver_requests
        SET status = 'declined'
        WHERE id = $1
-         AND (status = 'countered' OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'respondent'))
+         AND (status IN ('pending', 'countered') OR (status = 'awaiting_confirmation' AND pending_confirmation_by = 'respondent'))
        RETURNING *`,
       [id]
     );

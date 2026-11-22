@@ -1722,6 +1722,15 @@ const runMigrations = async (client) => {
         FOREIGN KEY (pod_verified_by) REFERENCES users(id) ON DELETE SET NULL;
     `);
 
+    // ── admin direct driver assignment — no negotiation ──
+    // Marks a driver_requests row created by booking.controller.js's adminAssignDriver — treated
+    // the same as the existing broker-assign origin (job_request_id set) everywhere that gates
+    // negotiation: no counter-offers, driver's own accept finalizes the trip immediately, no
+    // separate client confirmation step. Also doubles as an audit trail of which admin assigned it.
+    await client.query(`
+      ALTER TABLE driver_requests ADD COLUMN IF NOT EXISTS admin_assigned_by UUID REFERENCES users(id);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

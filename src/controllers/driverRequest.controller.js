@@ -27,6 +27,14 @@ const MAX_COUNTERS_PER_SIDE = null;
 const countClientCounters = (offerHistory) => (offerHistory || []).filter((entry, i) => i > 0 && entry.by === 'client').length;
 const countRespondentCounters = (offerHistory) => (offerHistory || []).filter((entry, i) => i > 0 && entry.by !== 'client').length;
 
+// Two distinct no-negotiation origins, same treatment everywhere below: job_request_id (broker
+// already agreed a price with the client via job_requests) and admin_assigned_by (admin picked
+// the driver directly, booking.controller.js's adminAssignDriver — no broker/job_request
+// involved at all, but the same "fixed price, accept or decline, driver's accept finalizes
+// immediately" rule applies). Centralized here so every gate below checks both the same way
+// instead of risking one getting the OR and another not.
+const isDirectAssignment = (dr) => !!(dr.job_request_id || dr.admin_assigned_by);
+
 const projectDriverRequest = (row) => ({
   id: row.id,
   bookingId: row.booking_id,
@@ -67,6 +75,13 @@ const projectDriverRequest = (row) => ({
   // Set only for the broker-assign origin (broker picked this driver for an already-negotiated
   // job_requests booking) — null for the direct client-pick origin.
   jobRequestId: row.job_request_id || null,
+  // True for the admin-direct-assign origin (booking.controller.js's adminAssignDriver) — kept
+  // separate from jobRequestId since there's no actual job_requests row behind this one.
+  isAdminAssigned: !!row.admin_assigned_by,
+  // Either no-negotiation origin — both frontends (driver/broker app's DriverRequestCard.jsx,
+  // client app's DriverOfferCard.jsx) use this single flag to decide whether to show a Counter
+  // button at all, instead of each re-deriving the OR of the two raw fields itself.
+  noNegotiation: isDirectAssignment(row),
   // Whose turn it is to respond: while status='pending' and driverTimedOut is false, it's the
   // driver's; once driverTimedOut is true, it's the broker's; while 'countered', it's the client's.
   driverTimedOut: !!row.driver_timeout_at,
@@ -284,10 +299,10 @@ const acceptDriverRequest = async (req, res, next) => {
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (!assertCanRespond(driverRequest, req.user)) return errorResponse(res, 403, 'Not yours to respond to');
     const canActNow = driverRequest.status === 'pending'
-      || (!driverRequest.job_request_id && driverRequest.status === 'awaiting_confirmation' && driverRequest.pending_confirmation_by === 'client');
+      || (!isDirectAssignment(driverRequest) && driverRequest.status === 'awaiting_confirmation' && driverRequest.pending_confirmation_by === 'client');
     if (!canActNow) return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
 
-    const updated = driverRequest.job_request_id
+    const updated = isDirectAssignment(driverRequest)
       ? await DriverRequestModel.respondentAcceptDirect(driverRequest.id)
       : await DriverRequestModel.respondentAccept(driverRequest.id);
     if (!updated) return errorResponse(res, 400, 'Request is already actioned');
@@ -373,9 +388,10 @@ const declineDriverRequest = async (req, res, next) => {
 
     // Broker-assign origin: the broker picked this driver, not the client — so the broker
     // needs to try someone else from their fleet, not the client "picking another truck"
-    // (they never picked a truck in this flow to begin with).
-    const notifyUserId = driverRequest.job_request_id ? driverRequest.broker_id : driverRequest.client_id;
-    if (driverRequest.job_request_id) {
+    // (they never picked a truck in this flow to begin with). Same reasoning covers the
+    // admin-assign origin — the truck's owning broker still finds out their driver declined.
+    const notifyUserId = isDirectAssignment(driverRequest) ? driverRequest.broker_id : driverRequest.client_id;
+    if (isDirectAssignment(driverRequest)) {
       await NotificationModel.create({
         userId: driverRequest.broker_id,
         title: 'Driver Declined Assignment',
@@ -383,6 +399,17 @@ const declineDriverRequest = async (req, res, next) => {
         type: 'booking',
         meta: { booking_id: driverRequest.booking_id, driver_request_id: driverRequest.id },
       });
+      // Admin specifically gets their own notification too — they're the one who'll need to
+      // pick a different driver (or let the broker), not just the fleet's owning broker.
+      if (driverRequest.admin_assigned_by) {
+        await NotificationModel.create({
+          userId: driverRequest.admin_assigned_by,
+          title: 'Driver Declined Your Assignment',
+          message: `${driverRequest.driver_name || 'The driver'} declined the booking ${driverRequest.booking_number} you assigned them. Pick a different driver.`,
+          type: 'booking',
+          meta: { booking_id: driverRequest.booking_id, driver_request_id: driverRequest.id },
+        });
+      }
     } else {
       await NotificationModel.create({
         userId: driverRequest.client_id,
@@ -409,10 +436,12 @@ const counterDriverRequest = async (req, res, next) => {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (!assertCanRespond(driverRequest, req.user)) return errorResponse(res, 403, 'Not yours to respond to');
-    // Broker-assign origin (confirmed design) — the price was already agreed with the broker
-    // via job_requests; this is a plain accept/decline, no counter-offers.
-    if (driverRequest.job_request_id) {
-      return errorResponse(res, 409, 'This job was already agreed with the broker — accept or decline, no counter-offers.');
+    // No-negotiation origin (broker-assign or admin-assign, confirmed design) — the price was
+    // already fixed before this driver was ever offered it; this is a plain accept/decline.
+    if (isDirectAssignment(driverRequest)) {
+      return errorResponse(res, 409, driverRequest.admin_assigned_by
+        ? 'This booking was assigned directly by admin — accept or decline, no counter-offers.'
+        : 'This job was already agreed with the broker — accept or decline, no counter-offers.');
     }
     if (driverRequest.status !== 'pending') return errorResponse(res, 400, `Request is not awaiting your response (${driverRequest.status})`);
 
@@ -449,10 +478,10 @@ const clientAcceptDriverRequest = async (req, res, next) => {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (driverRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
-    // Broker-assign origin (confirmed design) — the client already agreed a price with the
-    // broker; this driver's own accept (see acceptDriverRequest's respondentAcceptDirect)
-    // finalizes the trip on its own, no client action needed or possible here.
-    if (driverRequest.job_request_id) {
+    // No-negotiation origin (broker-assign or admin-assign) — the price is already fixed and
+    // this driver's own accept (see acceptDriverRequest's respondentAcceptDirect) finalizes the
+    // trip on its own, no client action needed or possible here.
+    if (isDirectAssignment(driverRequest)) {
       return errorResponse(res, 409, 'This request is being handled directly with the driver — no action needed from you.');
     }
     const canActNow = ['pending', 'countered'].includes(driverRequest.status)
@@ -531,7 +560,7 @@ const clientRejectDriverRequest = async (req, res, next) => {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (driverRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
-    if (driverRequest.job_request_id) {
+    if (isDirectAssignment(driverRequest)) {
       return errorResponse(res, 409, 'This request is being handled directly with the driver — no action needed from you.');
     }
 
@@ -563,7 +592,7 @@ const clientCounterDriverRequest = async (req, res, next) => {
     const driverRequest = await DriverRequestModel.findById(req.params.id);
     if (!driverRequest) return errorResponse(res, 404, 'Driver request not found');
     if (driverRequest.client_id !== req.user.id) return errorResponse(res, 403, 'Not your booking');
-    if (driverRequest.job_request_id) {
+    if (isDirectAssignment(driverRequest)) {
       return errorResponse(res, 409, 'This request is being handled directly with the driver — no action needed from you.');
     }
     if (!['pending', 'countered'].includes(driverRequest.status)) return errorResponse(res, 400, `Request is not open for negotiation (${driverRequest.status})`);
