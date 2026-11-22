@@ -546,7 +546,7 @@ router.post('/bookings/:id/request-truck', authenticate, authorize('client'), re
  *     description: |
  *       Admin's own driver-assignment path — unlike the broker's (POST /api/jobs/{id}/assign-driver, scoped to that broker's own fleet) and the client's (POST /api/bookings/{id}/request-truck, scoped to one specific truck the client picked from a nearby-only list), admin can pick ANY driver anywhere in the system — no fleet-ownership check, no distance restriction. Resolves that driver's current truck automatically (driver_profiles.truck_id); the driver must already have one assigned and it must be available.
  *
- *       Same driver_requests negotiation mechanism as the other two paths — the driver still gets to accept/decline/counter (PATCH /api/driver-requests/{id}/accept|decline|counter), this doesn't force an instant assignment.
+ *       No negotiation — same as the broker-assign origin, the price is fixed at the booking's current amount. The driver can only accept (PATCH /api/driver-requests/{id}/accept, finalizes the trip immediately) or decline (PATCH /api/driver-requests/{id}/decline) — no counter-offers.
  *     security:
  *       - BearerAuth: []
  *     parameters:

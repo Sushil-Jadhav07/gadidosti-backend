@@ -11,20 +11,51 @@ KYC has two layers. **DigiLocker** is the primary path — one consent session (
 document-sharing service) returns Aadhaar + PAN for everyone, plus Driving License for drivers,
 with zero typing or photographing. Whatever DigiLocker can't supply (the user doesn't have that
 document linked there) falls back to **manual per-document verification** — enter the number,
-call a dedicated endpoint, done. Everything above is just *assistive*: it stores a result a
-reviewer can see, nothing auto-approves on its own. For **driver and broker** accounts, there's a
-separate, final **submit** call (`POST /api/kyc/driver` or `/api/kyc/broker`) that actually sets
-`kyc_status` to `submitted` for manual review — the verify-* calls alone don't do this. For
-**client** accounts there is no submit call at all — once all three of their required checks
-(Aadhaar, PAN, GST) come back verified, the backend auto-finalizes their KYC by itself.
+call a dedicated endpoint, done. For **driver and broker** accounts, there's a separate, final
+**submit** call (`POST /api/kyc/driver` or `/api/kyc/broker`) that decides whether `kyc_status`
+becomes `verified` immediately or `submitted` for manual review — see "Auto-verify" below for
+exactly when each happens. For **client** accounts there is no submit call at all — the backend
+auto-finalizes the instant the required checks pass.
 
-## Who needs what
+## Who needs what — and the Aadhaar+PAN **or** GST choice
 
-| Role | Documents required | Final step |
+**Driver always needs all three** — Aadhaar + PAN + Driving License. No GST concept for an
+individual driver; don't show a GST field for this role at all.
+
+**Broker and client get a choice — either path is enough, not both:**
+- **Aadhaar + PAN** together (via DigiLocker, or the manual fallbacks in section 2), **or**
+- **GST** alone (`POST /api/kyc/verify/gst`)
+
+Present this as two tabs/screens the user picks between — exactly what both web apps
+(`gadidosti-client`'s `Verification.jsx`, `gadidosti-broker-driver`'s `Onboarding.jsx`) do: a
+segmented "Aadhaar + PAN" / "GST" toggle, only one side's fields shown at a time. Don't force
+someone who picked GST to also fill in Aadhaar/PAN, and vice versa — the backend's validation
+(see section 5) doesn't require it either.
+
+| Role | Required | Final step |
 |---|---|---|
-| **driver** | Aadhaar, PAN, Driving License (+ vehicle reg/insurance numbers, no verification call for those) | `POST /api/kyc/driver` |
-| **broker** | Aadhaar, PAN (+ GST, bank account, business registration numbers, no verification call for those) | `POST /api/kyc/broker` |
-| **client** | Aadhaar, PAN, GST | None — auto-finalizes once all three verify as `verified` |
+| **driver** | Aadhaar + PAN + Driving License (+ vehicle reg/insurance numbers, no verification call for those) | `POST /api/kyc/driver` |
+| **broker** | (Aadhaar + PAN) **or** GST (+ bank account, business registration numbers always, no verification call for those) | `POST /api/kyc/broker` |
+| **client** | (Aadhaar + PAN) **or** GST | None — auto-finalizes the moment either path verifies |
+
+## Auto-verify — when a submission skips admin review entirely
+
+`isKycSatisfied` (backend) decides this, and it's exactly the table above: driver needs all
+three `verified`; broker/client need (Aadhaar **and** PAN) `verified`, **or** GST `verified`
+alone. The moment that's true:
+- **driver/broker**: the next `POST /api/kyc/driver`/`/broker` call returns
+  `kyc_status: "verified"` immediately instead of `"submitted"` — no admin wait, no 24-48 hour
+  review.
+- **client**: happens automatically server-side right after whichever verify-* call completed
+  the satisfied path — nothing for the app to trigger, just poll `GET /api/kyc/status` (section 3)
+  to see it flip to `verified`.
+
+This only works if every check in the chosen path actually goes through a real verify call —
+**don't build a path where a field is just typed and stored with no verify-* call behind it**
+(that was a real bug fixed on the web apps: broker's GST number used to be a plain text field
+with no "Verify GST" button, and driver/broker's Aadhaar fallback used to be "type a number,
+upload a photo, wait 24-48 hours for a human" instead of the OTP flow in section 2 — both meant
+auto-verify was unreachable in practice even when everything else was fine).
 
 ## 1. DigiLocker — the primary path for Aadhaar/PAN/(Driving License)
 
@@ -91,7 +122,8 @@ POST /api/kyc/verify/pan
 Body: { "pan": "ABCDE1234F", "name": "Rakesh Kumar" }   // name optional
 ```
 
-**GST** (broker, client — not driver):
+**GST** (broker, client — not driver; this is the alternative to Aadhaar+PAN, not an extra
+requirement on top of it):
 ```
 POST /api/kyc/verify/gst
 Body: { "gstin": "27ABCDE1234F1Z5" }
@@ -163,11 +195,19 @@ Body: { "documents": {
 ```
 POST /api/kyc/broker
 Body: { "documents": {
-  "pan_number": "...", "aadhaar_number": "...", "gst_number": "...",
-  "bank_account_number": "...", "business_registration_number": "...",
-  "pan_photo_url": "...", "aadhaar_photo_url": "..."   // both optional
+  "pan_number": "...", "aadhaar_number": "...",   // required together UNLESS gst_number is given
+  "gst_number": "...",                            // required UNLESS pan_number + aadhaar_number are both given
+  "bank_account_number": "...", "business_registration_number": "...",   // always required, either path
+  "pan_photo_url": "...", "aadhaar_photo_url": "..."   // both optional, only relevant on the identity path
 } }
 ```
+Broker's validation enforces the same either/or as everything else in this guide: it accepts the
+submission if `(pan_number && aadhaar_number)` **or** `gst_number` is present — each side counts
+as satisfied if it was typed here, **or** already verified via a verify-* call (so DigiLocker-only
+users never have to re-type a number they never typed in the first place). 422 if neither side is
+satisfied. A broker on the GST tab should simply never populate `pan_number`/`aadhaar_number` in
+this call at all — leaving them out is correct, not an oversight to work around.
+
 These numbers are typed/confirmed by the user, independent of whether DigiLocker or a manual
 check already verified the same document — the verify-* calls are evidence for the reviewer, not
 a replacement for actually submitting the application. Resubmitting (e.g. after a rejection)
@@ -178,15 +218,23 @@ broker-only).
 ## What to build in `SSK_Cargo`
 
 1. On the KYC screen's load, call `GET /api/kyc/status` to resume wherever the user left off.
-2. A "Verify with DigiLocker" button → step 1 above, with the Universal Link / Custom Tabs setup
-   this needs flagged to whoever owns app signing/domain config early, since it's not just an API
-   integration detail.
-3. For any document that comes back `missing`, show that document's manual fallback form (step 2).
-4. (driver/broker only) A photo upload step per required document (step 4), then the final submit
-   call (step 5) once all required numbers are filled in.
-5. (client only) Nothing to submit — just keep polling `GET /api/kyc/status` until
+2. **Driver**: no tabs, single screen — Aadhaar + PAN via DigiLocker, Driving License always
+   manual (section 2). **Broker/client**: a segmented "Aadhaar + PAN" / "GST" toggle at the top;
+   only the active tab's fields render.
+3. "Aadhaar + PAN" tab/screen: "Verify with DigiLocker" button → section 1, with the Universal
+   Link / Custom Tabs setup flagged to whoever owns app signing/domain config early, since it's
+   not just an API integration detail. For any document that comes back `missing`, show that
+   document's manual fallback — **Aadhaar's fallback is the OTP flow in section 2, not a
+   photo-upload-for-review form**; that distinction matters because only the OTP path can
+   actually reach auto-verify (see "Auto-verify" above).
+4. "GST" tab (broker/client): just the GSTIN field + a real "Verify GST" button calling
+   `POST /api/kyc/verify/gst` — not a plain text field that only gets stored and never verified.
+5. (driver/broker only) A photo upload step per required document (section 4, optional), then
+   the final submit call (section 5) once the chosen path's required numbers are filled in.
+6. (client only) Nothing to submit — just keep polling `GET /api/kyc/status` until
    `kyc_status: "verified"`, same as the web client app does.
-6. Map error cases per endpoint to readable messages — a 503 from any verify-* call means the
+7. Map error cases per endpoint to readable messages — a 503 from any verify-* call means the
    underlying provider (Cashfree, or whichever replaces it) is unavailable/misconfigured, not a
    bad document; show "verification temporarily unavailable, try again shortly" rather than
    blaming the user's input.
+  
