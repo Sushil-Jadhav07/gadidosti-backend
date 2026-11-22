@@ -13,6 +13,7 @@ const {
 } = require('./driverRequest.controller');
 const { getIO } = require('../realtime/socket');
 const { successResponse, errorResponse } = require('../utils/response');
+const { haversineKm, NEARBY_DRIVER_RADIUS_KM } = require('../utils/geo');
 const logger = require('../utils/logger');
 
 // "2 min ago" style relative-time label — the broker JobRequests list reads this, not a raw timestamp.
@@ -132,6 +133,23 @@ const assignDriver = async (req, res, next) => {
     const driverProfile = await DriverProfileModel.findById(driverId);
     if (!driverProfile || driverProfile.broker_id !== req.user.id) {
       return errorResponse(res, 404, 'Driver not found for this broker');
+    }
+
+    // Confirmed design: a broker can accept a booking from anywhere (no restriction there — see
+    // UserModel.findActiveBrokers), but the specific DRIVER they assign to it must actually be
+    // near the pickup point — same radius as the "Find Truck" broadcast
+    // (NEARBY_DRIVER_RADIUS_KM). Fails open (lets the assignment through) whenever either side's
+    // coordinates are missing, matching how DriverProfileModel.findAll already treats a
+    // location-unknown driver elsewhere — kept visible/assignable, not excluded — rather than
+    // blocking a broker just because a driver's GPS is stale or has never reported in yet.
+    if (booking.pickup_lat != null && booking.pickup_lng != null && driverProfile.current_lat != null && driverProfile.current_lng != null) {
+      const distanceKm = haversineKm(
+        Number(booking.pickup_lat), Number(booking.pickup_lng),
+        Number(driverProfile.current_lat), Number(driverProfile.current_lng)
+      );
+      if (distanceKm > NEARBY_DRIVER_RADIUS_KM) {
+        return errorResponse(res, 422, `This driver is ${Math.round(distanceKm)}km from pickup — only drivers within ${NEARBY_DRIVER_RADIUS_KM}km can be assigned.`);
+      }
     }
 
     const truck = await TruckModel.findOwnedByBroker(truckId, req.user.id);

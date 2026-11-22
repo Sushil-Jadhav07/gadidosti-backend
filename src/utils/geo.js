@@ -13,4 +13,11 @@ const haversineKm = (lat1, lng1, lat2, lng2) => {
 // haversineKm — no routing engine, so this is a rough estimate, not turn-by-turn ETA.
 const AVERAGE_SPEED_KMPH = 40;
 
-module.exports = { haversineKm, AVERAGE_SPEED_KMPH };
+// The one "nearby enough" radius used everywhere a driver's proximity to a pickup point actually
+// matters — the "Find Truck" broadcast's default (booking.controller.js's
+// DEFAULT_BROADCAST_RADIUS_KM) and the broker's own driver-assignment restriction
+// (job.controller.js's assignDriver) both reference this single constant instead of each
+// hardcoding "50" separately, so the two can't silently drift apart later.
+const NEARBY_DRIVER_RADIUS_KM = 50;
+
+module.exports = { haversineKm, AVERAGE_SPEED_KMPH, NEARBY_DRIVER_RADIUS_KM };

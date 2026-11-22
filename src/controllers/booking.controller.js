@@ -18,7 +18,7 @@ const AuditLogModel = require('../models/auditLog.model');
 const NotificationModel = require('../models/notification.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
-const { haversineKm, AVERAGE_SPEED_KMPH } = require('../utils/geo');
+const { haversineKm, AVERAGE_SPEED_KMPH, NEARBY_DRIVER_RADIUS_KM } = require('../utils/geo');
 const { projectDriverRequest, emitDriverRequestUpdate, emitDriverRequestCreated } = require('./driverRequest.controller');
 const { emitJobRequestUpdate, emitJobRequestCreated } = require('./job.controller');
 const { getIO } = require('../realtime/socket');
@@ -40,10 +40,10 @@ const { getPaymentProvider } = require('../providers/payment');
 //   'to_be_billed'  — nothing now, nothing collected on delivery either. Booking is
 //                     billed/settled out of band later — see markToBeBilled.
 
-// "Find Truck" mode default radius when the client doesn't send search_radius_km — matches
-// NearbyTrucksMap.jsx's own default search radius (see pricing.model.js's NEARBY_SURGE_RADIUS_KM
-// note for the same convention elsewhere).
-const DEFAULT_BROADCAST_RADIUS_KM = 50;
+// "Find Truck" mode default radius when the client doesn't send search_radius_km — same shared
+// constant job.controller.js's assignDriver restricts broker driver-picks to (utils/geo.js's
+// NEARBY_DRIVER_RADIUS_KM), so both stay in sync if this ever changes again.
+const DEFAULT_BROADCAST_RADIUS_KM = NEARBY_DRIVER_RADIUS_KM;
 
 // Book Later: how far ahead of the client's requested scheduled_date the deferred broadcast
 // actually fires (see scheduledBookingBroadcastSweep.js). Not specified by the feature request —
