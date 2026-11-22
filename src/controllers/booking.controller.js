@@ -419,6 +419,9 @@ const cancelBooking = async (req, res, next) => {
       payment_status: wasPaid ? 'refunded' : booking.payment_status,
     });
     await BookingModel.addTimelineStep(id, { step: 'cancelled', position: 99 });
+    // See createBooking's matching emit — a pending booking that just got cancelled should
+    // disappear from the admin dashboard's Assign Bookings list without a manual refresh.
+    getIO()?.to('admins').emit('admin-bookings-changed', { bookingId: id, status: 'cancelled' });
 
     // Clear out any still-open negotiation offers so nobody can accept a booking that's just
     // been cancelled out from under them — and notify each one, since a silent bulk-decline
@@ -1500,6 +1503,12 @@ const createBooking = async (req, res, next) => {
     logger.info(`Booking created: ${booking.id} by client ${req.user.id}`);
     const full = await BookingModel.findById(booking.id);
     const timeline = await BookingModel.getTimeline(booking.id);
+    // Lets the admin dashboard's Assign Bookings page (and any other "needs attention" list
+    // built the same way later) refetch live instead of needing a manual refresh — deliberately
+    // a bare nudge, not a full projected booking, since every listener here just re-queries its
+    // own filtered view rather than trying to patch one row into a list it may or may not belong
+    // in (e.g. a scheduled booking isn't "needs a driver now" the moment it's created).
+    getIO()?.to('admins').emit('admin-bookings-changed', { bookingId: full.id, status: full.status });
     return successResponse(res, 201, 'Booking created', { booking: projectBooking(full, timeline, req.user.role) });
   } catch (err) {
     next(err);

@@ -217,6 +217,12 @@ const finalizeDriverRequest = async (driverRequest, amount) => {
   });
   if (!booking) return null;
 
+  // See booking.controller.js's createBooking/cancelBooking for the matching emits — this is
+  // the one place every "a driver got assigned" path (direct pick, broker-assign, admin-assign)
+  // funnels through, so it's the single spot that needs to tell the admin dashboard's Assign
+  // Bookings page this booking no longer needs one, without a manual refresh.
+  getIO()?.to('admins').emit('admin-bookings-changed', { bookingId: booking.id, status: booking.status });
+
   if (amount != null && Number(booking.amount) !== Number(amount)) {
     await BookingModel.update(booking.id, { amount });
   }

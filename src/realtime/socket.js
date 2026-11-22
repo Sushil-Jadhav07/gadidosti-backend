@@ -49,8 +49,12 @@ const initSocket = (server) => {
     socket.join(`user:${socket.user.id}`);
     // Lets any REST controller push straight to every connected admin at once (e.g.
     // trip.controller.js's emitTripStatusUpdate, for the admin dashboard's live booking view)
-    // without needing to know which specific admins are online.
-    if (socket.user.role === 'admin') socket.join('admins');
+    // without needing to know which specific admins are online. Staff accounts share this room
+    // too — PageGuard/hasPageAccess already decides which pages a given staff login can reach
+    // (e.g. Assign Bookings, via the 'bookings' pageKey), so there's nothing admin-only about
+    // which sockets should receive these pushes; excluding staff would just mean a granted page
+    // silently never updates live for them.
+    if (socket.user.role === 'admin' || socket.user.role === 'staff') socket.join('admins');
 
     // ─── join-thread — verifies chat access before letting the socket into the room ──────────
     socket.on('join-thread', async ({ threadId } = {}, ack) => {
