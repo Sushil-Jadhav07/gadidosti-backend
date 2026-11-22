@@ -4,6 +4,10 @@ const requestTruckValidation = [
   body('truck_id').notEmpty().withMessage('truck_id is required').isUUID().withMessage('truck_id must be a valid UUID'),
 ];
 
+const adminAssignDriverValidation = [
+  body('driver_id').notEmpty().withMessage('driver_id is required').isUUID().withMessage('driver_id must be a valid UUID'),
+];
+
 // Same shape as job.validation.js's counterOfferValidation, mirrored for consistency —
 // driver/broker counters and client counters on driver_requests both use this.
 const driverCounterOfferValidation = [
@@ -11,4 +15,4 @@ const driverCounterOfferValidation = [
   body('note').optional({ nullable: true, checkFalsy: true }).isString().isLength({ max: 500 }).withMessage('note must be 500 characters or fewer'),
 ];
 
-module.exports = { requestTruckValidation, driverCounterOfferValidation };
+module.exports = { requestTruckValidation, adminAssignDriverValidation, driverCounterOfferValidation };

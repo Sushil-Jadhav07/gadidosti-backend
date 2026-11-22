@@ -43,7 +43,7 @@ const { getPaymentProvider } = require('../providers/payment');
 // "Find Truck" mode default radius when the client doesn't send search_radius_km — matches
 // NearbyTrucksMap.jsx's own default search radius (see pricing.model.js's NEARBY_SURGE_RADIUS_KM
 // note for the same convention elsewhere).
-const DEFAULT_BROADCAST_RADIUS_KM = 15;
+const DEFAULT_BROADCAST_RADIUS_KM = 50;
 
 // Book Later: how far ahead of the client's requested scheduled_date the deferred broadcast
 // actually fires (see scheduledBookingBroadcastSweep.js). Not specified by the feature request —
@@ -1561,6 +1561,64 @@ const requestTruckForBooking = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/admin/bookings/:id/assign-driver ────────────────────────────────
+// Admin's own driver-assignment path — didn't exist before this. Unlike the broker's
+// (job.controller.js's assignDriver — scoped to that broker's own fleet, via a job_request) and
+// the client's (requestTruckForBooking above — scoped to one specific truck_id the client
+// picked from a nearby-only list), admin can pick ANY driver anywhere in the system, no
+// fleet-ownership check and no distance restriction at all — same driver_requests negotiation
+// mechanism as both of those (the driver still gets to accept/decline, same as any other
+// assignment), just with neither of those two restrictions.
+const adminAssignDriver = async (req, res, next) => {
+  try {
+    const { driver_id } = req.body;
+
+    const booking = await BookingModel.findById(req.params.id);
+    if (!booking) return errorResponse(res, 404, 'Booking not found');
+    if (booking.status !== 'pending') return errorResponse(res, 409, `Booking is no longer pending (${booking.status})`);
+
+    const driverProfile = await DriverProfileModel.findById(driver_id);
+    if (!driverProfile) return errorResponse(res, 404, 'Driver not found');
+    if (!driverProfile.truck_id) return errorResponse(res, 409, 'This driver has no truck assigned');
+
+    const truck = await TruckModel.findById(driverProfile.truck_id);
+    if (!truck) return errorResponse(res, 404, 'Truck not found');
+    if (truck.status !== 'available') return errorResponse(res, 409, 'Truck is not available');
+
+    const driverRequest = await DriverRequestModel.create({
+      bookingId: booking.id,
+      truckId: truck.id,
+      driverId: driver_id,
+      brokerId: truck.broker_id,
+      amount: booking.amount,
+    });
+
+    await NotificationModel.create({
+      userId: driver_id,
+      title: 'New Booking Request',
+      message: `You've been assigned a booking: ${booking.pickup_location || 'pickup'} -> ${booking.drop_location || 'drop'} at ₹${booking.amount ?? 'TBD'}. Respond within a few minutes.`,
+      type: 'booking',
+      meta: { booking_id: booking.id, driver_request_id: driverRequest.id },
+    });
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'ADMIN_DRIVER_ASSIGNED',
+      entity: 'driver_requests',
+      entityId: driverRequest.id,
+      meta: { booking_id: booking.id, truck_id: truck.id, driver_id },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Admin ${req.user.id} assigned driver ${driver_id} (truck ${truck.id}) to booking ${booking.id}`);
+    const full = await DriverRequestModel.findById(driverRequest.id);
+    emitDriverRequestCreated(driver_id, full);
+    return successResponse(res, 201, 'Request sent to driver', { request: projectDriverRequest(full) });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── GET /api/analytics/client ─────────────────────────────────────────────────
 // Client-scoped mirror of GET /api/analytics/admin — the client dashboard's own "Recent
 // Activities" stats plus the two chart series (spend sparkline, weekly booking count), all
@@ -1579,4 +1637,4 @@ const getClientAnalytics = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, payFromWallet, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, rebroadcastBooking, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, adminAssignDriver, cancelBooking, payBooking, payFromWallet, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, rebroadcastBooking, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory };

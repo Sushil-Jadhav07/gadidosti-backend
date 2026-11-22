@@ -1,13 +1,13 @@
 const express = require('express');
 const router = express.Router();
 
-const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, cancelBooking, payBooking, payFromWallet, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, listBookingDriverRequests, rebroadcastBooking, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory } = require('../controllers/booking.controller');
+const { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, adminAssignDriver, cancelBooking, payBooking, payFromWallet, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, listBookingDriverRequests, rebroadcastBooking, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory } = require('../controllers/booking.controller');
 const { getBookingOffers } = require('../controllers/job.controller');
 const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const idempotent = require('../middleware/idempotency.middleware');
 const { createBookingValidation, quoteBookingValidation } = require('../validations/booking.validation');
-const { requestTruckValidation } = require('../validations/driverRequest.validation');
+const { requestTruckValidation, adminAssignDriverValidation } = require('../validations/driverRequest.validation');
 
 /**
  * @swagger
@@ -536,6 +536,51 @@ router.get('/bookings/:id/reassignment-history', authenticate, getReassignmentHi
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.post('/bookings/:id/request-truck', authenticate, authorize('client'), requestTruckValidation, validate, requestTruckForBooking);
+
+/**
+ * @swagger
+ * /api/admin/bookings/{id}/assign-driver:
+ *   post:
+ *     tags: [Bookings]
+ *     summary: Assign any driver in the system to a booking (admin)
+ *     description: |
+ *       Admin's own driver-assignment path — unlike the broker's (POST /api/jobs/{id}/assign-driver, scoped to that broker's own fleet) and the client's (POST /api/bookings/{id}/request-truck, scoped to one specific truck the client picked from a nearby-only list), admin can pick ANY driver anywhere in the system — no fleet-ownership check, no distance restriction. Resolves that driver's current truck automatically (driver_profiles.truck_id); the driver must already have one assigned and it must be available.
+ *
+ *       Same driver_requests negotiation mechanism as the other two paths — the driver still gets to accept/decline/counter (PATCH /api/driver-requests/{id}/accept|decline|counter), this doesn't force an instant assignment.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [driver_id]
+ *             properties:
+ *               driver_id: { type: string, format: uuid }
+ *     responses:
+ *       201:
+ *         description: Request sent to driver
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: Booking or driver not found
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: Booking is no longer pending, driver has no truck assigned, or truck is not available
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.post('/admin/bookings/:id/assign-driver', authenticate, authorize('admin', 'staff'), requireAdminPage('bookings'), adminAssignDriverValidation, validate, adminAssignDriver);
 
 /**
  * @swagger
