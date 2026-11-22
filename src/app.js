@@ -49,6 +49,27 @@ const app = express();
 // and IP detection work correctly.
 app.set('trust proxy', 1);
 
+// ─── Android App Links verification ──────────────────────────────────────────
+// Google Play's verifier (and Android itself, on first install) fetches this directly,
+// unauthenticated — served before helmet/cors/rate-limiting below so it can never be blocked,
+// redirected, or rate-limited by any of that. Needed for the Flutter app's DigiLocker KYC
+// return link (https://apigadidosti.asynk.in/kyc/digilocker/return) to open the app instead of
+// a browser. sha256_cert_fingerprints are the app's release signing certificates.
+app.get('/.well-known/assetlinks.json', (req, res) => {
+  res.json([{
+    relation: ['delegate_permission/common.handle_all_urls'],
+    target: {
+      namespace: 'android_app',
+      package_name: 'com.gadidost.play',
+      sha256_cert_fingerprints: [
+        '6A:EC:7D:2E:54:0E:67:78:C9:9B:D2:4B:C0:32:36:25:DF:DA:AB:71:47:FA:6D:89:4F:EF:EA:BA:94:6D:F9:BD',
+        '9F:C0:FF:E1:36:5E:F3:72:50:40:44:02:B4:35:60:80:EA:52:9A:B3:80:B1:7B:E7:FA:62:81:FD:21:5F:99:B8',
+        '9D:AA:B2:79:0E:E4:E8:19:AB:3A:90:01:39:1F:D4:F7:E6:1D:27:1F:39:ED:E5:62:73:04:63:E5:48:5E:EF:B8',
+      ],
+    },
+  }]);
+});
+
 // ─── Security ────────────────────────────────────────────────────────────────
 app.use(helmet({
   // Allow Google Sign-In popup to postMessage back to the opener
