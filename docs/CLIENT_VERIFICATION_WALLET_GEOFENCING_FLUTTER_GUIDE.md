@@ -291,6 +291,23 @@ over tap-to-pin where possible; if you do support tap-to-pin, consider scanning 
 reverse-geocode results for one with a `postal_code` component instead of trusting only the
 first.
 
+**Same gap also hits typed/autocomplete searches for landmarks and POIs — this one's real and
+was just fixed in both web apps, build the same fix into `SSK_Cargo`.** Picking an address by
+*typing a known place name* (not tapping the map) can still come back with no `postal_code`:
+Google's own address-component data for monuments/landmarks/POIs (e.g. "India Gate", "Red Fort",
+"Connaught Place") frequently omits `postal_code` even though it's a perfectly real, specific
+point — unlike a plain street address at the same spot, which almost always has one. This was
+reported as a real production bug: a client types a landmark name, picks it from the dropdown,
+and gets blocked with `PINCODE_REQUIRED` even though the location itself is fine. The fix
+(already shipped in `gadidosti-client`'s `PlacesAutocompleteInput.jsx`): after fetching the
+selected place's `addressComponents`, if `postal_code` is still missing, fall back to a plain
+reverse-geocode call keyed on that same place's own lat/lng (`Geocoder().geocode({ location })`
+server-side equivalent, or whatever reverse-geocode call you already use for tap-to-pin above) —
+a street-level reverse-geocode of a landmark's coordinates reliably does carry a `postal_code`
+even when the landmark's own Place record didn't. Do this fallback for **every** autocomplete
+selection where `postal_code` comes back empty, not just ones that look like landmarks — there's
+no reliable way to tell in advance which named places will be missing it.
+
 ### New error codes
 
 ```json
