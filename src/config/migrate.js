@@ -1731,6 +1731,15 @@ const runMigrations = async (client) => {
       ALTER TABLE driver_requests ADD COLUMN IF NOT EXISTS admin_assigned_by UUID REFERENCES users(id);
     `);
 
+    // ── stuck-booking escalation (bookingSearchStuckSweep.js) ──
+    // A booking still 'pending' 30+ minutes after creation, with nobody having responded, used
+    // to sit silently forever — no admin alert, no automatic widening of the search, nothing but
+    // the client's own manual "Search Again". Kept null until the one-time escalation fires so
+    // the sweep (running every minute) never re-notifies/re-widens the same booking twice.
+    await client.query(`
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS search_timeout_notified_at TIMESTAMPTZ;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

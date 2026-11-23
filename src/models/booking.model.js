@@ -1,5 +1,18 @@
 const crypto = require('crypto');
 const pool = require('../config/db');
+const logger = require('../utils/logger');
+
+// The DB's booking_status enum, kept by hand in sync with the migration that defines it — used
+// to sanitize the ?status=a,b,c filter below. A single unrecognized value in that list (a stale
+// app build asking for a status that was renamed/removed, or just a typo) used to fail the WHOLE
+// query: `status = ANY($1)` has Postgres validate every element against the enum type before
+// comparing any of them, so one bad value 500'd a request that also asked for several perfectly
+// valid ones. Filtering to known values here means an unrecognized one is just ignored, same as
+// if it had never been in the list, instead of taking down the whole list.
+const VALID_BOOKING_STATUSES = new Set([
+  'pending', 'confirmed', 'assigned', 'en_route_pickup', 'picked_up',
+  'in_transit', 'delivered', 'completed', 'cancelled', 'no_broker_available',
+]);
 
 // Shared join so every read gets the denormalized display fields the UI needs
 // (broker/client/driver names, driver phone, truck reg, POD) without duplicating columns.
@@ -223,9 +236,13 @@ class BookingModel {
     // admin: no scoping condition, and deliberately no deleted_at filter either — a
     // broker/driver soft-delete stays fully visible to admin until an admin hard-deletes it.
 
-    const statuses = typeof status === 'string'
+    const requestedStatuses = typeof status === 'string'
       ? status.split(',').map((value) => value.trim()).filter(Boolean)
       : [];
+    const statuses = requestedStatuses.filter((value) => VALID_BOOKING_STATUSES.has(value));
+    if (statuses.length !== requestedStatuses.length) {
+      logger.warn(`BookingModel.findAll: dropped unrecognized status value(s) from "${status}" — kept [${statuses.join(', ')}]`);
+    }
     if (statuses.length === 1) {
       conditions.push(`b.status = $${idx++}`);
       params.push(statuses[0]);
@@ -350,6 +367,29 @@ class BookingModel {
 
   static async markDriverTimeoutNotified(id) {
     await pool.query(`UPDATE bookings SET driver_timeout_notified_at = NOW() WHERE id = $1`, [id]);
+  }
+
+  // Any booking still 'pending' this long after creation with nobody having responded yet —
+  // regardless of search_mode, since a stuck client-pick, broker-broadcast, or legacy fallback
+  // are all equally a "lead nobody has acted on" from admin's point of view. See
+  // cron/bookingSearchStuckSweep.js.
+  static async findStuckPending(timeoutMinutes) {
+    const result = await pool.query(
+      `SELECT id, booking_number, search_mode, search_radius_km, pickup_lat, pickup_lng,
+              truck_category, truck_body_type, weight, weight_unit, part_truck_size_category,
+              pickup_location, drop_location, amount
+       FROM bookings
+       WHERE status = 'pending'
+         AND search_timeout_notified_at IS NULL
+         AND created_at <= NOW() - ($1 || ' minutes')::INTERVAL
+       ORDER BY created_at ASC`,
+      [timeoutMinutes]
+    );
+    return result.rows;
+  }
+
+  static async markSearchTimeoutNotified(id) {
+    await pool.query(`UPDATE bookings SET search_timeout_notified_at = NOW() WHERE id = $1`, [id]);
   }
 }
 

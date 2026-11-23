@@ -10,6 +10,7 @@ const { startDriverRequestTimeoutSweep } = require('./cron/driverRequestTimeoutS
 const { startStaleDriverLocationSweep } = require('./cron/staleDriverLocationSweep');
 const { startScheduledBookingBroadcastSweep } = require('./cron/scheduledBookingBroadcastSweep');
 const { startMonthlyPostpaidBillSweep } = require('./cron/monthlyPostpaidBillSweep');
+const { startBookingSearchStuckSweep } = require('./cron/bookingSearchStuckSweep');
 
 const PORT = process.env.PORT || 5000;
 
@@ -50,6 +51,7 @@ const startServer = async () => {
   startStaleDriverLocationSweep();
   startScheduledBookingBroadcastSweep();
   startMonthlyPostpaidBillSweep();
+  startBookingSearchStuckSweep();
 
   server.listen(PORT, () => {
     logger.info(`🚀 SSK Logistics Auth API running on port ${PORT}`);

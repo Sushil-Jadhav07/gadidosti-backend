@@ -1247,6 +1247,11 @@ const listBookingDriverRequests = async (req, res, next) => {
     return successResponse(res, 200, 'Driver requests fetched', {
       requests: rows.map(projectDriverRequest),
       bookingStatus: booking.status,
+      // true once bookingSearchStuckSweep.js has escalated this booking (30+ min with nobody
+      // responding) — lets the client's waiting screen show a real, server-confirmed "we've
+      // widened the search and notified our team" message instead of only its own client-side
+      // elapsed-time guess.
+      searchDelayed: !!booking.search_timeout_notified_at,
     });
   } catch (err) {
     next(err);
@@ -1650,4 +1655,4 @@ const getClientAnalytics = async (req, res, next) => {
   }
 };
 
-module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, adminAssignDriver, cancelBooking, payBooking, payFromWallet, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, rebroadcastBooking, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory };
+module.exports = { createBooking, validateLocation, quoteBooking, listBookings, getBooking, trackBooking, requestTruckForBooking, adminAssignDriver, cancelBooking, payBooking, payFromWallet, createPaymentOrder, verifyBookingPayment, rateBooking, deleteBooking, getClientAnalytics, listEligibleBrokers, broadcastBooking, rebroadcastBooking, rebroadcastDriverFanOut, listBookingDriverRequests, getAdvanceAmount, markToBeBilled, createTrackingShareLink, getPublicTracking, getReassignmentHistory, DEFAULT_BROADCAST_RADIUS_KM };
