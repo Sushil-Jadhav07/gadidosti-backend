@@ -1554,22 +1554,19 @@ const runMigrations = async (client) => {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS gst_verification_result JSONB;
     `);
 
-    // ── KYC GST REQUIREMENT (mirrors db/68kyc_gst_requirement.sql) ──
-    // GST joins PAN/Aadhaar as a required driver/broker check, mandatory with no exceptions —
-    // so anyone already 'verified' under the old PAN+Aadhaar-only rule is pushed back to
-    // 'submitted' until they add + verify GST. Guarded to stay safe on every-boot re-run: only
-    // matches users who still lack a verified GST check, so re-approved users aren't re-queued.
-    await client.query(`
-      UPDATE users
-      SET kyc_status = 'submitted'
-      WHERE role IN ('driver', 'broker')
-        AND kyc_status = 'verified'
-        AND id IN (
-          SELECT user_id FROM kyc_submissions
-          WHERE kyc_submissions.user_id = users.id
-            AND COALESCE(verification_results -> 'gst' ->> 'status', '') != 'verified'
-        );
-    `);
+    // ── KYC GST REQUIREMENT — REMOVED, see kyc.controller.js's isKycSatisfied ──
+    // This used to force GST as a mandatory driver/broker check on every server boot (every
+    // restart re-ran this UPDATE, since its WHERE clause keeps matching anyone who re-verified
+    // since the last run) — but that rule was superseded by the later "either/or" KYC redesign:
+    // driver needs aadhaar+pan+drivingLicense (no GST concept for an individual driver at all —
+    // the app doesn't even collect one), and broker needs (aadhaar+pan) OR gst, not gst
+    // unconditionally. Leaving this migration in place meant EVERY pm2 restart silently
+    // re-downgraded every genuinely-verified driver/broker back to 'submitted' the moment the
+    // server came back up, which is exactly the "KYC shows pending even though I'm verified" bug
+    // reported in production — found by checking why several real driver accounts' kyc_status
+    // kept reverting right after a deploy despite their verification_results already satisfying
+    // the current (correct) rule. Deleted outright rather than re-guarded: the requirement itself
+    // was wrong, not just the re-run safety around it.
 
     // ── SERVICE CHARGE (mirrors db/69service_charge.sql) ──
     // Replaces the old per-bucket platformFee percentage with one global tiered rule: 7% for
