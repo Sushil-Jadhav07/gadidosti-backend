@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const logger = require('../utils/logger');
 
 class KycModel {
   // Create or overwrite a user's KYC submission — resets it back to 'pending' review
@@ -148,7 +149,26 @@ class KycModel {
   // anything yet — a check can run the moment a field is filled in, before the final Submit tap.
   // Deliberately a separate UPDATE from upsertSubmission (see that method's comment) so a later
   // resubmission never wipes an already-recorded result.
+  //
+  // Once a key is genuinely 'verified', a later call for that SAME key is never allowed to
+  // downgrade it — found as the real cause of an account that completed real bookings while
+  // verified later showing 'pending'/'submitted' again with no way back short of a human
+  // re-review: re-opening onboarding and retrying a check that's already verified (out of
+  // curiosity, or testing something else) can transiently fail (a network blip, a rate limit, a
+  // mistyped number) and this used to just overwrite the good cached result with that failure —
+  // invisible until the next Submit tap re-evaluated isKycSatisfied from the now-corrupted
+  // results and flipped kyc_status back to 'submitted'. "Verified" must be a one-way door per key.
   static async updateVerificationResult(userId, key, result) {
+    const existing = await pool.query(
+      `SELECT verification_results FROM kyc_submissions WHERE user_id = $1`,
+      [userId]
+    );
+    const alreadyVerified = existing.rows[0]?.verification_results?.[key]?.status === 'verified';
+    if (alreadyVerified && result?.status !== 'verified') {
+      logger.warn(`KYC updateVerificationResult: ignored a non-verified result for already-verified key "${key}" (user ${userId})`);
+      return existing.rows[0];
+    }
+
     const resultQuery = await pool.query(
       `INSERT INTO kyc_submissions (user_id, verification_results, updated_at)
        VALUES ($1, jsonb_build_object($2::text, $3::jsonb), NOW())

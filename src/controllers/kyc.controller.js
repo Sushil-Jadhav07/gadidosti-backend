@@ -109,19 +109,25 @@ const submitKyc = async (req, res, next) => {
   }
 };
 
-// ─── Client-only auto-finalize ───────────────────────────────────────────────────
-// Drivers/brokers type document numbers + upload photos and explicitly hit Submit, which is when
-// auto-verify gets evaluated (see submitKyc above). A client has none of that — just the
-// automated checks themselves (pan/aadhaar/gst, no manual review ever needed since there's
-// nothing for a human reviewer to look at) — so there's no natural "Submit" moment. Each client
-// verify endpoint below calls this right after recording its own result instead: once either
-// path in isKycSatisfied is verified, it finalizes the submission the same way submitKyc would,
-// with no extra click required. No-op for every other role.
-const maybeAutoFinalizeClientKyc = async (req) => {
-  if (req.user.role !== 'client') return;
+// ─── Auto-finalize on every verify, not just Submit ──────────────────────────────
+// Originally client-only: drivers/brokers type document numbers + upload photos and explicitly
+// hit Submit, which is when submitKyc's own auto-verify runs — a client has no such moment (just
+// the automated checks themselves, nothing for a human reviewer to look at), so each client
+// verify endpoint called this directly instead.
+//
+// Generalized to every role after finding real driver accounts stuck on kyc_status='submitted'
+// with verification_results already showing ALL required checks 'verified' — DigiLocker
+// completion (getDigilockerStatus below) already called this for every role, but the old
+// client-only guard made that call a silent no-op for driver/broker, so a driver who verified
+// everything through DigiLocker in one go (no separate manual Submit tap in between) stayed
+// stuck indefinitely with data that already satisfied isKycSatisfied. Submit-triggered
+// auto-verify for driver/broker (submitKyc above) still exists and still works the same; this
+// just means neither role actually depends on remembering to tap Submit once every automated
+// check already came back verified.
+const maybeAutoFinalizeKyc = async (req) => {
   const submission = await KycModel.findByUserId(req.user.id);
   const results = submission?.verification_results || {};
-  if (!isKycSatisfied('client', results)) return;
+  if (!isKycSatisfied(req.user.role, results)) return;
 
   await KycModel.upsertSubmission(req.user.id, submission?.documents || {});
   await KycModel.autoVerify(req.user.id);
@@ -136,7 +142,7 @@ const maybeAutoFinalizeClientKyc = async (req) => {
     message: 'Your verification is complete. You now have full access to the platform.',
     type: 'kyc',
   });
-  logger.info(`KYC auto-finalized for client ${req.user.id}`);
+  logger.info(`KYC auto-finalized for ${req.user.role} ${req.user.id}`);
 };
 
 // ─── POST /api/kyc/documents/upload ──────────────────────────────────────────────
@@ -596,7 +602,7 @@ const verifyPan = async (req, res, next) => {
 
     const result = await verificationProvider.verifyPan({ pan, name });
     await KycModel.updateVerificationResult(req.user.id, 'pan', result);
-    await maybeAutoFinalizeClientKyc(req);
+    await maybeAutoFinalizeKyc(req);
 
     await AuditLogModel.log({
       userId: req.user.id, action: 'KYC_PAN_VERIFICATION_ATTEMPTED', entity: 'kyc_submissions',
@@ -621,7 +627,7 @@ const verifyGst = async (req, res, next) => {
 
     const result = await verificationProvider.verifyGst({ gstin });
     await KycModel.updateVerificationResult(req.user.id, 'gst', result);
-    await maybeAutoFinalizeClientKyc(req);
+    await maybeAutoFinalizeKyc(req);
 
     await AuditLogModel.log({
       userId: req.user.id, action: 'KYC_GST_VERIFICATION_ATTEMPTED', entity: 'kyc_submissions',
@@ -713,7 +719,7 @@ const verifyAadhaarOtp = async (req, res, next) => {
 
     const result = await verificationProvider.verifyAadhaarOtp({ refId: ref_id, otp });
     await KycModel.updateVerificationResult(req.user.id, 'aadhaar', result);
-    await maybeAutoFinalizeClientKyc(req);
+    await maybeAutoFinalizeKyc(req);
 
     await AuditLogModel.log({
       userId: req.user.id, action: 'KYC_AADHAAR_VERIFICATION_ATTEMPTED', entity: 'kyc_submissions',
@@ -799,7 +805,7 @@ const getDigilockerStatus = async (req, res, next) => {
         });
       }
     }
-    await maybeAutoFinalizeClientKyc(req);
+    await maybeAutoFinalizeKyc(req);
 
     await AuditLogModel.log({
       userId: req.user.id, action: 'KYC_DIGILOCKER_COMPLETED', entity: 'kyc_submissions',
