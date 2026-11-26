@@ -47,6 +47,12 @@ const projectTruck = (row) => ({
   // route map. Null whenever the device never reported one (e.g. stationary).
   heading: row.driver_heading != null ? Number(row.driver_heading) : null,
   lastLocationAt: row.driver_last_location_at || null,
+  // Null on most trucks (not every truck has a physical tracker yet) — see tracking.controller.js
+  // / TruckModel.setGpsDevice. Exposed here so the admin dashboard's gps_owner Truck Access
+  // picker (Users.jsx) can show/filter to only trucks that actually have a device linked;
+  // granting a gps_owner a truck with no device here would be a no-op with nothing to see.
+  gpsDeviceImei: row.gps_device_imei || null,
+  gpsDeviceName: row.gps_device_name || null,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
