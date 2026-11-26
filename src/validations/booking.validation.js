@@ -126,8 +126,9 @@ const createBookingValidation = [
   body('billing_party_gstin').optional({ nullable: true, checkFalsy: true }).trim()
     .matches(GST_REGEX).withMessage('billing_party_gstin must be a valid 15-character GSTIN'),
 
-  // E-Way Bill number — mandatory for every booking (admin's explicit choice, not threshold-
-  // based); the controller 422s if it's missing, this just format-checks it when present.
+  // E-Way Bill number — optional at booking creation (the client often doesn't have one yet
+  // this far ahead of pickup); becomes mandatory from the driver at pickup instead if still
+  // missing by then — see trip.controller.js's updateTripStatus.
   body('eway_bill_number').optional({ nullable: true, checkFalsy: true }).trim().isLength({ max: 30 }),
 ];
 

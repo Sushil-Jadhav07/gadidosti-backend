@@ -201,6 +201,10 @@ const projectTrip = async (row, timeline) => {
   id: row.id,
   bookingId: row.booking_id,
   bookingNumber: row.booking_number,
+  // Null until either the client supplies one at booking time or the driver supplies one at
+  // pickup (see updateTripStatus) — the driver app uses this to decide whether its Confirm
+  // Pickup modal needs its own E-Way Bill input, or can skip straight to the pickup code.
+  ewayBillNumber: row.eway_bill_number || null,
   status: row.status,
   broker: row.broker_name || null,
   brokerPhone: row.broker_phone || null,
@@ -506,7 +510,7 @@ const getTripByBooking = async (req, res, next) => {
 const updateTripStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { status, pickup_otp } = req.body;
+    const { status, pickup_otp, eway_bill_number } = req.body;
 
     const trip = await TripModel.findById(id);
     if (!trip) return errorResponse(res, 404, 'Trip not found');
@@ -546,6 +550,19 @@ const updateTripStatus = async (req, res, next) => {
       } else if (!pickup_otp || String(pickup_otp).trim() !== trip.pickup_otp_code) {
         return errorResponse(res, 409, 'Ask the customer for their pickup code and enter it to confirm pickup.');
       }
+    }
+
+    // E-Way Bill number — optional at booking creation now (the client often doesn't have one
+    // yet that far ahead), but mandatory by the time cargo is actually picked up, since the
+    // physical movement itself needs to be covered. Only asked of the driver if the client never
+    // supplied one at booking time — trip.eway_bill_number is joined straight from the booking
+    // (see trip.model.js's SELECT_WITH_JOINS), so this never re-prompts for a value that's
+    // already there. Same driver-only, picked_up-only scope as the pickup OTP check above.
+    if (req.user.role === 'driver' && status === 'picked_up' && !trip.eway_bill_number) {
+      if (!eway_bill_number || !String(eway_bill_number).trim()) {
+        return errorResponse(res, 409, 'E-Way Bill number is required to confirm pickup.', { code: 'EWAY_BILL_REQUIRED' });
+      }
+      await BookingModel.update(trip.booking_id, { eway_bill_number: String(eway_bill_number).trim() });
     }
 
     // A trip with extra loading/unloading stops (trips.stops beyond the base [pickup, drop]

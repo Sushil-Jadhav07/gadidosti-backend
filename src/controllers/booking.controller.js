@@ -1372,10 +1372,10 @@ const createBooking = async (req, res, next) => {
     if (billed_to === 'receiver' && (!billing_party_name || !billing_party_gstin)) {
       return errorResponse(res, 422, 'Supplier Name and GST Number are required when the receiver is paying', { code: 'BILLING_PARTY_REQUIRED' });
     }
-    // Mandatory for every booking (admin's explicit choice, not threshold-based).
-    if (!eway_bill_number) {
-      return errorResponse(res, 422, 'E-Way Bill number is required', { code: 'EWAY_BILL_REQUIRED' });
-    }
+    // No longer mandatory here — a client often doesn't have one yet this far ahead of pickup.
+    // Still collected if the client already has it (kept on the booking either way), but it's
+    // the driver who's now required to supply one at pickup if it's still missing by then — see
+    // trip.controller.js's updateTripStatus, the 'picked_up' transition.
 
     let amount = providedAmount;
     let pricingBreakdown = null;
