@@ -9,6 +9,10 @@ const logger = require('../../utils/logger');
 const BASE_URL = 'https://pullapi-s1.track360.co.in/api/v1/auth/pull_api';
 const REQUEST_TIMEOUT_MS = 8000;
 
+// The vendor's single-device lookups (by name or IMEI) return `data` as a one-element array
+// instead of a plain object — "all devices" doesn't have this quirk, only these two.
+const unwrapSingleDevice = (data) => (Array.isArray(data) ? data[0] || null : data || null);
+
 const getJson = async (params) => {
   const url = `${BASE_URL}?${new URLSearchParams({
     username: process.env.BOLT_API_USERNAME,
@@ -56,7 +60,14 @@ class BoltTrackingProvider {
         logger.warn(`Bolt pull API (device by name "${name}") returned status=${data.status}: ${data.message}`);
         return null;
       }
-      return data.data || null;
+      // The vendor wraps even a single-device lookup's result in an array — unwrapped here, once,
+      // so every caller (tracking.controller.js's withLinkedTruck/cacheDevice/assertAllowed, all
+      // of which read device.deviceImei directly) gets a plain object or null, never an array
+      // with no .deviceImei of its own. Previously left wrapped and silently tolerated by callers
+      // that just skipped caching/truck-linking on a falsy .deviceImei — until assertAllowed
+      // (added for gps_owner's device-access scoping) started treating that same falsy read as
+      // "not in the allowed set," 404ing a device a gps_owner genuinely had been granted.
+      return unwrapSingleDevice(data.data);
     } catch (err) {
       logger.error(`Bolt pull API (device by name "${name}") request failed: ${err.message}`);
       return null;
@@ -72,7 +83,7 @@ class BoltTrackingProvider {
         logger.warn(`Bolt pull API (device by IMEI "${imei}") returned status=${data.status}: ${data.message}`);
         return null;
       }
-      return data.data || null;
+      return unwrapSingleDevice(data.data);
     } catch (err) {
       logger.error(`Bolt pull API (device by IMEI "${imei}") request failed: ${err.message}`);
       return null;
