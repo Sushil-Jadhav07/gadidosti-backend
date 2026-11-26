@@ -1,10 +1,15 @@
-# GST Invoice, Billing Party (RCM) & E-Way Bill — Flutter (`SSK_Cargo`) Guide
+# GST Invoice & Billing Party (RCM) — Flutter (`SSK_Cargo`) Guide
 
 For the Flutter app developer. Base URL: `https://apigadidosti.asynk.in`. Every response is
 `{ success, message, data }` unless noted.
 
 Two changes landed together: a GST-compliant tax invoice (server-side only, nothing to build),
-and two new required booking-wizard fields (Who Pays GST, E-Way Bill) that **do** need building.
+and one new required booking-wizard field (Who Pays GST) that **does** need building.
+
+E-Way Bill used to be covered here too, as a mandatory Step 2 field — that's now its own guide,
+`EWAY_BILL_MOVED_TO_PICKUP_FLUTTER_GUIDE.md`, since the requirement changed (no longer mandatory
+at booking; required from the driver at pickup instead, only if the client didn't supply one).
+Nothing about it is in this guide anymore — read that one instead.
 
 ## Part 1 — GST-compliant invoice (no app changes needed)
 
@@ -50,21 +55,22 @@ Number inputs instead. Whatever is submitted — picked or freshly typed — is 
 server-side the moment the booking is created, so it's available in this list on the *next*
 booking without any separate "save" action from your app.
 
-### Sending it — `POST /api/bookings` gains three fields
+### Sending it — `POST /api/bookings` gains two fields
 
 ```json
 {
   "billed_to": "self",
   "billing_party_name": "Receiver Co Pvt Ltd",
-  "billing_party_gstin": "07CMFPS3661A1Z6",
-  "eway_bill_number": "123456789012"
+  "billing_party_gstin": "07CMFPS3661A1Z6"
 }
 ```
 - `billed_to`: `"self"` or `"receiver"`. Omit entirely (or send `"self"`) for the unchanged
   default flow.
 - `billing_party_name` / `billing_party_gstin`: **only send these when `billed_to` is
   `"receiver"`** — omit both otherwise.
-- `eway_bill_number`: see Part 3 — always required, independent of `billed_to`.
+
+(`eway_bill_number` is also a field on this same endpoint, but it's optional and belongs to the
+separate E-Way Bill guide, not this one.)
 
 ### Validation — new error codes from `POST /api/bookings`
 
@@ -75,34 +81,19 @@ Returned (`422`) if `billed_to` is `"receiver"` but either field is missing — 
 Next-step button the same way (both fields non-empty) so this is a fallback, not the usual path,
 same pattern as every other required-field code in this app.
 
-## Part 3 — Mandatory E-Way Bill (Step 2, new, required for every booking)
-
-A single required text field, **unconditional** — not threshold-based, applies to every booking
-regardless of `billed_to` or anything else. Add it to the load-details step, e.g. right under
-Material Type.
-
-```json
-{ "eway_bill_number": "123456789012" }
-```
-Missing it 422s:
-```json
-{ "success": false, "message": "E-Way Bill number is required", "errors": { "code": "EWAY_BILL_REQUIRED" } }
-```
-No specific format is enforced server-side beyond "non-empty" — don't over-validate on your end
-either, a plain required text input is enough.
-
 ## What's in the booking response now
 
-`GET`/`POST` booking responses (the `booking` object) gained four read-only fields, useful if you
-show a booking-detail summary:
+`GET`/`POST` booking responses (the `booking` object) gained three read-only fields relevant to
+this guide, useful if you show a booking-detail summary:
 ```json
 {
   "billedTo": "receiver",
   "billingPartyName": "Receiver Co Pvt Ltd",
-  "billingPartyGstin": "07CMFPS3661A1Z6",
-  "ewayBillNumber": "123456789012"
+  "billingPartyGstin": "07CMFPS3661A1Z6"
 }
 ```
+(`ewayBillNumber` is also present on this same object — see the separate E-Way Bill guide for what
+it means and when it's set.)
 
 ## What to build in `SSK_Cargo`
 
@@ -110,10 +101,9 @@ show a booking-detail summary:
    `GET /api/billing-parties` once, show saved parties as chips + "Add New", and require both
    Supplier Name + GST Number (format-check the GSTIN client-side the same way you already do for
    KYC GST verification) before allowing Next.
-2. **Step 2**: one new required text field, E-Way Bill No. — block Next until it's non-empty.
-3. **Booking submit**: include `billed_to` always, `billing_party_name`/`billing_party_gstin`
-   only when `billed_to` is `"receiver"`, and `eway_bill_number` always. Handle
-   `BILLING_PARTY_REQUIRED`/`EWAY_BILL_REQUIRED` as a fallback toast (your own pre-submit
-   validation should make these rare).
-4. **Nothing to build for the invoice itself** — Part 1 is entirely server-side; your existing
+2. **Booking submit**: include `billed_to` always, and `billing_party_name`/`billing_party_gstin`
+   only when `billed_to` is `"receiver"`. Handle `BILLING_PARTY_REQUIRED` as a fallback toast
+   (your own pre-submit validation should make this rare).
+3. **Nothing to build for the invoice itself** — Part 1 is entirely server-side; your existing
    "Download Invoice" call just returns a different-looking PDF.
+4. **E-Way Bill** — see the separate guide, not this one.
