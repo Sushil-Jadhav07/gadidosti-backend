@@ -216,9 +216,9 @@ const updateUserStatus = async (req, res, next) => {
 };
 
 // ─── PATCH /api/admin/users/:id/permissions ───────────────────────────────────
-// admin-only (never 'staff' — see auth.routes wiring) — a staff member must never be able to
-// grant page access, including to themselves. `pages` is validated against the known page-key
-// whitelist by updateUserPagePermissionsValidation before this runs.
+// admin-only (never 'staff'/'gps_owner' — see auth.routes wiring) — neither of those account
+// types must ever be able to grant page access, including to themselves. `pages` is validated
+// against the known page-key whitelist by updateUserPagePermissionsValidation before this runs.
 const updateUserPagePermissions = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -226,8 +226,8 @@ const updateUserPagePermissions = async (req, res, next) => {
 
     const targetUser = await UserModel.findById(id);
     if (!targetUser) return errorResponse(res, 404, 'User not found');
-    if (targetUser.role !== 'staff') {
-      return errorResponse(res, 400, 'Page access only applies to staff accounts — admin already has full access');
+    if (!['staff', 'gps_owner'].includes(targetUser.role)) {
+      return errorResponse(res, 400, 'Page access only applies to staff/gps_owner accounts — admin already has full access');
     }
 
     const updated = await UserModel.updatePagePermissions(id, pages);
@@ -241,7 +241,7 @@ const updateUserPagePermissions = async (req, res, next) => {
       ipAddress: req.ip,
     });
 
-    logger.info(`Admin ${req.user.id} set staff ${id}'s page access to: ${pages.join(', ') || '(none)'}`);
+    logger.info(`Admin ${req.user.id} set ${targetUser.role} ${id}'s page access to: ${pages.join(', ') || '(none)'}`);
     return successResponse(res, 200, 'Page access updated', { user: updated });
   } catch (err) {
     next(err);

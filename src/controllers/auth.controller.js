@@ -290,14 +290,17 @@ const registerAdmin = async (req, res, next) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // Admin/staff accounts are created as active + verified immediately (no OTP needed).
-    // 'staff' has no permission differences from 'admin' yet — see db/48add_staff_role.sql.
+    // Admin/staff/gps_owner accounts are created as active + verified immediately (no OTP
+    // needed). 'staff' and 'gps_owner' are both page-permission-scoped the same way (see
+    // requireAdminPage) — gps_owner has no deeper mechanical difference from staff, it's just
+    // the label an admin picks when they intend to only ever grant the 'tracking' page.
     const result = await UserModel.createAdmin({ name, phone, email, passwordHash, role });
     notifyAdminOfNewAccount(result);
 
+    const roleLabel = role === 'staff' ? 'Staff' : role === 'gps_owner' ? 'GPS Owner' : 'Admin';
     await AuditLogModel.log({
       userId: req.user.id,
-      action: role === 'staff' ? 'STAFF_CREATED' : 'ADMIN_CREATED',
+      action: role === 'staff' ? 'STAFF_CREATED' : role === 'gps_owner' ? 'GPS_OWNER_CREATED' : 'ADMIN_CREATED',
       entity: 'users',
       entityId: result.id,
       meta: { created_by: req.user.email, role, new_user_email: email, new_user_phone: phone },
@@ -305,7 +308,7 @@ const registerAdmin = async (req, res, next) => {
     });
 
     logger.info(`New ${role} created by ${req.user.email}: ${email || phone}`);
-    return successResponse(res, 201, `${role === 'staff' ? 'Staff' : 'Admin'} account created successfully`, { user: result });
+    return successResponse(res, 201, `${roleLabel} account created successfully`, { user: result });
   } catch (err) {
     next(err);
   }

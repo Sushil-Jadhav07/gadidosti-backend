@@ -5,7 +5,7 @@ const logger = require('./logger');
 // ever needs to change without a code deploy.
 const ADMIN_NOTIFICATION_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL || 'admin@gadidost.com';
 
-const ROLE_LABEL = { client: 'Client', broker: 'Broker', driver: 'Driver', admin: 'Admin', staff: 'Staff' };
+const ROLE_LABEL = { client: 'Client', broker: 'Broker', driver: 'Driver', admin: 'Admin', staff: 'Staff', gps_owner: 'GPS Owner' };
 
 // EMAIL_PROVIDER=fake (the default until SMTP_HOST/SMTP_USER/SMTP_PASSWORD/EMAIL_FROM are set in
 // .env) just logs instead of sending — see providers/email/index.js. Both functions below are

@@ -558,8 +558,8 @@ router.patch('/admin/users/:id/status', authenticate, authorize('admin', 'staff'
  * /api/admin/users/{id}/permissions:
  *   patch:
  *     tags: [Admin Management]
- *     summary: Set which admin-dashboard pages a staff account can access
- *     description: Admin-only, cannot be granted to staff itself — a staff member must never be able to grant page access, including to their own account. Replaces the target's full page list (not a merge). Target must have role='staff'; has no effect on an admin account (which always has full access).
+ *     summary: Set which admin-dashboard pages a staff/gps_owner account can access
+ *     description: Admin-only, cannot be granted to staff/gps_owner itself — neither must ever be able to grant page access, including to their own account. Replaces the target's full page list (not a merge). Target must have role='staff' or 'gps_owner'; has no effect on an admin account (which always has full access).
  *     security:
  *       - BearerAuth: []
  *     parameters:

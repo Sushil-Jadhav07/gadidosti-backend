@@ -190,13 +190,13 @@ class UserModel {
     return result.rows[0] || null;
   }
 
-  // Which admin-dashboard pages a 'staff' account can use — see auth.middleware.js's
-  // requireAdminPage. role='staff' guard is defensive: this column is a no-op for 'admin'
-  // anyway (never checked), but should never silently get set on one by mistake.
+  // Which admin-dashboard pages a 'staff'/'gps_owner' account can use — see
+  // auth.middleware.js's requireAdminPage. role guard is defensive: this column is a no-op for
+  // 'admin' anyway (never checked), but should never silently get set on one by mistake.
   static async updatePagePermissions(id, pages) {
     const result = await pool.query(
       `UPDATE users SET page_permissions = $1::jsonb, updated_at = NOW()
-       WHERE id = $2 AND role = 'staff'
+       WHERE id = $2 AND role IN ('staff', 'gps_owner')
        RETURNING id, name, email, phone, role, page_permissions, updated_at`,
       [JSON.stringify(pages), id]
     );

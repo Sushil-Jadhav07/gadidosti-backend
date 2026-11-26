@@ -61,13 +61,17 @@ const authorize = (...roles) => {
 
 // Gates an admin-dashboard page (or, for an endpoint shared by more than one page — e.g.
 // GET /vehicles/trucks backs both the Trucks page and the Brokers page's fleet count — any of
-// several pages) for the 'staff' role. See db/58staff_page_permissions.sql. Only ever intercepts
-// role === 'staff'; every other role (admin, broker, driver, client) passes straight through,
-// since authorize(...) upstream already decided which roles reach this middleware at all. That's
-// what makes it safe to append to routes shared with other roles (e.g.
-// authorize('broker', 'admin', 'staff') truck/driver routes) without touching their behavior.
+// several pages) for a page-permission-scoped role. See db/58staff_page_permissions.sql. 'staff'
+// and 'gps_owner' both work this way (same page_permissions column, same JSONB array) — a
+// gps_owner account is really just a staff-style account whoever creates it is expected to only
+// ever grant the 'tracking' page, not a separately-modeled role. Only ever intercepts those two
+// roles; every other role (admin, broker, driver, client) passes straight through, since
+// authorize(...) upstream already decided which roles reach this middleware at all. That's what
+// makes it safe to append to routes shared with other roles (e.g. authorize('broker', 'admin',
+// 'staff') truck/driver routes) without touching their behavior.
+const PAGE_PERMISSION_ROLES = ['staff', 'gps_owner'];
 const requireAdminPage = (...pageKeys) => (req, res, next) => {
-  if (req.user.role !== 'staff') return next();
+  if (!PAGE_PERMISSION_ROLES.includes(req.user.role)) return next();
   const granted = Array.isArray(req.user.page_permissions) ? req.user.page_permissions : [];
   if (pageKeys.some((key) => granted.includes(key))) return next();
   return errorResponse(res, 403, "You don't have access to this page. Ask an admin to grant it.");

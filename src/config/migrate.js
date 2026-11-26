@@ -1737,6 +1737,29 @@ const runMigrations = async (client) => {
       ALTER TABLE bookings ADD COLUMN IF NOT EXISTS search_timeout_notified_at TIMESTAMPTZ;
     `);
 
+    // ── GPS_OWNER ROLE ──
+    // A third admin-dashboard role alongside 'admin'/'staff' — same page-permission mechanism as
+    // 'staff' (see requireAdminPage, hasPageAccess), just a distinct label for an account meant
+    // to only ever be granted the 'tracking' page, for whoever manages the GPS tracker fleet.
+    // Own client.query() call — ALTER TYPE ... ADD VALUE cannot be used in the same transaction
+    // as a statement that might reference the new value (same reasoning as 'staff'/'bot' above).
+    await client.query(`
+      ALTER TYPE user_role ADD VALUE IF NOT EXISTS 'gps_owner';
+    `);
+
+    // ── GPS DEVICE <-> TRUCK LINK ──
+    // Bolt's pull API only ever matches by tracker name or vehicle IMEI (BoltTrackingProvider) —
+    // there was no stored link from a device back to one of our own trucks at all before this,
+    // so "which of our trucks is this blip on the map" was unanswerable without manually cross-
+    // referencing registration numbers by eye. Nullable (most trucks have no GPS unit yet); a
+    // partial unique index (not a column-level UNIQUE) so multiple NULLs are allowed but two
+    // trucks can never silently claim the same physical device.
+    await client.query(`
+      ALTER TABLE trucks ADD COLUMN IF NOT EXISTS gps_device_imei TEXT;
+      ALTER TABLE trucks ADD COLUMN IF NOT EXISTS gps_device_name TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_trucks_gps_device_imei ON trucks(gps_device_imei) WHERE gps_device_imei IS NOT NULL;
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

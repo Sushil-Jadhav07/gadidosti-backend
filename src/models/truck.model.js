@@ -76,7 +76,26 @@ class TruckModel {
   }
 
   static async findByRegistration(registration) {
-    const result = await pool.query(`SELECT id FROM trucks WHERE registration = $1`, [registration]);
+    const result = await pool.query(`SELECT id, registration, gps_device_imei FROM trucks WHERE registration = $1`, [registration]);
+    return result.rows[0] || null;
+  }
+
+  // Which truck (if any) a given tracker IMEI is currently linked to — the other direction of
+  // setGpsDevice below, used to merge a truck's registration onto a live device reading (see
+  // tracking.controller.js).
+  static async findByGpsImei(imei) {
+    if (!imei) return null;
+    const result = await pool.query(`SELECT id, registration FROM trucks WHERE gps_device_imei = $1`, [imei]);
+    return result.rows[0] || null;
+  }
+
+  // Deliberately a plain SET, not update()'s COALESCE pattern — unlinking needs to actually
+  // write NULL, which COALESCE can never do. imei/name null together clears any existing link.
+  static async setGpsDevice(truckId, { imei, name }) {
+    const result = await pool.query(
+      `UPDATE trucks SET gps_device_imei = $1, gps_device_name = $2, updated_at = NOW() WHERE id = $3 RETURNING *`,
+      [imei || null, name || null, truckId]
+    );
     return result.rows[0] || null;
   }
 

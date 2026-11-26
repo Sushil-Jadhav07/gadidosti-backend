@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
 
-const { listDevices, getDeviceByName, getDeviceByImei } = require('../controllers/tracking.controller');
+const { listDevices, getDeviceByName, getDeviceByImei, linkDeviceToTruck } = require('../controllers/tracking.controller');
 const { authenticate, authorize, requireAdminPage } = require('../middleware/auth.middleware');
+const { linkDeviceToTruckValidation } = require('../validations/tracking.validation');
+const validate = require('../middleware/validate.middleware');
 
 /**
  * @swagger
@@ -25,7 +27,7 @@ const { authenticate, authorize, requireAdminPage } = require('../middleware/aut
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/tracking/devices', authenticate, authorize('admin', 'staff'), requireAdminPage('tracking'), listDevices);
+router.get('/tracking/devices', authenticate, authorize('admin', 'staff', 'gps_owner'), requireAdminPage('tracking'), listDevices);
 
 /**
  * @swagger
@@ -53,7 +55,7 @@ router.get('/tracking/devices', authenticate, authorize('admin', 'staff'), requi
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/tracking/devices/name/:name', authenticate, requireAdminPage('tracking'), getDeviceByName);
+router.get('/tracking/devices/name/:name', authenticate, authorize('admin', 'staff', 'gps_owner'), requireAdminPage('tracking'), getDeviceByName);
 
 /**
  * @swagger
@@ -81,6 +83,46 @@ router.get('/tracking/devices/name/:name', authenticate, requireAdminPage('track
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/tracking/devices/imei/:imei', authenticate, requireAdminPage('tracking'), getDeviceByImei);
+router.get('/tracking/devices/imei/:imei', authenticate, authorize('admin', 'staff', 'gps_owner'), requireAdminPage('tracking'), getDeviceByImei);
+
+/**
+ * @swagger
+ * /api/tracking/devices/{imei}/link-truck:
+ *   patch:
+ *     tags: [Tracking]
+ *     summary: Link (or, with registration omitted, unlink) a GPS tracker to one of our trucks
+ *     description: Looks the truck up by registration number — there's no separate truck picker; gps_owner accounts never get Trucks-page access to browse one.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: imei
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               registration: { type: string, description: "Omit or send empty to unlink whatever truck currently has this device" }
+ *     responses:
+ *       200:
+ *         description: Device linked/unlinked
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       404:
+ *         description: No truck found with this registration number
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *       409:
+ *         description: This device is already linked to another truck
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.patch('/tracking/devices/:imei/link-truck', authenticate, authorize('admin', 'staff', 'gps_owner'), requireAdminPage('tracking'), linkDeviceToTruckValidation, validate, linkDeviceToTruck);
 
 module.exports = router;
