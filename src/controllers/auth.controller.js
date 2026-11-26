@@ -12,6 +12,7 @@ const logger = require('../utils/logger');
 const { getSmsProvider } = require('../providers/sms');
 const { getIO } = require('../realtime/socket');
 const pool = require('../config/db');
+const { notifyAdminOfNewAccount, sendWelcomeEmailIfFirstLogin } = require('../utils/accountEmails');
 
 const smsProvider = getSmsProvider();
 
@@ -110,6 +111,7 @@ const register = async (req, res, next) => {
 
     const passwordHash = await bcrypt.hash(password, 12);
     const user = await UserModel.create({ name, phone, email, passwordHash, role, isPhoneVerified: true });
+    notifyAdminOfNewAccount(user);
 
     await AuditLogModel.log({
       userId: user.id,
@@ -189,6 +191,7 @@ const registerDriverWithTruck = async (req, res, next) => {
     } finally {
       client.release();
     }
+    notifyAdminOfNewAccount(user);
 
     await AuditLogModel.log({
       userId: user.id,
@@ -243,6 +246,7 @@ const login = async (req, res, next) => {
       ipAddress: req.ip,
     });
 
+    sendWelcomeEmailIfFirstLogin(user);
     await UserModel.updateLastLogin(user.id);
 
     await AuditLogModel.log({
@@ -289,6 +293,7 @@ const registerAdmin = async (req, res, next) => {
     // Admin/staff accounts are created as active + verified immediately (no OTP needed).
     // 'staff' has no permission differences from 'admin' yet — see db/48add_staff_role.sql.
     const result = await UserModel.createAdmin({ name, phone, email, passwordHash, role });
+    notifyAdminOfNewAccount(result);
 
     await AuditLogModel.log({
       userId: req.user.id,
@@ -573,6 +578,7 @@ const googleSignIn = async (req, res, next) => {
     if (!user) {
       user = await UserModel.createGoogleUser({ name, email, googleId, profileImage: picture, role });
       isNewUser = true;
+      notifyAdminOfNewAccount(user);
       await AuditLogModel.log({
         userId: user.id,
         action: 'GOOGLE_REGISTER',
@@ -599,6 +605,7 @@ const googleSignIn = async (req, res, next) => {
       ipAddress: req.ip,
     });
 
+    sendWelcomeEmailIfFirstLogin(user);
     await UserModel.updateLastLogin(user.id);
 
     await AuditLogModel.log({
@@ -681,6 +688,7 @@ const firebasePhoneLogin = async (req, res, next) => {
       ipAddress: req.ip,
     });
 
+    sendWelcomeEmailIfFirstLogin(user);
     await UserModel.updateLastLogin(user.id);
 
     await AuditLogModel.log({
