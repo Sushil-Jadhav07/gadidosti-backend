@@ -1,11 +1,22 @@
 const BoltTrackingProvider = require('../providers/tracking/BoltTrackingProvider');
 const TrackingLastKnownModel = require('../models/trackingLastKnown.model');
 const TruckModel = require('../models/truck.model');
+const GpsOwnerTruckModel = require('../models/gpsOwnerTruck.model');
 const AuditLogModel = require('../models/auditLog.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
 const provider = new BoltTrackingProvider();
+
+// null (unscoped) for admin/staff — they see every device, same as always. For a gps_owner,
+// the set of IMEIs their granted trucks are actually linked to (see Users.jsx's Truck Access
+// editor / GpsOwnerTruckModel) — a granted truck with no GPS device linked yet contributes
+// nothing, same as any other unlinked truck.
+const getAllowedImeis = async (req) => {
+  if (req.user.role !== 'gps_owner') return null;
+  const trucks = await GpsOwnerTruckModel.findGrantedTrucks(req.user.id);
+  return new Set(trucks.map((t) => t.gps_device_imei).filter(Boolean));
+};
 
 // Merges "which of our trucks (if any) this device is linked to" onto a raw device reading —
 // the Bolt vendor has no concept of our trucks at all, so this is the only place that join ever
@@ -56,27 +67,39 @@ const projectCached = (row) => ({
 });
 
 // ─── GET /api/tracking/devices ────────────────────────────────────────────────
-// Admin/staff/gps_owner — the full device list is fleet-wide, not scoped to any one
-// broker/driver (gps_owner is scoped to this page at all via requireAdminPage, not to a subset
-// of devices within it — there's no concept of "my devices" vs "their devices", just one shared
-// tracker fleet).
+// Admin/staff: the full device list, fleet-wide, unchanged. gps_owner: filtered down to only
+// the devices linked to trucks an admin has explicitly granted them (see getAllowedImeis) — a
+// gps_owner account sees nothing outside that set, not the whole fleet.
 const listDevices = async (req, res, next) => {
   try {
+    const allowedImeis = await getAllowedImeis(req);
     const devices = await provider.getAllDevices();
     if (devices === null) {
       // Vendor call failed — fall back to whatever positions we've cached from earlier
       // successful polls, rather than showing nothing at all.
       const cached = await TrackingLastKnownModel.findAll();
       if (!cached.length) return errorResponse(res, 502, 'Failed to fetch devices from the tracking provider');
-      const withTrucks = await Promise.all(cached.map(projectCached).map(withLinkedTruck));
+      let withTrucks = await Promise.all(cached.map(projectCached).map(withLinkedTruck));
+      if (allowedImeis) withTrucks = withTrucks.filter((d) => allowedImeis.has(d.deviceImei));
       return successResponse(res, 200, 'Devices fetched (cached — live tracking unavailable)', { devices: withTrucks, source: 'cached' });
     }
     devices.forEach(cacheDevice);
-    const withTrucks = await Promise.all(devices.map(withLinkedTruck));
+    let withTrucks = await Promise.all(devices.map(withLinkedTruck));
+    if (allowedImeis) withTrucks = withTrucks.filter((d) => allowedImeis.has(d.deviceImei));
     return successResponse(res, 200, 'Devices fetched', { devices: withTrucks });
   } catch (err) {
     next(err);
   }
+};
+
+// A gps_owner guessing/typing a URL for an IMEI outside their granted set gets exactly the same
+// 404 as a genuinely nonexistent device — never a 403, so this never confirms a device DOES
+// exist on the fleet, just that it isn't reachable here.
+const assertAllowed = async (req, device) => {
+  if (!device) return device;
+  const allowedImeis = await getAllowedImeis(req);
+  if (allowedImeis && !allowedImeis.has(device.deviceImei)) return null;
+  return device;
 };
 
 // ─── GET /api/tracking/devices/name/:name ─────────────────────────────────────
@@ -86,10 +109,14 @@ const getDeviceByName = async (req, res, next) => {
     if (!device) {
       const cached = await TrackingLastKnownModel.findByName(req.params.name);
       if (!cached) return errorResponse(res, 404, 'Device not found');
-      return successResponse(res, 200, 'Device fetched (cached — live tracking unavailable)', { device: await withLinkedTruck(projectCached(cached)) });
+      const withTruck = await assertAllowed(req, await withLinkedTruck(projectCached(cached)));
+      if (!withTruck) return errorResponse(res, 404, 'Device not found');
+      return successResponse(res, 200, 'Device fetched (cached — live tracking unavailable)', { device: withTruck });
     }
     cacheDevice(device);
-    return successResponse(res, 200, 'Device fetched', { device: await withLinkedTruck(device) });
+    const withTruck = await assertAllowed(req, await withLinkedTruck(device));
+    if (!withTruck) return errorResponse(res, 404, 'Device not found');
+    return successResponse(res, 200, 'Device fetched', { device: withTruck });
   } catch (err) {
     next(err);
   }
@@ -102,20 +129,28 @@ const getDeviceByImei = async (req, res, next) => {
     if (!device) {
       const cached = await TrackingLastKnownModel.findByImei(req.params.imei);
       if (!cached) return errorResponse(res, 404, 'Device not found');
-      return successResponse(res, 200, 'Device fetched (cached — live tracking unavailable)', { device: await withLinkedTruck(projectCached(cached)) });
+      const withTruck = await assertAllowed(req, await withLinkedTruck(projectCached(cached)));
+      if (!withTruck) return errorResponse(res, 404, 'Device not found');
+      return successResponse(res, 200, 'Device fetched (cached — live tracking unavailable)', { device: withTruck });
     }
     cacheDevice(device);
-    return successResponse(res, 200, 'Device fetched', { device: await withLinkedTruck(device) });
+    const withTruck = await assertAllowed(req, await withLinkedTruck(device));
+    if (!withTruck) return errorResponse(res, 404, 'Device not found');
+    return successResponse(res, 200, 'Device fetched', { device: withTruck });
   } catch (err) {
     next(err);
   }
 };
 
 // ─── PATCH /api/tracking/devices/:imei/link-truck ─────────────────────────────
+// admin/staff only (see tracking.routes.js) — which physical device belongs to which truck is a
+// fleet-management concern, distinct from which trucks a given gps_owner is allowed to SEE
+// (that's GpsOwnerTruckModel/Users.jsx's Truck Access editor, admin-only too). A gps_owner that
+// could freely relink devices would undermine its own visibility scoping.
 // Links (or, with registration omitted/blank, unlinks) a GPS tracker IMEI to one of our own
 // trucks by registration number — a plain text lookup rather than a full truck picker, since
-// gps_owner never gets access to the Trucks page to browse one. The IMEI itself comes from the
-// URL (the device the admin/gps_owner is already looking at), never hand-typed twice.
+// there's no separate truck-browsing page this flow needs to duplicate. The IMEI itself comes
+// from the URL (the device the admin is already looking at), never hand-typed twice.
 const linkDeviceToTruck = async (req, res, next) => {
   try {
     const { imei } = req.params;

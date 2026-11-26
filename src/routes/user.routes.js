@@ -10,6 +10,8 @@ const {
   updateUserByAdmin,
   updateUserStatus,
   updateUserPagePermissions,
+  getUserGpsTrucks,
+  updateUserGpsTrucks,
   forceLogoutUser,
   deleteUser,
 } = require('../controllers/user.controller');
@@ -27,6 +29,7 @@ const {
   changePasswordValidation,
   updateUserStatusValidation,
   updateUserPagePermissionsValidation,
+  updateUserGpsTrucksValidation,
 } = require('../validations/auth.validation');
 const { deviceTokenValidation, unregisterDeviceTokenValidation } = require('../validations/notification.validation');
 
@@ -597,6 +600,67 @@ router.patch('/admin/users/:id/status', authenticate, authorize('admin', 'staff'
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
 router.patch('/admin/users/:id/permissions', authenticate, authorize('admin'), updateUserPagePermissionsValidation, validate, updateUserPagePermissions);
+
+/**
+ * @swagger
+ * /api/admin/users/{id}/gps-trucks:
+ *   get:
+ *     tags: [Admin Management]
+ *     summary: Which trucks a gps_owner account is currently granted (admin-only)
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Granted trucks fetched
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       400:
+ *         description: Target isn't a gps_owner account
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ *   patch:
+ *     tags: [Admin Management]
+ *     summary: Set which trucks a gps_owner account can see (admin-only, replaces the full list)
+ *     description: Scopes tracking.controller.js's device endpoints for this account to only these trucks' linked GPS devices — a gps_owner sees nothing outside this list.
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [truck_ids]
+ *             properties:
+ *               truck_ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Truck access updated
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/SuccessResponse' }
+ *       400:
+ *         description: Target isn't a gps_owner account
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/ErrorResponse' }
+ */
+router.get('/admin/users/:id/gps-trucks', authenticate, authorize('admin'), getUserGpsTrucks);
+router.patch('/admin/users/:id/gps-trucks', authenticate, authorize('admin'), updateUserGpsTrucksValidation, validate, updateUserGpsTrucks);
 
 /**
  * @swagger

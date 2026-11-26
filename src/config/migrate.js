@@ -1760,6 +1760,24 @@ const runMigrations = async (client) => {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_trucks_gps_device_imei ON trucks(gps_device_imei) WHERE gps_device_imei IS NOT NULL;
     `);
 
+    // ── GPS_OWNER <-> TRUCK VISIBILITY SCOPE ──
+    // A gps_owner account used to see every device on the whole fleet, same as admin/staff —
+    // this scopes it instead: admin explicitly grants a gps_owner a specific set of trucks (via
+    // Users.jsx's new Truck Access editor), and every tracking endpoint filters to just those
+    // once the caller is a gps_owner (admin/staff are never scoped — this table doesn't apply to
+    // them at all). Many-to-many (not a single column on users) since nothing rules out the same
+    // truck being visible to more than one gps_owner, or one gps_owner having several trucks.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS gps_owner_trucks (
+        gps_owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        truck_id     UUID NOT NULL REFERENCES trucks(id) ON DELETE CASCADE,
+        created_at   TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (gps_owner_id, truck_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_gps_owner_trucks_owner ON gps_owner_trucks(gps_owner_id);
+      CREATE INDEX IF NOT EXISTS idx_gps_owner_trucks_truck ON gps_owner_trucks(truck_id);
+    `);
+
     console.log('✅ Migrations complete!');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);

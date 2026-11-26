@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const UserModel = require('../models/user.model');
 const DriverProfileModel = require('../models/driverProfile.model');
+const GpsOwnerTruckModel = require('../models/gpsOwnerTruck.model');
 const RefreshTokenModel = require('../models/refreshToken.model');
 const AuditLogModel = require('../models/auditLog.model');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -248,6 +249,59 @@ const updateUserPagePermissions = async (req, res, next) => {
   }
 };
 
+// ─── GET /api/admin/users/:id/gps-trucks ───────────────────────────────────────
+// Which trucks a gps_owner account is currently granted — admin-only, used to prefill the Truck
+// Access editor's checkboxes.
+const getUserGpsTrucks = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const targetUser = await UserModel.findById(id);
+    if (!targetUser) return errorResponse(res, 404, 'User not found');
+    if (targetUser.role !== 'gps_owner') {
+      return errorResponse(res, 400, 'Truck access only applies to gps_owner accounts');
+    }
+    const trucks = await GpsOwnerTruckModel.findGrantedTrucks(id);
+    return successResponse(res, 200, 'Granted trucks fetched', { trucks });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─── PATCH /api/admin/users/:id/gps-trucks ─────────────────────────────────────
+// admin-only (never gps_owner itself — an account must never be able to grant itself more
+// trucks than it started with). Replaces the target's full truck list, same "always send the
+// complete desired set" convention as updateUserPagePermissions above — a truck unchecked in the
+// admin UI must actually stop being visible, not just not get re-added.
+const updateUserGpsTrucks = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { truck_ids } = req.body;
+
+    const targetUser = await UserModel.findById(id);
+    if (!targetUser) return errorResponse(res, 404, 'User not found');
+    if (targetUser.role !== 'gps_owner') {
+      return errorResponse(res, 400, 'Truck access only applies to gps_owner accounts');
+    }
+
+    await GpsOwnerTruckModel.setGrantedTrucks(id, truck_ids);
+    const trucks = await GpsOwnerTruckModel.findGrantedTrucks(id);
+
+    await AuditLogModel.log({
+      userId: req.user.id,
+      action: 'GPS_OWNER_TRUCKS_UPDATED',
+      entity: 'users',
+      entityId: id,
+      meta: { truck_ids },
+      ipAddress: req.ip,
+    });
+
+    logger.info(`Admin ${req.user.id} set gps_owner ${id}'s truck access to: ${truck_ids.join(', ') || '(none)'}`);
+    return successResponse(res, 200, 'Truck access updated', { trucks });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── POST /api/admin/users/:id/force-logout ───────────────────────────────────
 // The operational escape hatch for the single-active-session rule on driver logins (see
 // auth.controller.js's hasBlockingDriverSession): if a driver's app was killed/lost
@@ -342,6 +396,8 @@ module.exports = {
   updateUserByAdmin,
   updateUserStatus,
   updateUserPagePermissions,
+  getUserGpsTrucks,
+  updateUserGpsTrucks,
   forceLogoutUser,
   deleteUser,
 };
