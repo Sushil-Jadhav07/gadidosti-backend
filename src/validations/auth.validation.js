@@ -69,10 +69,10 @@ const updateUserPagePermissionsValidation = [
   body('pages.*').isIn(ADMIN_PAGE_KEYS).withMessage(`Each page must be one of: ${ADMIN_PAGE_KEYS.join(', ')}`),
 ];
 
-// ─── PATCH /api/admin/users/:id/gps-trucks ─────────────────────────────────────
-const updateUserGpsTrucksValidation = [
-  body('truck_ids').isArray().withMessage('truck_ids must be an array'),
-  body('truck_ids.*').isUUID().withMessage('Each truck_id must be a valid UUID'),
+// ─── PATCH /api/admin/users/:id/gps-devices ────────────────────────────────────
+const updateUserGpsDevicesValidation = [
+  body('device_imeis').isArray().withMessage('device_imeis must be an array'),
+  body('device_imeis.*').isString().trim().notEmpty().withMessage('Each device_imei must be a non-empty string'),
 ];
 
 module.exports = {
@@ -90,5 +90,5 @@ module.exports = {
   googleSignInValidation,
   updateUserStatusValidation,
   updateUserPagePermissionsValidation,
-  updateUserGpsTrucksValidation,
+  updateUserGpsDevicesValidation,
 };

@@ -1,21 +1,21 @@
 const BoltTrackingProvider = require('../providers/tracking/BoltTrackingProvider');
 const TrackingLastKnownModel = require('../models/trackingLastKnown.model');
 const TruckModel = require('../models/truck.model');
-const GpsOwnerTruckModel = require('../models/gpsOwnerTruck.model');
+const GpsOwnerDeviceModel = require('../models/gpsOwnerDevice.model');
 const AuditLogModel = require('../models/auditLog.model');
 const { successResponse, errorResponse } = require('../utils/response');
 const logger = require('../utils/logger');
 
 const provider = new BoltTrackingProvider();
 
-// null (unscoped) for admin/staff — they see every device, same as always. For a gps_owner,
-// the set of IMEIs their granted trucks are actually linked to (see Users.jsx's Truck Access
-// editor / GpsOwnerTruckModel) — a granted truck with no GPS device linked yet contributes
-// nothing, same as any other unlinked truck.
+// null (unscoped) for admin/staff — they see every device, same as always. For a gps_owner, the
+// set of device IMEIs an admin has explicitly granted (see Users.jsx's Device Access editor /
+// GpsOwnerDeviceModel) — granted directly against the vendor's own device list, with no
+// dependency on whether that device has been linked to one of our truck records.
 const getAllowedImeis = async (req) => {
   if (req.user.role !== 'gps_owner') return null;
-  const trucks = await GpsOwnerTruckModel.findGrantedTrucks(req.user.id);
-  return new Set(trucks.map((t) => t.gps_device_imei).filter(Boolean));
+  const imeis = await GpsOwnerDeviceModel.findGrantedImeis(req.user.id);
+  return new Set(imeis);
 };
 
 // Merges "which of our trucks (if any) this device is linked to" onto a raw device reading —
@@ -144,9 +144,10 @@ const getDeviceByImei = async (req, res, next) => {
 
 // ─── PATCH /api/tracking/devices/:imei/link-truck ─────────────────────────────
 // admin/staff only (see tracking.routes.js) — which physical device belongs to which truck is a
-// fleet-management concern, distinct from which trucks a given gps_owner is allowed to SEE
-// (that's GpsOwnerTruckModel/Users.jsx's Truck Access editor, admin-only too). A gps_owner that
-// could freely relink devices would undermine its own visibility scoping.
+// fleet-management concern, entirely separate from which devices a given gps_owner is allowed to
+// SEE (that's GpsOwnerDeviceModel/Users.jsx's Device Access editor, granted straight by IMEI, no
+// dependency on this link at all). A gps_owner that could freely relink devices would undermine
+// its own visibility scoping anyway, which is why this stays admin/staff only regardless.
 // Links (or, with registration omitted/blank, unlinks) a GPS tracker IMEI to one of our own
 // trucks by registration number — a plain text lookup rather than a full truck picker, since
 // there's no separate truck-browsing page this flow needs to duplicate. The IMEI itself comes

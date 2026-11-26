@@ -91,7 +91,7 @@ router.get('/tracking/devices/imei/:imei', authenticate, authorize('admin', 'sta
  *   patch:
  *     tags: [Tracking]
  *     summary: Link (or, with registration omitted, unlink) a GPS tracker to one of our trucks (admin/staff only)
- *     description: Looks the truck up by registration number — there's no separate truck picker. gps_owner accounts cannot call this; their own visibility is scoped separately via PATCH /api/admin/users/{id}/gps-trucks.
+ *     description: Looks the truck up by registration number — there's no separate truck picker. gps_owner accounts cannot call this; their own visibility is scoped separately via PATCH /api/admin/users/{id}/gps-devices.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -123,7 +123,7 @@ router.get('/tracking/devices/imei/:imei', authenticate, authorize('admin', 'sta
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-// admin/staff only — gps_owner's own visibility is scoped separately (Users.jsx's Truck Access
+// admin/staff only — gps_owner's own visibility is scoped separately (Users.jsx's Device Access
 // editor), and must never be self-expandable by relinking devices onto new trucks.
 router.patch('/tracking/devices/:imei/link-truck', authenticate, authorize('admin', 'staff'), requireAdminPage('tracking'), linkDeviceToTruckValidation, validate, linkDeviceToTruck);
 

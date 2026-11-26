@@ -1760,22 +1760,25 @@ const runMigrations = async (client) => {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_trucks_gps_device_imei ON trucks(gps_device_imei) WHERE gps_device_imei IS NOT NULL;
     `);
 
-    // ── GPS_OWNER <-> TRUCK VISIBILITY SCOPE ──
-    // A gps_owner account used to see every device on the whole fleet, same as admin/staff —
-    // this scopes it instead: admin explicitly grants a gps_owner a specific set of trucks (via
-    // Users.jsx's new Truck Access editor), and every tracking endpoint filters to just those
-    // once the caller is a gps_owner (admin/staff are never scoped — this table doesn't apply to
-    // them at all). Many-to-many (not a single column on users) since nothing rules out the same
-    // truck being visible to more than one gps_owner, or one gps_owner having several trucks.
+    // ── GPS_OWNER <-> DEVICE VISIBILITY SCOPE (replaces the truck-keyed version below) ──
+    // First cut scoped by trucks.id — required a device to already be linked to one of our own
+    // truck records before it could be granted at all, via a separate admin step. In practice
+    // most devices aren't linked yet (the vendor's own tracker name often already looks like a
+    // registration number, e.g. "HR46G8875"), so that picker showed nothing even though Live
+    // Tracking clearly has devices — confusing, and an unnecessary prerequisite. Scoped by the
+    // device's own IMEI instead, granted straight from the same list Live Tracking already shows
+    // (GET /api/tracking/devices) — no linking required first. gps_owner_trucks is dropped
+    // outright rather than kept alongside it: it was never actually used (every grant on it was
+    // empty right up to this change).
+    await client.query(`DROP TABLE IF EXISTS gps_owner_trucks;`);
     await client.query(`
-      CREATE TABLE IF NOT EXISTS gps_owner_trucks (
+      CREATE TABLE IF NOT EXISTS gps_owner_devices (
         gps_owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        truck_id     UUID NOT NULL REFERENCES trucks(id) ON DELETE CASCADE,
+        device_imei  TEXT NOT NULL,
         created_at   TIMESTAMPTZ DEFAULT NOW(),
-        PRIMARY KEY (gps_owner_id, truck_id)
+        PRIMARY KEY (gps_owner_id, device_imei)
       );
-      CREATE INDEX IF NOT EXISTS idx_gps_owner_trucks_owner ON gps_owner_trucks(gps_owner_id);
-      CREATE INDEX IF NOT EXISTS idx_gps_owner_trucks_truck ON gps_owner_trucks(truck_id);
+      CREATE INDEX IF NOT EXISTS idx_gps_owner_devices_owner ON gps_owner_devices(gps_owner_id);
     `);
 
     console.log('✅ Migrations complete!');

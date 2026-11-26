@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const UserModel = require('../models/user.model');
 const DriverProfileModel = require('../models/driverProfile.model');
-const GpsOwnerTruckModel = require('../models/gpsOwnerTruck.model');
+const GpsOwnerDeviceModel = require('../models/gpsOwnerDevice.model');
 const RefreshTokenModel = require('../models/refreshToken.model');
 const AuditLogModel = require('../models/auditLog.model');
 const { successResponse, errorResponse } = require('../utils/response');
@@ -249,54 +249,53 @@ const updateUserPagePermissions = async (req, res, next) => {
   }
 };
 
-// ─── GET /api/admin/users/:id/gps-trucks ───────────────────────────────────────
-// Which trucks a gps_owner account is currently granted — admin-only, used to prefill the Truck
-// Access editor's checkboxes.
-const getUserGpsTrucks = async (req, res, next) => {
+// ─── GET /api/admin/users/:id/gps-devices ──────────────────────────────────────
+// Which device IMEIs a gps_owner account is currently granted — admin-only, used to prefill the
+// Device Access editor's checkboxes.
+const getUserGpsDevices = async (req, res, next) => {
   try {
     const { id } = req.params;
     const targetUser = await UserModel.findById(id);
     if (!targetUser) return errorResponse(res, 404, 'User not found');
     if (targetUser.role !== 'gps_owner') {
-      return errorResponse(res, 400, 'Truck access only applies to gps_owner accounts');
+      return errorResponse(res, 400, 'Device access only applies to gps_owner accounts');
     }
-    const trucks = await GpsOwnerTruckModel.findGrantedTrucks(id);
-    return successResponse(res, 200, 'Granted trucks fetched', { trucks });
+    const deviceImeis = await GpsOwnerDeviceModel.findGrantedImeis(id);
+    return successResponse(res, 200, 'Granted devices fetched', { deviceImeis });
   } catch (err) {
     next(err);
   }
 };
 
-// ─── PATCH /api/admin/users/:id/gps-trucks ─────────────────────────────────────
+// ─── PATCH /api/admin/users/:id/gps-devices ────────────────────────────────────
 // admin-only (never gps_owner itself — an account must never be able to grant itself more
-// trucks than it started with). Replaces the target's full truck list, same "always send the
-// complete desired set" convention as updateUserPagePermissions above — a truck unchecked in the
+// devices than it started with). Replaces the target's full device list, same "always send the
+// complete desired set" convention as updateUserPagePermissions above — a device unchecked in the
 // admin UI must actually stop being visible, not just not get re-added.
-const updateUserGpsTrucks = async (req, res, next) => {
+const updateUserGpsDevices = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { truck_ids } = req.body;
+    const { device_imeis } = req.body;
 
     const targetUser = await UserModel.findById(id);
     if (!targetUser) return errorResponse(res, 404, 'User not found');
     if (targetUser.role !== 'gps_owner') {
-      return errorResponse(res, 400, 'Truck access only applies to gps_owner accounts');
+      return errorResponse(res, 400, 'Device access only applies to gps_owner accounts');
     }
 
-    await GpsOwnerTruckModel.setGrantedTrucks(id, truck_ids);
-    const trucks = await GpsOwnerTruckModel.findGrantedTrucks(id);
+    await GpsOwnerDeviceModel.setGrantedImeis(id, device_imeis);
 
     await AuditLogModel.log({
       userId: req.user.id,
-      action: 'GPS_OWNER_TRUCKS_UPDATED',
+      action: 'GPS_OWNER_DEVICES_UPDATED',
       entity: 'users',
       entityId: id,
-      meta: { truck_ids },
+      meta: { device_imeis },
       ipAddress: req.ip,
     });
 
-    logger.info(`Admin ${req.user.id} set gps_owner ${id}'s truck access to: ${truck_ids.join(', ') || '(none)'}`);
-    return successResponse(res, 200, 'Truck access updated', { trucks });
+    logger.info(`Admin ${req.user.id} set gps_owner ${id}'s device access to: ${device_imeis.join(', ') || '(none)'}`);
+    return successResponse(res, 200, 'Device access updated', { deviceImeis: device_imeis });
   } catch (err) {
     next(err);
   }
@@ -396,8 +395,8 @@ module.exports = {
   updateUserByAdmin,
   updateUserStatus,
   updateUserPagePermissions,
-  getUserGpsTrucks,
-  updateUserGpsTrucks,
+  getUserGpsDevices,
+  updateUserGpsDevices,
   forceLogoutUser,
   deleteUser,
 };

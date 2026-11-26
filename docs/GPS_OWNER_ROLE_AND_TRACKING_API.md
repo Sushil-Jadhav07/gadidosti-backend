@@ -30,28 +30,35 @@ works identically for `staff` and `gps_owner` targets, rejected (`400`) for any 
 
 ### What it can actually do (once granted `tracking`)
 
-- View the live position (list + map) of only the trucks an admin has explicitly granted it —
-  see **Truck Access** below. Not the whole fleet, unlike admin/staff.
+- View the live position (list + map) of only the devices an admin has explicitly granted it —
+  see **Device Access** below. Not the whole fleet, unlike admin/staff.
 - See each granted device's connection status (`online`/`offline`) and last-seen time.
-- See which truck a granted device is linked to — but **cannot** change that link; linking a
-  device to a truck in the first place is admin/staff only (see below).
+- See which truck a granted device is linked to (if any) — but **cannot** change that link;
+  linking a device to a truck in the first place is admin/staff only (see below).
 
 It gets nothing else — no Trucks page, no Users page, no Bookings, nothing beyond what's
 explicitly granted, exactly like a restricted staff account.
 
-### Truck Access — scoping which devices a gps_owner can see
+### Device Access — scoping which devices a gps_owner can see
 
-Unlike `staff`, a `gps_owner` isn't just page-scoped — it's also scoped to a specific *set of
-trucks*, admin-granted. Users → click the gps_owner account → **Truck Access** section (only shown
-for `gps_owner` accounts, right below Page Access) → check which trucks this account should see →
-Save Truck Access. Nothing is granted by default — an unlisted/unchecked gps_owner sees zero
-devices, not the whole fleet.
+Unlike `staff`, a `gps_owner` isn't just page-scoped — it's also scoped to a specific *set of GPS
+devices*, admin-granted, by device IMEI. Users → click the gps_owner account → **Device Access**
+section (only shown for `gps_owner` accounts, right below Page Access) → check which devices this
+account should see → Save Device Access. Nothing is granted by default — an unconfigured
+gps_owner sees zero devices, not the whole fleet.
 
-Backend: `GET`/`PATCH /api/admin/users/{id}/gps-trucks` (admin-only), `{ "truck_ids": [...] }` —
-replaces the full granted set, same "always send the complete desired list" convention as page
-permissions. Stored in a new `gps_owner_trucks` join table (many-to-many: a gps_owner can have
-several trucks, and nothing rules out a truck eventually being shared across more than one
-gps_owner, though that's not a workflow this UI builds toward yet).
+This is deliberately **not** scoped through our own `trucks` records — an earlier version
+required a device to already be linked to one of our trucks (see the link-truck feature below)
+before it could be granted, which was confusing in practice: Live Tracking clearly shows devices
+(the vendor's own tracker names often already look like a registration, e.g. `"HR46G8875"`), but
+none of them had actually been linked yet, so that picker showed nothing despite devices
+obviously existing. Device Access instead lists exactly the same devices `GET
+/api/tracking/devices` already shows — the same list an admin sees on Live Tracking — with no
+linking prerequisite at all.
+
+Backend: `GET`/`PATCH /api/admin/users/{id}/gps-devices` (admin-only), `{ "device_imeis": [...] }`
+— replaces the full granted set, same "always send the complete desired list" convention as page
+permissions. Stored in a `gps_owner_devices` table (gps_owner_id, device_imei).
 
 Every tracking endpoint (list, by-name, by-IMEI) filters to this set for a `gps_owner` caller —
 admin/staff are never scoped by this table at all. A `gps_owner` requesting a device outside their
@@ -94,13 +101,16 @@ shows up this way instead of with a fresh position.
 
 ### New: linking a device to a truck (admin/staff only — not gps_owner)
 
+A separate, purely optional record-keeping feature — "which of our trucks has this physical
+device mounted on it" — entirely independent of a gps_owner's own visibility (that's Device
+Access above, scoped by raw IMEI regardless of whether a truck link exists).
+
 ```
 PATCH /api/tracking/devices/{imei}/link-truck
 { "registration": "MH12AB1234" }
 ```
-- Admin/staff only — deliberately **not** callable by `gps_owner`, which is scoped to a fixed set
-  of trucks (Truck Access above) rather than being able to relink arbitrary devices onto new
-  ones itself.
+- Admin/staff only — deliberately **not** callable by `gps_owner`, which would otherwise be able
+  to expand its own effective reach by relinking devices onto trucks it already has access to.
 - Looks the truck up by registration number (not a picker — there's no separate truck-browsing
   page this needs) and sets that truck's `gps_device_imei`/`gps_device_name` columns.
 - A device already linked to a *different* truck is silently moved — the old truck's link is

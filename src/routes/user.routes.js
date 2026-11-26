@@ -10,8 +10,8 @@ const {
   updateUserByAdmin,
   updateUserStatus,
   updateUserPagePermissions,
-  getUserGpsTrucks,
-  updateUserGpsTrucks,
+  getUserGpsDevices,
+  updateUserGpsDevices,
   forceLogoutUser,
   deleteUser,
 } = require('../controllers/user.controller');
@@ -29,7 +29,7 @@ const {
   changePasswordValidation,
   updateUserStatusValidation,
   updateUserPagePermissionsValidation,
-  updateUserGpsTrucksValidation,
+  updateUserGpsDevicesValidation,
 } = require('../validations/auth.validation');
 const { deviceTokenValidation, unregisterDeviceTokenValidation } = require('../validations/notification.validation');
 
@@ -603,10 +603,10 @@ router.patch('/admin/users/:id/permissions', authenticate, authorize('admin'), u
 
 /**
  * @swagger
- * /api/admin/users/{id}/gps-trucks:
+ * /api/admin/users/{id}/gps-devices:
  *   get:
  *     tags: [Admin Management]
- *     summary: Which trucks a gps_owner account is currently granted (admin-only)
+ *     summary: Which GPS tracker device IMEIs a gps_owner account is currently granted (admin-only)
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -616,7 +616,7 @@ router.patch('/admin/users/:id/permissions', authenticate, authorize('admin'), u
  *         schema: { type: string, format: uuid }
  *     responses:
  *       200:
- *         description: Granted trucks fetched
+ *         description: Granted devices fetched
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
@@ -627,8 +627,8 @@ router.patch('/admin/users/:id/permissions', authenticate, authorize('admin'), u
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  *   patch:
  *     tags: [Admin Management]
- *     summary: Set which trucks a gps_owner account can see (admin-only, replaces the full list)
- *     description: Scopes tracking.controller.js's device endpoints for this account to only these trucks' linked GPS devices — a gps_owner sees nothing outside this list.
+ *     summary: Set which GPS devices a gps_owner account can see (admin-only, replaces the full list)
+ *     description: Granted directly by device IMEI (the same list GET /api/tracking/devices already shows) — no dependency on whether a device has been linked to one of our truck records. Scopes every tracking.controller.js device endpoint for this account.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -642,14 +642,14 @@ router.patch('/admin/users/:id/permissions', authenticate, authorize('admin'), u
  *         application/json:
  *           schema:
  *             type: object
- *             required: [truck_ids]
+ *             required: [device_imeis]
  *             properties:
- *               truck_ids:
+ *               device_imeis:
  *                 type: array
- *                 items: { type: string, format: uuid }
+ *                 items: { type: string }
  *     responses:
  *       200:
- *         description: Truck access updated
+ *         description: Device access updated
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/SuccessResponse' }
@@ -659,8 +659,8 @@ router.patch('/admin/users/:id/permissions', authenticate, authorize('admin'), u
  *           application/json:
  *             schema: { $ref: '#/components/schemas/ErrorResponse' }
  */
-router.get('/admin/users/:id/gps-trucks', authenticate, authorize('admin'), getUserGpsTrucks);
-router.patch('/admin/users/:id/gps-trucks', authenticate, authorize('admin'), updateUserGpsTrucksValidation, validate, updateUserGpsTrucks);
+router.get('/admin/users/:id/gps-devices', authenticate, authorize('admin'), getUserGpsDevices);
+router.patch('/admin/users/:id/gps-devices', authenticate, authorize('admin'), updateUserGpsDevicesValidation, validate, updateUserGpsDevices);
 
 /**
  * @swagger
